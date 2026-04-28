@@ -1,0 +1,146 @@
+/-
+  Thales/TypeCheck/Builtins.lean
+  Hardcoded built-in type table
+  Replace with lib.d.ts parsing in a future phase.
+-/
+import Thales.TypeCheck.TSType
+import Thales.TypeCheck.Context
+
+namespace Thales.TypeCheck
+
+/-- Helper: create a function type with named params -/
+private def fnType (params : List (String × TSType)) (ret : TSType) : TSType :=
+  .function (params.map fun (name, ty) => .mk name ty) ret
+
+/-- Helper: create a function type with named params, some possibly optional -/
+private def fnTypeOpt (params : List (String × TSType × Bool)) (ret : TSType) : TSType :=
+  .function (params.map fun (name, ty, opt) => .mk name ty opt) ret
+
+/-- Helper: create a rest-param function type -/
+private def restFnType (restName : String) (restElem : TSType) (ret : TSType) : TSType :=
+  .function [.mk restName (.array restElem) false true] ret
+
+/-- Built-in variable bindings -/
+def builtinBindings : List (String × TSType) :=
+  let voidFn := restFnType "args" .any .void_
+  let numToNum := fnType [("x", .number)] .number
+  [
+    -- console object
+    ("console", .object [
+      .property "log" voidFn false false,
+      .property "error" voidFn false false,
+      .property "warn" voidFn false false,
+      .property "info" voidFn false false
+    ]),
+    -- Math object
+    ("Math", .object [
+      .property "floor" numToNum false false,
+      .property "ceil" numToNum false false,
+      .property "round" numToNum false false,
+      .property "abs" numToNum false false,
+      .property "sqrt" numToNum false false,
+      .property "max" (restFnType "values" .number .number) false false,
+      .property "min" (restFnType "values" .number .number) false false,
+      .property "random" (fnType [] .number) false false,
+      .property "PI" .number false true,
+      .property "E" .number false true
+    ]),
+    -- Global functions
+    ("parseInt", fnType [("s", .string)] .number),
+    ("parseFloat", fnType [("s", .string)] .number),
+    ("isNaN", fnType [("n", .any)] .boolean),
+    ("isFinite", fnType [("n", .any)] .boolean),
+    -- Number static methods
+    ("Number", .object [
+      .property "isNaN" (fnType [("n", .any)] .boolean) false false,
+      .property "isFinite" (fnType [("n", .any)] .boolean) false false,
+      .property "parseInt" (fnType [("s", .string)] .number) false false,
+      .property "parseFloat" (fnType [("s", .string)] .number) false false
+    ]),
+    -- Array static methods
+    ("Array", .object [
+      .property "isArray" (fnType [("x", .any)] .boolean) false false
+    ]),
+    -- String static methods
+    ("String", .object [
+      .property "fromCharCode" (restFnType "codes" .number .string) false false
+    ]),
+    -- JSON object
+    ("JSON", .object [
+      .property "stringify" (fnType [("value", .any)] .string) false false,
+      .property "parse" (fnType [("text", .string)] .any) false false
+    ]),
+    -- undefined and NaN
+    -- Object constructor/class
+    ("Object", .object [
+      .property "keys" (fnType [("o", .any)] (.array .string)) false false,
+      .property "values" (fnType [("o", .any)] (.array .any)) false false,
+      .property "entries" (fnType [("o", .any)] (.array (.tuple [.string, .any]))) false false,
+      .property "assign" (fnType [("target", .any), ("source", .any)] .any) false false,
+      .property "freeze" (fnType [("o", .any)] .any) false false,
+      .property "create" (fnType [("o", .any)] .any) false false
+    ]),
+    -- undefined and NaN
+    ("undefined", .undefined),
+    ("NaN", .number),
+    ("Infinity", .number)
+  ]
+
+/-- Look up a property on a built-in primitive type -/
+def builtinProperty (ty : TSType) (name : String) : Option TSType :=
+  match ty with
+  | .string | .stringLit _ => stringProperty name
+  | .number | .numberLit _ => numberProperty name
+  | .boolean | .booleanLit _ => booleanProperty name
+  | _ => none
+where
+  stringProperty (name : String) : Option TSType :=
+    match name with
+    | "length" => some .number
+    | "charAt" => some (fnType [("pos", .number)] .string)
+    | "charCodeAt" => some (fnType [("index", .number)] .number)
+    | "indexOf" => some (fnType [("searchString", .string)] .number)
+    | "lastIndexOf" => some (fnType [("searchString", .string)] .number)
+    | "includes" => some (fnType [("searchString", .string)] .boolean)
+    | "startsWith" => some (fnType [("searchString", .string)] .boolean)
+    | "endsWith" => some (fnType [("searchString", .string)] .boolean)
+    | "slice" => some (fnTypeOpt [("start", .number, false), ("end", .number, true)] .string)
+    | "substring" => some (fnTypeOpt [("start", .number, false), ("end", .number, true)] .string)
+    | "toLowerCase" => some (fnType [] .string)
+    | "toUpperCase" => some (fnType [] .string)
+    | "trim" => some (fnType [] .string)
+    | "trimStart" => some (fnType [] .string)
+    | "trimEnd" => some (fnType [] .string)
+    | "split" => some (fnType [("separator", .string)] (.array .string))
+    | "replace" => some (fnType [("searchValue", .string), ("replaceValue", .string)] .string)
+    | "replaceAll" => some (fnType [("searchValue", .string), ("replaceValue", .string)] .string)
+    | "repeat" => some (fnType [("count", .number)] .string)
+    | "padStart" => some (fnType [("maxLength", .number)] .string)
+    | "padEnd" => some (fnType [("maxLength", .number)] .string)
+    | "match" => some (fnType [("regexp", .any)] .any)
+    | "search" => some (fnType [("regexp", .any)] .number)
+    | "concat" => some (restFnType "strings" .string .string)
+    | "at" => some (fnType [("index", .number)] (.union [.string, .undefined]))
+    | "toString" => some (fnType [] .string)
+    | "valueOf" => some (fnType [] .string)
+    | _ => none
+  numberProperty (name : String) : Option TSType :=
+    match name with
+    | "toFixed" => some (fnTypeOpt [("fractionDigits", .number, true)] .string)
+    | "toPrecision" => some (fnTypeOpt [("precision", .number, true)] .string)
+    | "toExponential" => some (fnTypeOpt [("fractionDigits", .number, true)] .string)
+    | "toString" => some (fnType [] .string)
+    | "valueOf" => some (fnType [] .number)
+    | _ => none
+  booleanProperty (name : String) : Option TSType :=
+    match name with
+    | "toString" => some (fnType [] .string)
+    | "valueOf" => some (fnType [] .boolean)
+    | _ => none
+
+/-- Create the initial type context with built-in bindings -/
+def builtinContext : TypeContext :=
+  { bindings := builtinBindings.foldl (fun m (k, v) => m.insert k v) {},
+    classes := [("Object", .object [])].foldl (fun m (k, v) => m.insert k v) {} }
+
+end Thales.TypeCheck

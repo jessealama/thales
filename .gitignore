@@ -1,0 +1,22 @@
+# Lake build artifacts
+.lake/
+lake-packages/
+
+# Node modules
+node_modules/
+
+# Test files
+test.js
+
+# Editor files
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Worktrees
+.worktrees/
+
+# Stray emit artifacts in the examples corpus (the harness emits to a
+# temp dir, but a manual `thales examples/foo.ts` writes alongside the input).
+examples/*.lean

@@ -1,0 +1,14 @@
+{
+  "name": "thales-dev",
+  "version": "1.0.0",
+  "description": "Internal testing TS/JS infrastructure for Thales (should be dev deps only)",
+  "private": true,
+  "scripts": {
+    "examples": "node scripts/run-examples.js",
+    "examples:self-test": "node scripts/run-examples.js --self-test"
+  },
+  "devDependencies": {
+    "typescript": "6.0.2",
+    "tsx": "4.21.0"
+  }
+}

@@ -1,0 +1,470 @@
+/-
+  Thales/TypeCheck/Synth.lean
+  Expression type synthesis and checking
+-/
+import Thales.TypeCheck.TSType
+import Thales.TypeCheck.TSAST
+import Thales.TypeCheck.Context
+import Thales.TypeCheck.Subtype
+import Thales.TypeCheck.Diagnostic
+import Thales.TypeCheck.Generic
+import Thales.TypeCheck.TypedExpression
+import Thales.TypeCheck.Narrowing
+import Thales.TypeCheck.Builtins
+
+namespace Thales.TypeCheck
+
+open Thales.AST
+
+/-- Look up a property on an object type (or union of object types) -/
+private partial def lookupProperty (objType : TSType) (propName : String) (depth : Nat := 0) : TypeCheckM (Option TSType) := do
+  if depth > 10 then return none
+  match objType with
+  | .object members =>
+    -- First try direct property match
+    let direct := members.findSome? fun
+      | .property name ty _ _ => if name == propName then some ty else none
+      | .method name params ret _ =>
+        if name == propName then some (.function params ret) else none
+      | .indexSignature _ _ _ _ => none
+    match direct with
+    | some ty => return some ty
+    | none =>
+      -- Fall back to index signature if present
+      return members.findSome? fun
+        | .indexSignature _ keyType valueType _ =>
+          match keyType with
+          | .string | .any => some valueType
+          | _ => none
+        | _ => none
+  | .union types =>
+    -- For a union, the property is accessible only if ALL members have it (TypeScript semantics).
+    -- Return the union of the property types across all members.
+    let mut found : List TSType := []
+    for t in types do
+      match ← lookupProperty t propName depth with
+      | some ty => found := found ++ [ty]
+      | none => pure ()
+    if found.length == types.length then
+      match found with
+      | [] => return none
+      | [single] => return some single
+      | multiple =>
+        -- Flatten nested unions and deduplicate
+        let flat := multiple.flatMap fun t => match t with | .union ts => ts | t => [t]
+        return some (.union flat.eraseDups)
+    else
+      return none  -- Not all union members have the property → type error
+  | .intersection types =>
+    let mut found : List TSType := []
+    for t in types do
+      match ← lookupProperty t propName depth with
+      | some ty => found := found ++ [ty]
+      | none => pure ()
+    match found with
+    | [] => return none
+    | [single] => return some single
+    | multiple => return some (.intersection multiple)
+  | .typeVar _ _ (some constraint) =>
+    let resolved ← resolveTypeGeneric constraint
+    lookupProperty resolved propName (depth + 1)
+  | .ref .. =>
+    let resolved ← resolveTypeGeneric objType
+    if resolved != objType then
+      lookupProperty resolved propName (depth + 1)
+    else
+      return none
+  | .string | .stringLit _ | .number | .numberLit _ | .boolean | .booleanLit _ =>
+    return builtinProperty objType propName
+  | _ => return none
+
+/-- Get the source location from a JS expression -/
+private def exprLoc : Expression → Option SourceLocation
+  | .identifier base _ => base.loc
+  | .literal base _ _ => base.loc
+  | .callExpr base _ _ _ => base.loc
+  | .binaryExpr base _ _ _ => base.loc
+  | .memberExpr base _ _ _ _ => base.loc
+  | .assignmentExpr base _ _ _ => base.loc
+  | _ => none
+
+/-- Get the source location from a TS expression -/
+private def tsExprLoc : TSExpression → Option SourceLocation
+  | .js e => exprLoc e
+  | .asExpr inner _ => tsExprLoc inner
+  | .satisfiesExpr inner _ => tsExprLoc inner
+  | .nonNullAssert inner => tsExprLoc inner
+
+/-- Check if a type contains any typeVar -/
+private partial def containsTypeVar : TSType → Bool
+  | .typeVar .. => true
+  | .option e => containsTypeVar e
+  | .array e => containsTypeVar e
+  | .tuple es => es.any containsTypeVar
+  | .function ps r => ps.any (fun (.mk _ t _ _) => containsTypeVar t) || containsTypeVar r
+  | .union ts | .intersection ts => ts.any containsTypeVar
+  | .ref _ args => args.any containsTypeVar
+  | .object ms => ms.any fun
+    | .property _ t _ _ => containsTypeVar t
+    | .method _ ps r _ => ps.any (fun (.mk _ t _ _) => containsTypeVar t) || containsTypeVar r
+    | .indexSignature _ kt vt _ => containsTypeVar kt || containsTypeVar vt
+  | .paren inner => containsTypeVar inner
+  | .conditional c e t f => containsTypeVar c || containsTypeVar e || containsTypeVar t || containsTypeVar f
+  | .mapped _ c v _ _ => containsTypeVar c || containsTypeVar v
+  | _ => false
+
+/-- Collect all unique (typeVar id, TSTypeParam) from params and return type -/
+private partial def collectAllTypeVarIds (params : List TSParamType) (retTy : TSType) :
+    List (Nat × TSTypeParam) :=
+  let acc := params.foldl (fun acc (.mk _ ty _ _) => collectFromType ty acc) []
+  collectFromType retTy acc
+where
+  collectFromType (ty : TSType) (acc : List (Nat × TSTypeParam)) : List (Nat × TSTypeParam) :=
+    match ty with
+    | .typeVar id name constraint =>
+      if acc.any (fun (i, _) => i == id) then acc
+      else acc ++ [(id, { name, constraint })]
+    | .option e => collectFromType e acc
+    | .array e => collectFromType e acc
+    | .tuple es => es.foldl (fun a e => collectFromType e a) acc
+    | .function ps r =>
+      let acc' := ps.foldl (fun a (.mk _ t _ _) => collectFromType t a) acc
+      collectFromType r acc'
+    | .union ts | .intersection ts => ts.foldl (fun a t => collectFromType t a) acc
+    | .ref _ args => args.foldl (fun a t => collectFromType t a) acc
+    | .object ms => ms.foldl (fun a m => match m with
+      | .property _ t _ _ => collectFromType t a
+      | .method _ ps r _ =>
+        let a' := ps.foldl (fun acc' (.mk _ t _ _) => collectFromType t acc') a
+        collectFromType r a'
+      | .indexSignature _ kt vt _ => collectFromType vt (collectFromType kt a)) acc
+    | .paren inner => collectFromType inner acc
+    | .conditional c e t f =>
+      let acc := collectFromType c acc
+      let acc := collectFromType e acc
+      let acc := collectFromType t acc
+      collectFromType f acc
+    | .mapped _ c v _ _ => collectFromType v (collectFromType c acc)
+    | _ => acc
+
+/-- Returns true if the operator is an arithmetic (non-comparison) binary op -/
+private def isArithmeticOp (op : BinaryOperator) : Bool :=
+  match op with
+  | .add | .sub | .mul | .div | .mod | .exp
+  | .bitand | .bitor | .bitxor | .shl | .shr | .ushr => true
+  | _ => false
+
+/-- Returns true if the operator is the + (add) operator -/
+private def isAddOp (op : BinaryOperator) : Bool :=
+  match op with
+  | .add => true
+  | _ => false
+
+/-- Returns true if the operator is a comparison op returning boolean -/
+private def isComparisonOp (op : BinaryOperator) : Bool :=
+  match op with
+  | .eq | .neq | .seq | .sneq | .lt | .leq | .gt | .geq
+  | .instanceof | .«in» => true
+  | _ => false
+
+mutual
+
+/-- Synthesize the type of a TS expression -/
+partial def synthExpr (expr : TSExpression) (expected : Option TSType := none) : TypeCheckM TypedExpression := do
+  match expr with
+  | .js e =>
+    let typed ← synthJSExpr e expected
+    return { expr, type := typed.type, children := #[typed] }
+  | .asExpr inner ty =>
+    let typedInner ← synthExpr inner
+    return { expr, type := ty, children := #[typedInner] }
+  | .satisfiesExpr inner _ty =>
+    let typedInner ← synthExpr inner
+    return { expr, type := typedInner.type, children := #[typedInner] }
+  | .nonNullAssert inner =>
+    let typedInner ← synthExpr inner
+    return { expr, type := typedInner.type, children := #[typedInner] }
+
+/-- Synthesize the type of a JS expression -/
+partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) : TypeCheckM TypedExpression := do
+  let mk ty children := { expr := .js expr, type := ty, children := children : TypedExpression }
+  match expr with
+  -- Literals
+  | .literal _ (.number _) _ => return mk .number #[]
+  | .literal _ (.string s) _ => return mk (.stringLit s) #[]
+  | .literal _ (.boolean b) _ => return mk (.booleanLit b) #[]
+  | .literal _ .null _ => return mk .null_ #[]
+  | .literal _ (.bigint _) _ => return mk .bigint #[]
+  | .literal _ (.regex _ _) _ => return mk .any #[]
+
+  -- Identifier lookup
+  | .identifier base name =>
+    let binding ← lookupBinding name
+    match binding with
+    | some ty =>
+      checkDefinitelyAssigned name base.loc
+      return mk ty #[]
+    | none =>
+      emitDiagnostic (.identifierNotFound name) base.loc
+      return mk .any #[]
+
+  -- Member access: obj.prop
+  | .memberExpr base obj (.identifier _ propName) false _ =>
+    let objTyped ← synthJSExpr obj
+    let resolved ← resolveTypeGeneric objTyped.type
+    match ← lookupProperty resolved propName with
+    | some ty => return mk ty #[objTyped]
+    | none =>
+      match resolved with
+      | .any => return mk .any #[objTyped]
+      | _ =>
+        emitDiagnostic (.propertyNotFound propName resolved) base.loc
+        return mk .any #[objTyped]
+
+  -- Function call: callee(args)
+  | .callExpr base callee args _ =>
+    let calleeTyped ← synthJSExpr callee
+    let resolved ← resolveTypeGeneric calleeTyped.type
+    match resolved with
+    | .function params retTy =>
+      let hasTypeVars := params.any fun (.mk _ ty _ _) => containsTypeVar ty
+      let (params, retTy) ← if hasTypeVars then do
+        let mut argTypes : List TSType := []
+        for arg in args do
+          let argTyped ← synthJSExpr arg
+          argTypes := argTypes ++ [argTyped.type]
+        let typeVarIds := collectAllTypeVarIds params retTy
+        let bindings := inferTypeArgs typeVarIds params argTypes
+        for (id, param) in typeVarIds do
+          if let some constraint := param.constraint then
+            if let some inferredTy := bindings[id]? then
+              let ok ← isSubtype inferredTy constraint
+              if !ok then
+                emitDiagnostic (.constraintNotSatisfied inferredTy constraint param.name) base.loc
+        let params' := params.map (substituteParam · bindings)
+        let retTy' := substitute retTy bindings
+        pure (params', retTy')
+      else
+        pure (params, retTy)
+      let requiredCount := (params.filter (fun (.mk _ _ opt rest) => !opt && !rest)).length
+      let hasRest := params.any (fun (.mk _ _ _ rest) => rest)
+      if args.length < requiredCount then
+        emitDiagnostic (.argumentCountMismatch requiredCount args.length) base.loc
+      else if !hasRest && args.length > params.length then
+        emitDiagnostic (.argumentCountMismatch params.length args.length) base.loc
+      let mut argChildren : Array TypedExpression := #[]
+      for i in [:args.length] do
+        if i < params.length then
+          let (.mk _ paramTy _ isRest) := params[i]!
+          let checkTy := if isRest then
+            match paramTy with
+            | .array elem => elem
+            | _ => paramTy
+          else paramTy
+          let argTyped ← synthJSExpr args[i]!
+          argChildren := argChildren.push argTyped
+          let ok ← isSubtype argTyped.type checkTy
+          if !ok then
+            emitDiagnostic (.argumentTypeMismatch i argTyped.type checkTy) (exprLoc args[i]!)
+        else
+          match params.getLast? with
+          | some (.mk _ paramTy _ true) =>
+            let checkTy := match paramTy with | .array elem => elem | _ => paramTy
+            let argTyped ← synthJSExpr args[i]!
+            argChildren := argChildren.push argTyped
+            let ok ← isSubtype argTyped.type checkTy
+            if !ok then
+              emitDiagnostic (.argumentTypeMismatch i argTyped.type checkTy) (exprLoc args[i]!)
+          | _ =>
+            let argTyped ← synthJSExpr args[i]!
+            argChildren := argChildren.push argTyped
+      return mk retTy (#[calleeTyped] ++ argChildren)
+    | .any => return mk .any #[calleeTyped]
+    | _ =>
+      emitDiagnostic (.notCallable resolved) base.loc
+      return mk .any #[calleeTyped]
+
+  -- Binary expressions
+  | .binaryExpr _ op left right =>
+    let leftTyped ← synthJSExpr left
+    let rightTyped ← synthJSExpr right
+    if isArithmeticOp op then
+      if isAddOp op then
+        let leftResolved ← resolveType leftTyped.type
+        let rightResolved ← resolveType rightTyped.type
+        match leftResolved, rightResolved with
+        | .string, _ | _, .string | .stringLit _, _ | _, .stringLit _ =>
+          return mk .string #[leftTyped, rightTyped]
+        | .bigint, _ | _, .bigint => return mk .bigint #[leftTyped, rightTyped]
+        | _, _ => return mk .number #[leftTyped, rightTyped]
+      else
+        -- Non-add arithmetic: preserve bigint if both operands are bigint
+        let leftResolved ← resolveType leftTyped.type
+        let rightResolved ← resolveType rightTyped.type
+        match leftResolved, rightResolved with
+        | .bigint, _ | _, .bigint => return mk .bigint #[leftTyped, rightTyped]
+        | _, _ => return mk .number #[leftTyped, rightTyped]
+    else if isComparisonOp op then
+      return mk .boolean #[leftTyped, rightTyped]
+    else
+      return mk .any #[leftTyped, rightTyped]
+
+  -- Logical expressions
+  | .logicalExpr _ op left right =>
+    let leftTyped ← synthJSExpr left
+    let ctx ← read
+    match op with
+    | .«and» =>
+      match Narrowing.extractGuard left with
+      | some guard =>
+        let narrowed := Narrowing.applyGuard guard ctx.bindings
+        let rightTyped ← withScope (Narrowing.bindingsDiff narrowed ctx.bindings) (synthJSExpr right)
+        return { expr := .js expr, type := rightTyped.type, children := #[leftTyped, rightTyped] }
+      | none =>
+        let rightTyped ← synthJSExpr right
+        return { expr := .js expr, type := rightTyped.type, children := #[leftTyped, rightTyped] }
+    | .«or» =>
+      match Narrowing.extractGuard left with
+      | some guard =>
+        let narrowed := Narrowing.applyNegatedGuard guard ctx.bindings
+        let rightTyped ← withScope (Narrowing.bindingsDiff narrowed ctx.bindings) (synthJSExpr right)
+        return { expr := .js expr, type := .union [leftTyped.type, rightTyped.type], children := #[leftTyped, rightTyped] }
+      | none =>
+        let rightTyped ← synthJSExpr right
+        return { expr := .js expr, type := leftTyped.type, children := #[leftTyped, rightTyped] }
+    | _ =>
+      let rightTyped ← synthJSExpr right
+      return { expr := .js expr, type := leftTyped.type, children := #[leftTyped, rightTyped] }
+
+  -- Assignment expressions
+  | .assignmentExpr _ _ left right =>
+    let rightTyped ← synthJSExpr right
+    match left with
+    | .identifier _ name =>
+      markAssigned name
+      -- Validate RHS against declared type
+      match ← lookupDeclaredType name with
+      | some declaredTy => checkAssignable rightTyped.type declaredTy (exprLoc right)
+      | none => pure ()
+    | _ => pure ()
+    return { expr := .js expr, type := rightTyped.type, children := #[rightTyped] }
+
+  -- Conditional (ternary)
+  | .conditionalExpr _ test consequent alternate =>
+    let testTyped ← synthJSExpr test
+    let ctx ← read
+    match Narrowing.extractGuard test with
+    | some guard =>
+      let thenBindings := Narrowing.applyGuard guard ctx.bindings
+      let elseBindings := Narrowing.applyNegatedGuard guard ctx.bindings
+      let consTyped ← withScope (Narrowing.bindingsDiff thenBindings ctx.bindings) (synthJSExpr consequent)
+      let altTyped ← withScope (Narrowing.bindingsDiff elseBindings ctx.bindings) (synthJSExpr alternate)
+      return mk (.union [consTyped.type, altTyped.type]) #[testTyped, consTyped, altTyped]
+    | none =>
+      let consTyped ← synthJSExpr consequent
+      let altTyped ← synthJSExpr alternate
+      return mk (.union [consTyped.type, altTyped.type]) #[testTyped, consTyped, altTyped]
+
+  -- Array literal
+  | .arrayExpr _ elements => do
+    let elemExpected := match expected with
+      | some (.array elemTy) => some elemTy
+      | _ => none
+    let mut elemTypes : List TSType := []
+    let mut children : Array TypedExpression := #[]
+    for elem in elements do
+      match elem with
+      | some e =>
+        let typed ← synthJSExpr e elemExpected
+        elemTypes := elemTypes ++ [typed.type]
+        children := children.push typed
+      | none => elemTypes := elemTypes ++ [.undefined]
+    let resultTy := match elemExpected, elemTypes with
+      | some eTy, _ => .array eTy
+      | none, [] => .array .any
+      | none, [ty] => .array ty
+      | none, _ => .tuple elemTypes
+    return mk resultTy children
+
+  -- Object literal
+  | .objectExpr _ properties => do
+    let mut memberTypes : List TSObjectMember := []
+    let mut children : Array TypedExpression := #[]
+    for prop in properties do
+      match prop with
+      | .regular _ key value _ _ _ =>
+        let propName := match key with
+          | .identifier _ name => name
+          | .literal _ (.string s) _ => s
+          | _ => ""
+        let memberExpected := match expected with
+          | some (.object expectedMembers) =>
+            expectedMembers.findSome? fun
+              | .property name ty _ _ => if name == propName then some ty else none
+              | .method name _ ret _ => if name == propName then some ret else none
+              | .indexSignature _ _ _ _ => none
+          | _ => none
+        let typedValue ← synthJSExpr value memberExpected
+        memberTypes := memberTypes ++ [.property propName typedValue.type false false]
+        children := children.push typedValue
+      | .spread _ arg =>
+        let typedArg ← synthJSExpr arg
+        children := children.push typedArg
+    return mk (.object memberTypes) children
+
+  -- Template literal
+  | .templateLiteral _ _ _ => return mk .string #[]
+
+  -- Unary expressions
+  | .unaryExpr _ .typeof _ _ => return mk .string #[]
+  | .unaryExpr _ .void _ _ => return mk .undefined #[]
+  | .unaryExpr _ .neg _ _ => return mk .number #[]
+  | .unaryExpr _ .pos _ _ => return mk .number #[]
+  | .unaryExpr _ .bitnot _ _ => return mk .number #[]
+  | .unaryExpr _ .not _ _ => return mk .boolean #[]
+
+  -- this
+  | .thisExpr _ => return mk .any #[]
+
+  -- new Expr(args): look up class instance type
+  | .newExpr _base callee args =>
+    if let .identifier _ className := callee then
+      let ctx ← read
+      if let some instanceTy := ctx.classes[className]? then
+        if containsTypeVar instanceTy then
+          match instanceTy with
+          | .object members =>
+            let typeVarIds := collectAllTypeVarIds [] (.object members)
+            if typeVarIds.isEmpty then
+              return mk instanceTy #[]
+            let typeVarFields := members.filterMap fun
+              | .property _ ty _ _ => if containsTypeVar ty then some ty else none
+              | .method _ _ ret _ => if containsTypeVar ret then some ret else none
+              | .indexSignature _ _ _ _ => none
+            let mut argTypes : List TSType := []
+            let mut argChildren : Array TypedExpression := #[]
+            for arg in args do
+              let typed ← synthJSExpr arg
+              argTypes := argTypes ++ [typed.type]
+              argChildren := argChildren.push typed
+            let pseudoParams := typeVarFields.mapIdx fun i ty =>
+              TSParamType.mk s!"arg{i}" ty false false
+            let bindings := inferTypeArgs typeVarIds pseudoParams argTypes
+            return mk (substitute instanceTy bindings) argChildren
+          | _ => return mk instanceTy #[]
+        else
+          return mk instanceTy #[]
+    return mk .any #[]
+
+  -- Graceful degradation: return any for unhandled expression forms
+  | _ => return mk .any #[]
+
+end
+
+/-- Check that an expression has a type assignable to the expected type -/
+def checkExpr (expr : TSExpression) (expected : TSType) : TypeCheckM TypedExpression := do
+  let typed ← synthExpr expr (some expected)
+  checkAssignable typed.type expected (tsExprLoc expr)
+  return typed
+
+end Thales.TypeCheck
