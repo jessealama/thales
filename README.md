@@ -20,29 +20,35 @@ subset of TS whose emitted Lean you can actually reason about.
 ```typescript
 type User = { name: string; age: number };
 
-/**
- * @throws RangeError when age is negative
- * @total
- */
+/** @throws RangeError when age is negative */
 function makeUser(name: string, age: number): User {
   if (age < 0) throw new RangeError("age must be non-negative");
   return { name, age };
 }
 
-function findAge(users: User[], name: string): number | null {
-  for (const u of users) {
-    if (u.name === name) return u.age;
+type NameList = { kind: "nil" } | { kind: "cons"; head: User; tail: NameList };
+
+/** @total */
+function firstName(xs: NameList): string | null {
+  switch (xs.kind) {
+    case "nil":  return null;
+    case "cons": return xs.head.name;
   }
-  return null;
 }
 ```
 
 Thales type-checks this against a strict subset of TypeScript and
 emits Lean 4 where:
 - `makeUser` becomes `def makeUser : String → Int → Except RangeError User`
-  (Lean verifies termination; failure modes visible in the signature).
-- `findAge` becomes `def findAge : List User → String → Option Int`
-  (nullability tracked in the type).
+  (failure mode visible in the signature; callers must `try`/`catch` or
+  propagate via `@throws`).
+- `firstName` becomes `def firstName : NameList → Option String`
+  (Lean verifies termination from the structural recursion; nullability
+  tracked in the type).
+
+`@throws` and `@total` are mutually exclusive: a `@total` function makes
+the stronger claim that no failure escapes, so it cannot also declare
+one. See [`docs/subset.md`](docs/subset.md#total-and-termination).
 
 ## Install
 
@@ -70,9 +76,13 @@ lake build thales
   `try`/`catch` desugars to a `match` on the `Except`. Catches use the
   standard TS form (`catch (e)` — untyped, as `tsc --strict` requires);
   Thales infers the caught type from the `try` body.
-- **`@total` for opt-in termination proofs.** Default emission is
-  `partial def` — non-total recursion is fine. `@total` forces Lean's
-  termination checker; failure surfaces as a clean diagnostic.
+- **`@total` for "always returns a value" guarantees.** Default emission
+  is `partial def` — non-total recursion is fine. `@total` is a stronger
+  source-level claim: the function terminates (Lean's termination checker
+  must accept it) *and* no failure escapes (no uncaught `throw`, no
+  uncaught call into a `@throws` callee). It is mutually exclusive with
+  `@throws`; failures of either kind surface as clean diagnostics
+  (TH0066/TH0067/TH0070).
 
 ## What's in the subset
 

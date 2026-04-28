@@ -181,6 +181,7 @@ def main (args : List String) : IO UInt32 := do
       let tsDiags := typeCheck tsProg
       let propDiags := throwsAnnotationCheck tsProg
       let throwsListDiags := throwsTypeListCheck tsProg
+      let totalDiags := totalAnnotationCheck tsProg
       let rawSubsetDiags := subsetCheckIgnoringDirectives tsProg
 
       -- TH0070 totality check requires a Lake project to invoke `lake env lean`
@@ -204,7 +205,7 @@ def main (args : List String) : IO UInt32 := do
             let leanSrc := Thales.Emit.emit tsProg moduleName
             checkTotality leanSrc totalEntries lakeRoot
 
-      let allRawTh := propDiags ++ throwsListDiags ++ rawSubsetDiags ++ rawTotalityDiags
+      let allRawTh := propDiags ++ throwsListDiags ++ totalDiags ++ rawSubsetDiags ++ rawTotalityDiags
 
       let thDiags : Array Diagnostic :=
         if cli.ignoreExpectError

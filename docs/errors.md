@@ -53,6 +53,8 @@ rationale, and idiomatic replacements, see [subset.md](./subset.md).
 | TH0031 | Declarations | Inheritance (`extends`) not supported | 6+ |
 | TH0040 | Matching | Non-exhaustive switch on discriminated union | permanent |
 | TH0050 | Recursion | Cannot verify termination | 4 |
+| TH0066 | Totality | `@total` and `@throws` declared together | Remove one of the annotations |
+| TH0067 | Totality | `@total` function has uncaught throw | Catch it, or drop `@total` |
 | TH0070 | Totality | `@total` asserted but Lean rejects termination | restructure or drop `@total` |
 | TH0060 | Exceptions | Unannotated `throw` | Annotate with `@throws E` |
 | TH0061 | Exceptions | Unused `@throws` annotation | permanent |
@@ -297,6 +299,63 @@ Rejected: `function f(n: bigint): bigint { ... return f(n - 1); ... /* non-struc
 ---
 
 ## Totality
+
+`@total` is the Thales-TS claim that **a function always returns a value of its declared return type** — it terminates and has no observable failure modes. Three diagnostics enforce this contract: TH0066 (the annotation can't coexist with `@throws`), TH0067 (no failures may escape the body), and TH0070 (Lean's termination checker must accept the emitted `def`).
+
+### TH0066 — `@total` and `@throws` declared together
+
+**Message:** `` `@total` and `@throws` cannot both be declared on the same function; remove one ``
+
+A function that may throw a declared error type does not always return a value of its declared return type — its emitted Lean signature is `Except E T`, not `T`. The two annotations make incompatible claims, so they are mutually exclusive at the source level (regardless of whether Lean would accept the emitted `def : Except E T`).
+
+Example (rejected):
+```typescript
+/**
+ * @total
+ * @throws RangeError when age is negative
+ */
+function makeUser(name: string, age: number): User {
+  if (age < 0) throw new RangeError("age must be non-negative");
+  return { name, age };
+}
+```
+
+Fix: drop `@total` if the function may genuinely fail (the `@throws` signature already encodes that the function does not diverge); drop `@throws` if the failure case is unreachable and you want the stronger guarantee.
+
+---
+
+### TH0067 — `@total` function has uncaught throw
+
+**Message:** `` `@total` function has an uncaught `throw`; wrap it in `try`/`catch` or remove `@total` `` (or, for calls into `@throws`-annotated functions, `` `@total` function calls `@throws`-annotated `f` outside `try`/`catch`; catch the failure or remove `@total` ``)
+
+Emitted at every uncaught throw event in the body of a `@total` function. A throw is "uncaught" if it is not lexically inside a `try` block whose `catch` clause handles it. A throw inside the `catch` handler itself counts as uncaught — `@total` requires the catch path to also have no escaping failures.
+
+Example (rejected):
+```typescript
+/** @total */
+function bad(n: number): number {
+  if (n < 0) throw new RangeError("negative"); // TH0067
+  return n;
+}
+```
+
+Example (accepted):
+```typescript
+/** @throws RangeError */
+function inner(n: number): number {
+  if (n < 0) throw new RangeError("negative");
+  return n;
+}
+
+/** @total */
+function outer(n: number): number {
+  try { return inner(n); } catch (e) { return 0; }
+}
+```
+
+Fix: handle the failure case with `try`/`catch`, or annotate the function with `@throws` instead of `@total`.
+
+---
 
 ### TH0070 — `@total` asserted but Lean rejects termination
 

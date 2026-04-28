@@ -641,7 +641,12 @@ function sum(xs: NatList): bigint {
 }
 ```
 
-With `@total`, the function is emitted as a plain `def` (not `partial def`). Lean's default termination checker must accept it. For structural recursion over discriminated unions (the typical case), Lean infers the measure automatically.
+`@total` is a claim about the function's TypeScript-level behavior: **the function always returns a value of its declared return type** — it terminates *and* it has no observable failure modes. Two checks enforce this:
+
+1. **No declared failures.** The function may not also carry `@throws`. (TH0066.)
+2. **No escaping failures.** The body must contain no uncaught `throw` and no uncaught call to a `@throws`-annotated function. A throw fully handled by an enclosing `try`/`catch` is fine; a throw inside the `catch` handler itself is not. (TH0067.)
+
+Under the hood, `@total` causes the function to be emitted as a plain `def` (not `partial def`). Lean's default termination checker must accept it. For structural recursion over discriminated unions (the typical case), Lean infers the measure automatically.
 
 If Lean rejects the termination proof, `thales` emits **TH0070** with Lean's own error text:
 
@@ -655,7 +660,7 @@ input.ts(5,1): error TH0070: `@total` asserted but Lean could not prove terminat
 - Emits as `def` instead of `partial def`.
 - Lean's default structural-recursion checker must accept the function as-is.
 - No `termination_by` or `decreasing_by` clauses are emitted. If Lean cannot prove termination automatically, you must restructure the function (or remove `@total`).
-- `@total` and `@throws` are orthogonal: a function can be both `@total` and `@throws`-annotated.
+- `@total` and `@throws` are mutually exclusive — a `@total` function has no observable failure modes by definition. To express "this function always returns or throws a known error type, never diverges," use `@throws` alone; the emitted Lean type already encodes finiteness via `Except`.
 
 **Typical patterns that Lean accepts with `@total`:**
 

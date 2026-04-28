@@ -81,9 +81,14 @@ inductive ThalesKind where
   -- @throws / @total diagnostics (TH0060–TH0070)
   -- TH0061 (unusedThrowsAnnotation), TH0062 (untypedCatch), TH0064
   -- (undeclaredPropagation) were removed in the strict-TS @throws redesign.
+  -- TH0066 (header-level @total/@throws conflict) and TH0067 (body-level
+  -- uncaught throw under @total) enforce that @total functions have no
+  -- observable failure modes.
   | unannotatedThrow (source : ThrowSource)
   | nonRecordThrow
   | throwsRequiresTypeList
+  | totalConflictsWithThrows
+  | totalHasUncaughtThrow (source : ThrowSource)
   | totalityUnverified (leanError : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
@@ -114,6 +119,8 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .unannotatedThrow _ => 60
   | .nonRecordThrow => 63
   | .throwsRequiresTypeList => 65
+  | .totalConflictsWithThrows => 66
+  | .totalHasUncaughtThrow _ => 67
   | .totalityUnverified _ => 70
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
@@ -154,6 +161,12 @@ def ThalesKind.message : ThalesKind → String
     "Thrown value must be a record type"
   | .throwsRequiresTypeList =>
     "`@throws` must declare at least one error type (e.g. `@throws RangeError`)"
+  | .totalConflictsWithThrows =>
+    "`@total` and `@throws` cannot both be declared on the same function; remove one"
+  | .totalHasUncaughtThrow .fromThrow =>
+    "`@total` function has an uncaught `throw`; wrap it in `try`/`catch` or remove `@total`"
+  | .totalHasUncaughtThrow (.fromCall callee) =>
+    s!"`@total` function calls `@throws`-annotated `{callee}` outside `try`/`catch`; catch the failure or remove `@total`"
   | .totalityUnverified leanError =>
     s!"`@total` asserted but Lean could not prove termination: {leanError}"
   | .directiveUnused => "Unused `@thales-expect-error` directive"

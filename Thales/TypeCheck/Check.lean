@@ -698,13 +698,15 @@ private partial def collectUncaughtThrowEventsExpr
 
 end
 
-/-- For every `annotatedFuncDecl` whose `throwsAnn = .absent`, emit TH0060
-    at the location of each uncaught throw event. -/
+/-- For every `annotatedFuncDecl` whose `throwsAnn = .absent` and which is
+    not `@total`, emit TH0060 at the location of each uncaught throw event.
+    `@total` functions are excluded here because TH0067 (`totalHasUncaughtThrow`)
+    is the more specific diagnostic for that case. -/
 def throwsAnnotationCheck (prog : TSProgram) : Array Diagnostic :=
   let mayThrow := buildMayThrowEnv prog.body
   prog.body.foldl (fun acc ts =>
     match ts with
-    | .annotatedFuncDecl _ _ _ _ _ body _ _ .absent _ =>
+    | .annotatedFuncDecl _ _ _ _ _ body _ _ .absent false =>
         let events := collectUncaughtThrowEvents mayThrow false body
         events.foldl (fun acc2 (src, loc) =>
           acc2.push { kind := .thales (.unannotatedThrow src), location := loc }) acc
@@ -717,6 +719,29 @@ def throwsTypeListCheck (prog : TSProgram) : Array Diagnostic :=
     match ts with
     | .annotatedFuncDecl base _ _ _ _ _ _ _ (.declared []) _ =>
         acc.push { kind := .thales .throwsRequiresTypeList, location := base.loc }
+    | _ => acc) #[]
+
+/-- Enforce that `@total` functions have no observable failure modes.
+
+    Two diagnostics:
+    * **TH0066** — `@total` and `@throws` are both declared on the same
+      function. The annotations contradict each other; emitted at the
+      function's declaration location.
+    * **TH0067** — the function is `@total` (without `@throws`) but its
+      body contains an uncaught throw event. Emitted at each event's
+      location. A throw inside a `try` whose `catch` itself contains a
+      throw still surfaces, because `collectUncaughtThrowEvents` walks
+      the catch handler with the outer `insideTryCatch` flag. -/
+def totalAnnotationCheck (prog : TSProgram) : Array Diagnostic :=
+  let mayThrow := buildMayThrowEnv prog.body
+  prog.body.foldl (fun acc ts =>
+    match ts with
+    | .annotatedFuncDecl base _ _ _ _ _ _ _ (.declared _) true =>
+        acc.push { kind := .thales .totalConflictsWithThrows, location := base.loc }
+    | .annotatedFuncDecl _ _ _ _ _ body _ _ .absent true =>
+        let events := collectUncaughtThrowEvents mayThrow false body
+        events.foldl (fun acc2 (src, loc) =>
+          acc2.push { kind := .thales (.totalHasUncaughtThrow src), location := loc }) acc
     | _ => acc) #[]
 
 end Thales.TypeCheck
