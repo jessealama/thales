@@ -51,7 +51,7 @@ jobs:
             lake-${{ runner.os }}-
 
       - name: Build thales
-        run: lake build thales
+        run: lake build
 
       - name: Lean tests
         run: lake build ThalesTest
