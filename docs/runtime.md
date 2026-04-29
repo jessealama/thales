@@ -172,8 +172,8 @@ that requires it.
 - No `Promise` / async plumbing. Async is TH0012.
 - No regex, no `Date`, no `Math.*` beyond what the emitter inlines.
 - No class runtime. Classes are TH0030.
-- No string stdlib beyond Lean's built-ins (`String.length` counts
-  UTF-16 code units via the emitter, not code points — see
-  `examples/utf16-string-length.ts`).
+- No string stdlib beyond Lean's built-ins. `String.length` counts
+  Unicode scalars in the emitted Lean, but UTF-16 code units in the VM
+  path — see the divergence note in [`subset.md`](subset.md).
 - `jsNumberToString` does not yet cover the exponential branch of
   ECMA-262 ToString. See [`future.md`](future.md) for planned work.

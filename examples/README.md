@@ -1,17 +1,8 @@
 # Thales-TS Examples
 
-Each `.ts` file in this directory is one example program. The harness
-(`scripts/run-examples.js`) runs each through the conformance contract.
+Each `.ts` file in this directory is one example program. They serve as bth tests and documentation. We have a harness, `scripts/run-examples.js`, that runs each through the conformance contract, described below, which is:
 
-Examples fall into two categories, distinguished by whether the file
-contains a `// @thales-expect-error` directive.
-
-## Accepting examples
-
-Both `tsc` and `thales` accept the file; the runtime byte-match stage is
-performed.
-
-Per stage:
+Both `tsc` and `thales` accept the file, as well as:
 
 1. **Type-check agreement.** `tsc --strict` (via `tsconfig.json` +
    `--ignoreConfig`) and `thales --no-emit` are run over the file; every
@@ -22,10 +13,7 @@ Per stage:
    `tsx file.ts` and `thales file.ts && lake env lean <File>.lean` must
    produce identical stdout, stderr, and exit code.
 
-An accepting example passes if both stages agree. A
-`// @thales-skip-runtime …` line comment disables the runtime stage
-(currently only `utf16-string-length.ts`, where JS's UTF-16 `.length`
-diverges from Lean's Unicode-scalar count).
+An accepting example passes if both stages agree.
 
 ## Subset-rejected examples
 
@@ -43,17 +31,17 @@ for the TH-code catalogue.
 
 ```bash
 lake build thales           # emit + type-check binary
-npm install                 # pinned tsc + tsx
+npm install                 # installs tsc and tsx
 node scripts/run-examples.js
 ```
 
 ## Adding an example
 
-Create a new `.ts` file in this directory with a descriptive name. That's
-it — no frozen `expected.*` files, no extra artifacts. On next run, the
-harness will verify the file against `tsc`, `tsx`, and the Lean emission
-path.
+Create a new `.ts` file in this directory with a descriptive
+name. On next run, the harness will verify the file against
+`tsc`, `tsx`, and the Lean emission path.
 
-For a subset-rejected example, prefix the name with the four-digit TH
-code and add a `@thales-expect-error` directive above each line that thales
-flags. See `docs/subset.md` for the grammar.
+For a subset-rejected example, prefix the name with the
+four-digit TH code and add a `@thales-expect-error`
+directive above each line that thales flags. See
+`docs/subset.md` for the grammar.

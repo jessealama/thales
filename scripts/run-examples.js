@@ -371,15 +371,8 @@ function runThcThenLean(inputPath) {
   }
 }
 
-/** True if `inputPath` contains a `// @thales-skip-runtime ...` line comment. The
- *  marker disables the runtime byte-match stage (used where JS/Lean semantics
- *  legitimately diverge — currently only the UTF-16 `.length` example). */
-function hasSkipRuntime(inputPath) {
-  return /^[ \t]*\/\/[ \t]*@thales-skip-runtime\b/m.test(fs.readFileSync(inputPath, 'utf8'));
-}
-
 /** Core per-example outcome. Returns one of:
- *    {kind: 'pass', label: 'accepted'|'tsc-rejected'|'subset-rejected'|'skip-runtime'}
+ *    {kind: 'pass', label: 'accepted'|'tsc-rejected'|'subset-rejected'}
  *    {kind: 'fail', label: 'missing'|'spurious'|'runtime'
  *                       |'tsc-unexpected'|'directive-check'|'directive-coverage',
  *     detail: string}
@@ -443,9 +436,6 @@ function evaluateCase(inputPath) {
   }
   if (thales.diags.some(d => d.code.startsWith('TH'))) {
     return { kind: 'pass', label: 'subset-rejected' };
-  }
-  if (hasSkipRuntime(inputPath)) {
-    return { kind: 'pass', label: 'skip-runtime' };
   }
 
   const tsx = runTsx(inputPath);
