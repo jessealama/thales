@@ -11,7 +11,7 @@
 
 /** @throws RangeError */
 function risky(): number {
-  throw new RangeError("retry");
+  throw new RangeError('retry');
 }
 
 function safeAttempt(): number {

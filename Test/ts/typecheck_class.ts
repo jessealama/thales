@@ -4,7 +4,7 @@ class Animal {
     this.name = name;
   }
   speak(): string {
-    return this.name + " makes a sound";
+    return this.name + ' makes a sound';
   }
 }
 
@@ -16,8 +16,8 @@ class Dog extends Animal {
   }
 }
 
-let a: Animal = new Animal("Cat");
-let d: Dog = new Dog("Rex", "Labrador");
+let a: Animal = new Animal('Cat');
+let d: Dog = new Dog('Rex', 'Labrador');
 console.log(a.name);
 console.log(d.breed);
 console.log(d.name);

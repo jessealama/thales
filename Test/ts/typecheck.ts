@@ -1,6 +1,6 @@
 // This file should type-check cleanly (no errors)
 let x: number = 42;
-let y: string = "hello";
+let y: string = 'hello';
 let z: boolean = true;
 
 function add(a: number, b: number): number {

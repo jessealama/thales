@@ -8,7 +8,7 @@ about.
 **Thales sits on top of strict TypeScript.** Every program Thales
 accepts is also accepted by `tsc --strict` — we don't invent new
 syntax or reinterpret existing type rules, so your editor tooling,
-IDE integrations, and CI linters keep working. What Thales *does* is
+IDE integrations, and CI linters keep working. What Thales _does_ is
 further restrict TS (rejecting mutation, classes, async, untyped
 escapes, etc.) and enrich selected patterns — nullable unions,
 `@throws`, `@total` — with Lean-visible semantics that TypeScript's
@@ -22,23 +22,26 @@ type User = { name: string; age: number };
 
 /** @throws RangeError when age is negative */
 function makeUser(name: string, age: number): User {
-  if (age < 0) throw new RangeError("age must be non-negative");
+  if (age < 0) throw new RangeError('age must be non-negative');
   return { name, age };
 }
 
-type NameList = { kind: "nil" } | { kind: "cons"; head: User; tail: NameList };
+type NameList = { kind: 'nil' } | { kind: 'cons'; head: User; tail: NameList };
 
 /** @total */
 function firstName(xs: NameList): string | null {
   switch (xs.kind) {
-    case "nil":  return null;
-    case "cons": return xs.head.name;
+    case 'nil':
+      return null;
+    case 'cons':
+      return xs.head.name;
   }
 }
 ```
 
 Thales type-checks this against a strict subset of TypeScript and
 emits Lean 4 where:
+
 - `makeUser` becomes `def makeUser : String → Int → Except RangeError User`
   (failure mode visible in the signature; callers must `try`/`catch` or
   propagate via `@throws`).
@@ -79,7 +82,7 @@ lake build thales
 - **`@total` for "always returns a value" guarantees.** Default emission
   is `partial def` — non-total recursion is fine. `@total` is a stronger
   source-level claim: the function terminates (Lean's termination checker
-  must accept it) *and* no failure escapes (no uncaught `throw`, no
+  must accept it) _and_ no failure escapes (no uncaught `throw`, no
   uncaught call into a `@throws` callee). It is mutually exclusive with
   `@throws`; failures of either kind surface as clean diagnostics
   (TH0066/TH0067/TH0070).

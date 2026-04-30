@@ -3,7 +3,7 @@
 // Exclude resolves to number | boolean, so string shouldn't be assignable
 type MyExclude<T, U> = T extends U ? never : T;
 type ExResult = MyExclude<string | number | boolean, string>;
-let bad1: ExResult = "hello";
+let bad1: ExResult = 'hello';
 
 // ReturnType resolves to string, so number shouldn't be assignable
 type MyReturnType<T> = T extends (...args: any[]) => infer R ? R : never;

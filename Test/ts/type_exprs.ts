@@ -13,4 +13,4 @@ type Point = { x: number; y: string };
 type Opt = { name: string; age?: number };
 type Ro = { readonly id: number };
 
-console.log("type_exprs OK");
+console.log('type_exprs OK');

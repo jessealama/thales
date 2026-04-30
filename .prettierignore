@@ -1,0 +1,11 @@
+# Build / dependency artifacts
+.lake/
+node_modules/
+package-lock.json
+lake-manifest.json
+
+# Third-party vendored TypeScript compiler test suite — not ours to format.
+typescript-tests/
+
+# Auto-generated / hand-curated files we don't want prettier to touch.
+CHANGELOG.md

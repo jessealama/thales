@@ -1,6 +1,6 @@
 /** @throws RangeError */
 function mustDivide(a: number, b: number): number {
-  if (b === 0) throw new RangeError("zero");
+  if (b === 0) throw new RangeError('zero');
   return a / b;
 }
 

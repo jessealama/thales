@@ -4,11 +4,11 @@ function identity<T>(x: T): T {
 }
 
 let n: number = identity(42);
-let s: string = identity("hello");
+let s: string = identity('hello');
 
 // Generic type alias
 type Pair<A, B> = [A, B];
-let p: Pair<string, number> = ["hi", 1];
+let p: Pair<string, number> = ['hi', 1];
 
 // Generic interface
 interface Box<T> {

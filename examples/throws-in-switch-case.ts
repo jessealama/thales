@@ -5,11 +5,13 @@
 
 function classify(x: number): string {
   switch (x) {
-    case 0: return "zero";
+    case 0:
+      return 'zero';
     case 1:
       // @thales-expect-error TH0060
-      throw new RangeError("one is forbidden");
-    default: return "other";
+      throw new RangeError('one is forbidden');
+    default:
+      return 'other';
   }
 }
 

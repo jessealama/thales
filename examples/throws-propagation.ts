@@ -1,6 +1,6 @@
 /** @throws RangeError */
 function parseNumber(s: string): number {
-  if (s === "") throw new RangeError("empty");
+  if (s === '') throw new RangeError('empty');
   return parseFloat(s);
 }
 
@@ -12,7 +12,7 @@ function addParsed(a: string, b: string): number {
 }
 
 try {
-  console.log(addParsed("1", "2"));
+  console.log(addParsed('1', '2'));
 } catch (e) {
-  console.log("caught error");
+  console.log('caught error');
 }

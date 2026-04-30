@@ -1,7 +1,7 @@
 function f2(cond: boolean) {
   let x: string;
   if (cond) {
-    x = "hello";
+    x = 'hello';
   }
   x;
 }
@@ -9,9 +9,9 @@ function f2(cond: boolean) {
 function f1(cond: boolean) {
   let x: string;
   if (cond) {
-    x = "hello";
+    x = 'hello';
   } else {
-    x = "world";
+    x = 'world';
   }
   x;
 }

@@ -3,8 +3,8 @@
 // intentionally minimal: the full standard library is v6+.
 
 export type Option<T> =
-  | { readonly tag: "some"; readonly value: T }
-  | { readonly tag: "none" };
+  | { readonly tag: 'some'; readonly value: T }
+  | { readonly tag: 'none' };
 
 export type Result<T, E> =
   | { readonly ok: true; readonly value: T }

@@ -11,12 +11,12 @@ type User = { name: string; age: number };
  */
 // @thales-expect-error TH0066
 function makeUser(name: string, age: number): User {
-  if (age < 0) throw new RangeError("age must be non-negative");
+  if (age < 0) throw new RangeError('age must be non-negative');
   return { name, age };
 }
 
 try {
-  console.log(makeUser("Alice", 30).name);
+  console.log(makeUser('Alice', 30).name);
 } catch (e) {
-  console.log("error");
+  console.log('error');
 }

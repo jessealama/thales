@@ -7,7 +7,7 @@
 function abs(n: number): number {
   if (n < 0) {
     // @thales-expect-error TH0067
-    throw new RangeError("negative");
+    throw new RangeError('negative');
   }
   return n;
 }

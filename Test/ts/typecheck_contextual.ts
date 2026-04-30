@@ -2,7 +2,7 @@
 
 // Array contextual typing: expected element type flows into array literal
 let nums: number[] = [1, 2, 3];
-let strs: string[] = ["a", "b", "c"];
+let strs: string[] = ['a', 'b', 'c'];
 
 console.log(nums);
 console.log(strs);
@@ -20,6 +20,6 @@ interface Named {
   age: number;
 }
 
-let person: Named = { name: "Alice", age: 30 };
+let person: Named = { name: 'Alice', age: 30 };
 console.log(p);
 console.log(person);

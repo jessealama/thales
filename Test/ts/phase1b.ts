@@ -1,8 +1,17 @@
 // Phase 1b comprehensive test
 
 // Enum declarations
-enum Color { Red, Green, Blue }
-enum Direction { Up = "UP", Down = "DOWN", Left = "LEFT", Right = "RIGHT" }
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+enum Direction {
+  Up = 'UP',
+  Down = 'DOWN',
+  Left = 'LEFT',
+  Right = 'RIGHT',
+}
 
 // Generic function
 function identity<T>(x: T): T {
@@ -35,9 +44,9 @@ declare const API_KEY: string;
 function greet(name: string, greeting?: string, ...tags: string[]): string {
   let g: string = greeting as string;
   if (g === undefined) {
-    g = "Hello";
+    g = 'Hello';
   }
-  return g + ", " + name;
+  return g + ', ' + name;
 }
 
 // Using enums
@@ -47,7 +56,7 @@ console.log(Color.Blue);
 
 // Using generics
 console.log(identity(42));
-console.log(identity("hello"));
+console.log(identity('hello'));
 
 // Using as expression
 let x: any = 123;
@@ -55,5 +64,5 @@ let y: number = x as number;
 console.log(y);
 
 // Optional param call
-console.log(greet("world"));
-console.log(greet("world", "Hi"));
+console.log(greet('world'));
+console.log(greet('world', 'Hi'));

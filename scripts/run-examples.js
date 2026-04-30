@@ -43,7 +43,7 @@ function parseDiagnostics(text) {
     if (a.file !== b.file) return a.file < b.file ? -1 : 1;
     if (a.line !== b.line) return a.line - b.line;
     if (a.column !== b.column) return a.column - b.column;
-    return a.code < b.code ? -1 : (a.code > b.code ? 1 : 0);
+    return a.code < b.code ? -1 : a.code > b.code ? 1 : 0;
   });
   return diags;
 }
@@ -74,8 +74,10 @@ function fmtDiag(d) {
 function diagnoseAgreement(tscDiags, thalesDiags) {
   const thalesKeys = new Set(thalesDiags.map(diagKey));
   const tscKeys = new Set(tscDiags.map(diagKey));
-  const missing = tscDiags.filter(d => !thalesKeys.has(diagKey(d)));
-  const spurious = thalesDiags.filter(d => d.code.startsWith('TS') && !tscKeys.has(diagKey(d)));
+  const missing = tscDiags.filter((d) => !thalesKeys.has(diagKey(d)));
+  const spurious = thalesDiags.filter(
+    (d) => d.code.startsWith('TS') && !tscKeys.has(diagKey(d)),
+  );
   return { missing, spurious };
 }
 
@@ -106,7 +108,10 @@ function collectDeclaredDirectives(inputPath) {
     let j = i + 1;
     while (j < lines.length) {
       const trimmed = lines[j].replace(/^[ \t]+/, '');
-      if (trimmed === '' || /^\/\//.test(trimmed)) { j++; continue; }
+      if (trimmed === '' || /^\/\//.test(trimmed)) {
+        j++;
+        continue;
+      }
       break;
     }
     const appliesToLine = j < lines.length ? j + 1 : 0;
@@ -131,23 +136,29 @@ function verifyDirectiveCoverage(declared, rawDiags) {
     byLine.set(d.line, set);
   }
   const problems = [];
-  const fmtCode = c => 'TH' + String(c).padStart(4, '0');
+  const fmtCode = (c) => 'TH' + String(c).padStart(4, '0');
   for (const [line, codes] of declared) {
     const actual = byLine.get(line) || new Set();
     for (const expected of codes) {
       if (expected === null) {
         if (actual.size === 0) {
-          problems.push(`directive on applied line ${line}: code-less directive but no TH fired`);
+          problems.push(
+            `directive on applied line ${line}: code-less directive but no TH fired`,
+          );
         }
       } else if (!actual.has(expected)) {
         const actualStr = Array.from(actual).map(fmtCode).join(', ') || 'none';
-        problems.push(`directive on applied line ${line}: ${fmtCode(expected)} expected but got {${actualStr}}`);
+        problems.push(
+          `directive on applied line ${line}: ${fmtCode(expected)} expected but got {${actualStr}}`,
+        );
       }
     }
   }
   for (const line of byLine.keys()) {
     if (!declared.has(line)) {
-      problems.push(`raw TH at line ${line} not covered by any @thales-expect-error directive`);
+      problems.push(
+        `raw TH at line ${line} not covered by any @thales-expect-error directive`,
+      );
     }
   }
   return problems.length === 0 ? null : problems.join('\n  ');
@@ -158,65 +169,85 @@ function verifyDirectiveCoverage(declared, rawDiags) {
 (function selfCheckHelpers() {
   const sample = [
     "/tmp/foo.ts(3,5): error TS2322: Type 'string' is not assignable to type 'number'.",
-    "/tmp/foo.ts(4,1): error TH0010: Loop not supported; use recursion or array methods",
-    "Found 2 errors in the same file, starting at: /tmp/foo.ts:3",
+    '/tmp/foo.ts(4,1): error TH0010: Loop not supported; use recursion or array methods',
+    'Found 2 errors in the same file, starting at: /tmp/foo.ts:3',
   ].join('\n');
   const ds = parseDiagnostics(sample);
-  if (ds.length !== 2) throw new Error(`parseDiagnostics sample: got ${ds.length}, want 2`);
+  if (ds.length !== 2)
+    throw new Error(`parseDiagnostics sample: got ${ds.length}, want 2`);
   if (ds[0].code !== 'TS2322' || ds[0].line !== 3 || ds[0].column !== 5) {
     throw new Error(`parseDiagnostics[0] wrong: ${JSON.stringify(ds[0])}`);
   }
-  if (ds[1].code !== 'TH0010') throw new Error(`parseDiagnostics[1] wrong: ${JSON.stringify(ds[1])}`);
+  if (ds[1].code !== 'TH0010')
+    throw new Error(`parseDiagnostics[1] wrong: ${JSON.stringify(ds[1])}`);
 
-  const tsc = [{ file: 'foo.ts', line: 3, column: 5, code: 'TS2322', message: 'a' }];
+  const tsc = [
+    { file: 'foo.ts', line: 3, column: 5, code: 'TS2322', message: 'a' },
+  ];
   const thales = [
     { file: 'foo.ts', line: 3, column: 5, code: 'TS2322', message: 'a' },
     { file: 'foo.ts', line: 4, column: 1, code: 'TH0010', message: 'b' },
   ];
   const { missing, spurious } = diagnoseAgreement(tsc, thales);
   if (missing.length !== 0 || spurious.length !== 0) {
-    throw new Error(`diagnoseAgreement should be clean; got ${JSON.stringify({missing, spurious})}`);
+    throw new Error(
+      `diagnoseAgreement should be clean; got ${JSON.stringify({ missing, spurious })}`,
+    );
   }
   const { missing: m2 } = diagnoseAgreement(tsc, []);
-  if (m2.length !== 1) throw new Error(`diagnoseAgreement should report missing`);
-  const { spurious: s2 } = diagnoseAgreement([], [{ file:'foo.ts', line:1, column:1, code:'TS9999', message:'x' }]);
-  if (s2.length !== 1) throw new Error(`diagnoseAgreement should report spurious`);
+  if (m2.length !== 1)
+    throw new Error(`diagnoseAgreement should report missing`);
+  const { spurious: s2 } = diagnoseAgreement(
+    [],
+    [{ file: 'foo.ts', line: 1, column: 1, code: 'TS9999', message: 'x' }],
+  );
+  if (s2.length !== 1)
+    throw new Error(`diagnoseAgreement should report spurious`);
 
   // Directive helpers.
-  if (!hasDirectivePure("// @thales-expect-error TH0001\nlet x = 1;")) {
-    throw new Error("hasDirectivePure should match simple directive");
+  if (!hasDirectivePure('// @thales-expect-error TH0001\nlet x = 1;')) {
+    throw new Error('hasDirectivePure should match simple directive');
   }
-  if (hasDirectivePure("let x = 1;\nconsole.log(x);")) {
-    throw new Error("hasDirectivePure should not match plain code");
+  if (hasDirectivePure('let x = 1;\nconsole.log(x);')) {
+    throw new Error('hasDirectivePure should not match plain code');
   }
   // Near-miss typos like `@thales-expect-erorr` MUST classify as directive so
   // the directive flow runs and surfaces TH9003 from thales (mirroring
   // Lean's isLooseMatch).
-  if (!hasDirectivePure("// @thales-expect-erorr TH0001\nlet x = 1;")) {
-    throw new Error("hasDirectivePure should match near-miss prefix (erorr)");
+  if (!hasDirectivePure('// @thales-expect-erorr TH0001\nlet x = 1;')) {
+    throw new Error('hasDirectivePure should match near-miss prefix (erorr)');
   }
-  if (!hasDirectivePure("// @thales_expect_error TH0001\nlet x = 1;")) {
-    throw new Error("hasDirectivePure should match underscore variant");
+  if (!hasDirectivePure('// @thales_expect_error TH0001\nlet x = 1;')) {
+    throw new Error('hasDirectivePure should match underscore variant');
   }
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'examples-selftest-'));
   try {
     const probe1 = path.join(tmpDir, 'a.ts');
-    fs.writeFileSync(probe1, "// @thales-expect-error TH0001\nlet x = 0; x = 1;\n");
+    fs.writeFileSync(
+      probe1,
+      '// @thales-expect-error TH0001\nlet x = 0; x = 1;\n',
+    );
     const decl1 = collectDeclaredDirectives(probe1);
     if (!(decl1.get(2) && decl1.get(2).has(1))) {
-      throw new Error(`collectDeclaredDirectives: ${JSON.stringify([...decl1])}`);
+      throw new Error(
+        `collectDeclaredDirectives: ${JSON.stringify([...decl1])}`,
+      );
     }
     const ok = verifyDirectiveCoverage(decl1, [
       { file: 'a.ts', line: 2, column: 1, code: 'TH0001', message: 'x' },
     ]);
-    if (ok !== null) throw new Error(`verifyDirectiveCoverage should succeed: ${ok}`);
+    if (ok !== null)
+      throw new Error(`verifyDirectiveCoverage should succeed: ${ok}`);
     const badCode = verifyDirectiveCoverage(decl1, [
       { file: 'a.ts', line: 2, column: 1, code: 'TH0002', message: 'x' },
     ]);
-    if (badCode === null) throw new Error(`verifyDirectiveCoverage should fail on wrong code`);
+    if (badCode === null)
+      throw new Error(`verifyDirectiveCoverage should fail on wrong code`);
   } finally {
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
   }
 })();
 
@@ -233,17 +264,26 @@ function runCapture(cmd, args, opts = {}) {
 }
 
 function expectedVersion(name) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'),
+  );
   return pkg.devDependencies[name];
 }
 
 function checkToolVersion(label, cmd, args, extractVersion, expected) {
   const r = runCapture(cmd, args);
   if (r.code !== 0) {
-    return { ok: false, why: `${label}: '${cmd} ${args.join(' ')}' failed (${r.err ? r.err.message : 'exit ' + r.code})` };
+    return {
+      ok: false,
+      why: `${label}: '${cmd} ${args.join(' ')}' failed (${r.err ? r.err.message : 'exit ' + r.code})`,
+    };
   }
   const got = extractVersion(r.stdout + r.stderr);
-  if (!got) return { ok: false, why: `${label}: could not extract version from output:\n${r.stdout}${r.stderr}` };
+  if (!got)
+    return {
+      ok: false,
+      why: `${label}: could not extract version from output:\n${r.stdout}${r.stderr}`,
+    };
   if (expected && got !== expected) {
     return { ok: false, why: `${label}: expected ${expected}, got ${got}` };
   }
@@ -258,36 +298,70 @@ function checkRuntimeImport() {
   try {
     const r = runCapture('lake', ['env', 'lean', probe], { cwd: repoRoot });
     if (r.code !== 0) {
-      return { ok: false, why: `lake env lean could not elaborate 'import Thales.TS.Runtime':\n${r.stdout}${r.stderr}` };
+      return {
+        ok: false,
+        why: `lake env lean could not elaborate 'import Thales.TS.Runtime':\n${r.stdout}${r.stderr}`,
+      };
     }
     return { ok: true };
   } finally {
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {}
   }
 }
 
 function preflight() {
   const problems = [];
-  const check = (result) => { if (!result.ok) problems.push(result.why); };
+  const check = (result) => {
+    if (!result.ok) problems.push(result.why);
+  };
 
-  check(checkToolVersion('tsc', 'npx', ['--no-install', 'tsc', '--version'],
-    s => (s.match(/Version\s+(\S+)/) || [])[1],
-    expectedVersion('typescript')));
+  check(
+    checkToolVersion(
+      'tsc',
+      'npx',
+      ['--no-install', 'tsc', '--version'],
+      (s) => (s.match(/Version\s+(\S+)/) || [])[1],
+      expectedVersion('typescript'),
+    ),
+  );
 
-  check(checkToolVersion('tsx', 'npx', ['--no-install', 'tsx', '--version'],
-    s => (s.match(/tsx\s+v?(\S+)/) || s.match(/^v?(\d+\.\d+\.\d+)/m) || [])[1],
-    expectedVersion('tsx')));
+  check(
+    checkToolVersion(
+      'tsx',
+      'npx',
+      ['--no-install', 'tsx', '--version'],
+      (s) =>
+        (s.match(/tsx\s+v?(\S+)/) || s.match(/^v?(\d+\.\d+\.\d+)/m) || [])[1],
+      expectedVersion('tsx'),
+    ),
+  );
 
-  check(checkToolVersion('lake', 'lake', ['--version'],
-    s => (s.match(/Lake version\s+(\S+)/) || [])[1],
-    null)); // no pinned expectation; we only require presence
+  check(
+    checkToolVersion(
+      'lake',
+      'lake',
+      ['--version'],
+      (s) => (s.match(/Lake version\s+(\S+)/) || [])[1],
+      null,
+    ),
+  ); // no pinned expectation; we only require presence
 
-  check(checkToolVersion('lean', 'lean', ['--version'],
-    s => (s.match(/Lean \(version (\S+?),/) || [])[1],
-    null));
+  check(
+    checkToolVersion(
+      'lean',
+      'lean',
+      ['--version'],
+      (s) => (s.match(/Lean \(version (\S+?),/) || [])[1],
+      null,
+    ),
+  );
 
   if (!fs.existsSync(thalesBin)) {
-    problems.push(`thales binary missing: ${thalesBin}. Run 'lake build thales'.`);
+    problems.push(
+      `thales binary missing: ${thalesBin}. Run 'lake build thales'.`,
+    );
   }
 
   if (problems.length === 0) {
@@ -327,7 +401,12 @@ function tsconfigToFlags() {
 
 /** Run tsc --noEmit on input.ts. Returns {code, stdout, stderr, diags}. */
 function runTsc(inputPath) {
-  const r = runCapture('npx', ['--no-install', 'tsc', ...tsconfigToFlags(), inputPath]);
+  const r = runCapture('npx', [
+    '--no-install',
+    'tsc',
+    ...tsconfigToFlags(),
+    inputPath,
+  ]);
   return { ...r, diags: parseDiagnostics(r.stdout) };
 }
 
@@ -339,7 +418,11 @@ function runThc(inputPath) {
 
 /** Run thales --no-emit --ignore-expect-error on input.ts. */
 function runThcIgnoringDirectives(inputPath) {
-  const r = runCapture(thalesBin, ['--no-emit', '--ignore-expect-error', inputPath]);
+  const r = runCapture(thalesBin, [
+    '--no-emit',
+    '--ignore-expect-error',
+    inputPath,
+  ]);
   return { ...r, diags: parseDiagnostics(r.stdout) };
 }
 
@@ -357,17 +440,30 @@ function runThcThenLean(inputPath) {
   try {
     const r1 = runCapture(thalesBin, ['--overwrite', '-o', outDir, inputPath]);
     if (r1.code !== 0) {
-      return { code: r1.code, stdout: r1.stdout, stderr: r1.stderr, stage: 'emit' };
+      return {
+        code: r1.code,
+        stdout: r1.stdout,
+        stderr: r1.stderr,
+        stage: 'emit',
+      };
     }
     // `thales -o <dir> foo.ts` writes `<dir>/Foo.lean` — basename capitalized, extension stripped,
     // non-alphanumerics removed (matches thales's inputToModuleName).
     const base = path.basename(inputPath).replace(/\.[mc]?ts$/, '');
-    const moduleName = base.charAt(0).toUpperCase() + base.slice(1).replace(/[^A-Za-z0-9]/g, '');
+    const moduleName =
+      base.charAt(0).toUpperCase() + base.slice(1).replace(/[^A-Za-z0-9]/g, '');
     const leanPath = path.join(outDir, moduleName + '.lean');
     const r2 = runCapture('lake', ['env', 'lean', leanPath], { cwd: repoRoot });
-    return { code: r2.code, stdout: r2.stdout, stderr: r2.stderr, stage: 'run' };
+    return {
+      code: r2.code,
+      stdout: r2.stdout,
+      stderr: r2.stderr,
+      stage: 'run',
+    };
   } finally {
-    try { fs.rmSync(outDir, { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    } catch {}
   }
 }
 
@@ -388,7 +484,8 @@ function evaluateCase(inputPath) {
       return {
         kind: 'fail',
         label: 'tsc-unexpected',
-        detail: 'subset-rejected example should be tsc-clean:\n  ' +
+        detail:
+          'subset-rejected example should be tsc-clean:\n  ' +
           tsc.diags.map(fmtDiag).join('\n  '),
       };
     }
@@ -398,12 +495,13 @@ function evaluateCase(inputPath) {
     // tsc is silent) are tolerated: they reflect thales type-checker
     // incompleteness orthogonal to subset enforcement, and are caught by
     // the accepting-flow's diagnoseAgreement elsewhere.
-    const remainingTh = thales.diags.filter(d => d.code.startsWith('TH'));
+    const remainingTh = thales.diags.filter((d) => d.code.startsWith('TH'));
     if (remainingTh.length > 0) {
       return {
         kind: 'fail',
         label: 'directive-check',
-        detail: 'thales --no-emit should have no TH diagnostics after directives:\n  ' +
+        detail:
+          'thales --no-emit should have no TH diagnostics after directives:\n  ' +
           remainingTh.map(fmtDiag).join('\n  '),
       };
     }
@@ -411,7 +509,11 @@ function evaluateCase(inputPath) {
     const declared = collectDeclaredDirectives(inputPath);
     const coverageFail = verifyDirectiveCoverage(declared, rawThc.diags);
     if (coverageFail) {
-      return { kind: 'fail', label: 'directive-coverage', detail: coverageFail };
+      return {
+        kind: 'fail',
+        label: 'directive-coverage',
+        detail: coverageFail,
+      };
     }
     return { kind: 'pass', label: 'subset-rejected' };
   }
@@ -423,29 +525,50 @@ function evaluateCase(inputPath) {
   if (missing.length + spurious.length > 0) {
     const parts = [];
     if (missing.length > 0) {
-      parts.push('tsc errors thales did not match:\n  ' + missing.map(fmtDiag).join('\n  '));
+      parts.push(
+        'tsc errors thales did not match:\n  ' +
+          missing.map(fmtDiag).join('\n  '),
+      );
     }
     if (spurious.length > 0) {
-      parts.push('thales TS errors tsc did not produce:\n  ' + spurious.map(fmtDiag).join('\n  '));
+      parts.push(
+        'thales TS errors tsc did not produce:\n  ' +
+          spurious.map(fmtDiag).join('\n  '),
+      );
     }
-    return { kind: 'fail', label: missing.length > 0 ? 'missing' : 'spurious', detail: parts.join('\n') };
+    return {
+      kind: 'fail',
+      label: missing.length > 0 ? 'missing' : 'spurious',
+      detail: parts.join('\n'),
+    };
   }
 
   if (tsc.diags.length > 0) {
     return { kind: 'pass', label: 'tsc-rejected' };
   }
-  if (thales.diags.some(d => d.code.startsWith('TH'))) {
+  if (thales.diags.some((d) => d.code.startsWith('TH'))) {
     return { kind: 'pass', label: 'subset-rejected' };
   }
 
   const tsx = runTsx(inputPath);
   const ours = runThcThenLean(inputPath);
 
-  if (tsx.stdout !== ours.stdout || tsx.stderr !== ours.stderr || tsx.code !== ours.code) {
+  if (
+    tsx.stdout !== ours.stdout ||
+    tsx.stderr !== ours.stderr ||
+    tsx.code !== ours.code
+  ) {
     const parts = [];
-    if (tsx.stdout !== ours.stdout) parts.push(`stdout:\n  tsx:  ${JSON.stringify(tsx.stdout)}\n  ours: ${JSON.stringify(ours.stdout)}`);
-    if (tsx.stderr !== ours.stderr) parts.push(`stderr:\n  tsx:  ${JSON.stringify(tsx.stderr)}\n  ours: ${JSON.stringify(ours.stderr)}`);
-    if (tsx.code !== ours.code) parts.push(`exit: tsx=${tsx.code} ours=${ours.code}`);
+    if (tsx.stdout !== ours.stdout)
+      parts.push(
+        `stdout:\n  tsx:  ${JSON.stringify(tsx.stdout)}\n  ours: ${JSON.stringify(ours.stdout)}`,
+      );
+    if (tsx.stderr !== ours.stderr)
+      parts.push(
+        `stderr:\n  tsx:  ${JSON.stringify(tsx.stderr)}\n  ours: ${JSON.stringify(ours.stderr)}`,
+      );
+    if (tsx.code !== ours.code)
+      parts.push(`exit: tsx=${tsx.code} ours=${ours.code}`);
     return { kind: 'fail', label: 'runtime', detail: parts.join('\n') };
   }
 
@@ -473,7 +596,11 @@ function collectCases(rootDir, mode) {
       if (!fs.statSync(dir).isDirectory()) continue;
       const inputPath = path.join(dir, 'input.ts');
       if (!fs.existsSync(inputPath)) continue;
-      cases.push({ label: name, inputPath, expectedPath: path.join(dir, 'expected-outcome.txt') });
+      cases.push({
+        label: name,
+        inputPath,
+        expectedPath: path.join(dir, 'expected-outcome.txt'),
+      });
     }
   }
   return cases;
@@ -500,7 +627,8 @@ function runCorpus(rootDir, opts = {}) {
         passes++;
       } else {
         console.log(`FAIL — expected ${expected}, got ${actual}`);
-        if (outcome.detail) console.log('  ' + outcome.detail.replace(/\n/g, '\n  '));
+        if (outcome.detail)
+          console.log('  ' + outcome.detail.replace(/\n/g, '\n  '));
         fails++;
       }
     } else {
@@ -509,7 +637,8 @@ function runCorpus(rootDir, opts = {}) {
         passes++;
       } else {
         console.log(`FAIL (${outcome.label})`);
-        if (outcome.detail) console.log('  ' + outcome.detail.replace(/\n/g, '\n  '));
+        if (outcome.detail)
+          console.log('  ' + outcome.detail.replace(/\n/g, '\n  '));
         fails++;
       }
     }
@@ -524,14 +653,22 @@ function runCorpus(rootDir, opts = {}) {
 function runDirectHarnessChecks() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'examples-direct-'));
   const check = path.join(tmp, 'input.ts');
-  fs.writeFileSync(check, "let x = 0;\n// @thales-expect-error TH0001\nx = 1;\n");
+  fs.writeFileSync(
+    check,
+    'let x = 0;\n// @thales-expect-error TH0001\nx = 1;\n',
+  );
   try {
     // Emit mode should fail with TH9002 and write no .lean sidecar.
     const r = runCapture(thalesBin, ['--overwrite', '-o', tmp, check]);
-    const hasTH9002 = parseDiagnostics(r.stdout).some(d => d.code === 'TH9002');
+    const hasTH9002 = parseDiagnostics(r.stdout).some(
+      (d) => d.code === 'TH9002',
+    );
     if (!hasTH9002 || r.code === 0) {
-      return 'emit-blocked-by-directive: expected TH9002 and non-zero exit; got ' +
-        `exit=${r.code}\n  ` + r.stdout;
+      return (
+        'emit-blocked-by-directive: expected TH9002 and non-zero exit; got ' +
+        `exit=${r.code}\n  ` +
+        r.stdout
+      );
     }
     const leanPath = path.join(tmp, 'Input.lean');
     if (fs.existsSync(leanPath)) {
@@ -539,7 +676,9 @@ function runDirectHarnessChecks() {
     }
     return null;
   } finally {
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {}
   }
 }
 

@@ -19,6 +19,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Fetches typescript-tests/ — its .gitmodules entry sets shallow=true,
+          # so this stays cheap despite the upstream repo being huge.
+          submodules: recursive
 
       - name: Install Lean toolchain
         uses: leanprover/lean-action@v1
@@ -39,6 +43,9 @@ jobs:
 
       - name: npm install
         run: npm ci
+
+      - name: Format check
+        run: npm run format:check
 
       - name: Cache Lake build artifacts
         uses: actions/cache@v4
@@ -61,3 +68,9 @@ jobs:
 
       - name: Examples
         run: node scripts/run-examples.js
+
+      - name: TS conformance (sample)
+        # Strided deterministic sample over microsoft/TypeScript's conformance
+        # corpus; thresholds chosen with ~7 pts of headroom below the current
+        # measured agreement. Bump these as thales improves.
+        run: node scripts/run-ts-conformance.js --sample 200 --min-agreement 75 --max-parse-errors 0

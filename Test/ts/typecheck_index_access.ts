@@ -13,5 +13,5 @@ type Named = {
 };
 
 declare const named: Named;
-let n: string = named.name;       // direct property match
-let other: string = named.other;  // index signature fallback
+let n: string = named.name; // direct property match
+let other: string = named.other; // index signature fallback

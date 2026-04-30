@@ -5,7 +5,7 @@
 /** @throws */
 // @thales-expect-error TH0065
 function maybeThrows(): number {
-  throw new RangeError("oops");
+  throw new RangeError('oops');
 }
 
 console.log(maybeThrows());

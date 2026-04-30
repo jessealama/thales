@@ -6,6 +6,6 @@ interface Point {
 type StringOrNumber = string | number;
 
 let x: number = 42;
-let name: string = "Thales";
+let name: string = 'Thales';
 console.log(name);
 console.log(x);

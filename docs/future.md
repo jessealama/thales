@@ -1,101 +1,92 @@
 # Thales-TS Growth Path
 
-## 0.5 (today)
+There are two "story arcs" for Thales:
 
-Pure-functional subset with Lean source emission. Beta. See `subset.md`.
+1. close the gap with how TS programmers actually write code, and
+2. add the verification work that justifies a Lean sidecar in the first place.
 
-## 1.0 — production-ready 0.5
+## Arc 1: Meet TypeScript halfway
 
-The same subset as 0.5 with broader example coverage, polish on diagnostic
-line/column anchoring, and a stability commitment on the CLI surface and
-the emitted-Lean format. The first release allowed to make compatibility
-promises.
+Real TS code does local mutation, uses classes extensively,
+does stateful iteration, and async without ceremony. These
+features are currently not supported by Thales. Closing that
+gap would mean:
 
-## 1.0.x — nullable usage-site gaps
+- **Local mutation via `Id.run do`.** Accept reassignment,
+  `for` loops, and `arr.push` on locally-constructed
+  arrays. Function bodies that mutate switch from direct
+  shallow embedding to `Id.run do` with `mut`
+  bindings. Mutation of parameters and captured variables
+  stays out, for now.
 
-Two spec'd usage-site translations for nullable types landed partially in
-v1.0 but are not end-to-end working:
+- **Classes with single inheritance.** Instance and static
+  methods, getters, setters, `extends`, method override,
+  `super`. `class C` becomes Lean `structure C`; `class D
+extends C` becomes `structure D extends C`, with a
+  closures-as-fields encoding for the cases that need
+  polymorphic dispatch through a base-class parameter.
 
-- **`??` nullish coalescing.** `x ?? y` is not narrowed by the type
-  synthesiser: the result still has type `T | null` rather than `T`, so
-  callers see a `TS2322` error. Fix is in `Thales/TypeCheck/Synth.lean`
-  for the logical-expression with `operator = .nullishCoalesce`.
-- **`?.` optional chaining.** The member-expression emitter at
-  `Thales/Emit/Lean.lean:357` matches both optional and non-optional
-  member access in the same case, so `u?.name` lowers as if it were
-  `u.name` — which fails to elaborate against an `Option User`. Fix is a
-  new case that emits `Option.map (·.field)` when the optional flag is
-  set. Pairs with a fix for plain object-literal emission (non-discriminated
-  records currently emit `(unsupported expr)`).
+- **Generators.** `function* gen() { yield x; … }`
+  translated to a Lean `Stream` (or perhaps `List` when
+  bounds are known). Restricted to clean coalgebraic cases:
+  no two-way communication via `.next(value)`, no `yield*`
+  delegation, no bidirectional generators.
 
-Neither gap blocks the three v1.0 headline features (Option via
-`T | null` narrowing, `@throws` + Except, `@total`). Both are candidates
-for a v1.0.1 patch.
+- **async/await.** Modelled as `IO` (or a tailored `Async`/`Task`
+  monad), with `await` lowering to monadic bind. This captures the
+  type discipline of async TS but not faithful event-loop semantics,
+  microtask ordering, or cancellation — same modelling philosophy as
+  `@throws`.
 
-## 1.1 — termination polish for `@total`
+## Arc 2: Bring proofs to TypeScript
 
-**What shipped in v1.0:** Functions annotated `@total` emit as `def` (not `partial def`); Lean's default structural-recursion checker must accept the function as-is. If it fails, TH0070 fires with Lean's error text. No `termination_by` or `decreasing_by` is emitted.
+Once the subset is wide enough for realistic programs, we're
+going to build out program verification for TypeScript.
 
-**What 1.1 adds:** A "grab bag" of tactics and measure templates so that more idiomatic recursive functions pass the termination checker without requiring the user to restructure.
+- **Proof annotations.** Support basic function and
+  method-level verification conditions via` @requires`,
+  `@ensures`, loop invariants via `@invariant`, translated
+  to Lean preconditions, postconditions, loop invariants,
+  and inline tactic blocks. TS runtime guards like `if (n <
+0n) throw new RangeError(…)` hoist into compile-time
+  obligations.
 
-**Toolkit additions for 1.1:**
+- **Refinement types.** A predicate-subtype layer on the
+  proof-annotation machinery: `/** @refine x => x > 0 */
+type PosInt = number;` becomes a subtype in Lean. Function
+  signatures that take or return refined values introduce
+  obligations at the call site, discharged by the same
+  pipeline. Encodes non-empty arrays, in-range indices,
+  sorted lists, validated strings without hand-rolling a
+  runtime guard for each.
 
-*(a) Measure templates emitted as `termination_by` clauses:*
-- `termination_by n.toNat` — `bigint`/`Int` functions with a clear non-negative decrease
-- `termination_by arr.size - i` — index-counting recursion
-- `termination_by xs.size` — array recursion via `.slice(1)` etc.
-- Lexicographic `termination_by (a, b)` — mutual or nested counters
+## Interaction of the arcs
 
-*(b) A `thales_decrease` tactic macro bundling the common discharge sequence* (`simp_wf; omega`, then `decide`, then fallback). Emitted as the `decreasing_by` clause.
+The arcs don't constitute a roadmap with distinct version
+numbers. We intend that the arcs build off of each other: a
+bit of progress in one, a bit of progress in the other,
+going back and forth.
 
-*(c) Pattern-based type refinement:* when a parameter is used as a non-negative counter (base case `=== 0`, recursive call on `n - 1`), the emitter offers to narrow its Lean signature from `Int` to `Nat`. Opt-in via a `@nat` JSDoc hint in 1.1, possibly inferred in later releases.
+## Non-goals
 
-*(d) Explicit precondition hoisting:* a TS runtime guard like `if (n < 0n) throw new Error(...)` hoists `n ≥ 0` into the Lean function's signature. Pairs with 4's `@requires`.
+We do not aim for Thales to ever match _all_ of
+TypeScript. That's just too big. Although I want Thales to
+be useful for "real" TypeScript, the overall goal is to make
+Lean-backed program verification for TypeScript a reality;
+full fidelity to TypeScript isn't what we're after. Some
+features strike us as a bit too heavyweight and difficult to
+model in Lean, as of today. We will probably not work on
+these in the near future (and as we progress on Arc 1, we
+will probably add more items to this list):
 
-*(e) Fuel-based escape:* for functions no static measure captures, rewrite to take an explicit `fuel: nat` parameter whose decrease is trivial. An alternative to removing `@total` that keeps induction working.
+- **Decorators.** Used for a kind of metaprogramming in
+  TypeScript. This is conceptually very attractive! But it's
+  hard to model faithfully in Lean.
 
-**Explicit targets for 1.1 acceptance:** the canonical `fact` on `bigint` and a `fibonacci` variant should compile cleanly under `@total` using (a) + (b) at minimum.
+* **Mixins.** Faithful modelling seems awkward in Lean.
 
-**Scope:** 1.1 is the smallest release that turns v1.0's "structural recursion only" baseline into a usable `@total` annotation for idiomatic TS. It lands before 1.5 (mutation) because it unlocks more of TS without introducing monadic translation.
-
-## 1.5 — local mutation via Id.run do
-
-**New surface:** `let x = 0; x = 1;` accepted. `for (let i = 0; i < arr.length; i++) { ... }` accepted. `arr.push(x)` on locally-constructed arrays accepted. Mutation of function parameters still rejected (would require escape analysis).
-
-**Translation:** Function bodies containing mutation switch from direct shallow embedding to `Id.run do` with `mut` bindings. For loops become `for ... in ...` blocks. `arr.push(x)` rebinds `arr := arr.push x`.
-
-**Proof story:** Mathlib `mvcgen` generates verification conditions for `Id.run do` blocks. Users prove loop invariants via `@invariant` JSDoc tags (introduced here).
-
-**New TH####:** TH0001-TH0005 become warnings/relaxations when the containing function opts into `Id.run do` style. TH0050 still applies to non-terminating recursion.
-
-## 2 — classes without inheritance
-
-**New surface:** `class Point { x: number; y: number; distance(other: Point): number { ... } }`. Instance methods accepted. Static methods accepted. Getters/setters accepted (translate to methods). `private` translates to "not exported from the Lean namespace."
-
-**Translation:** `class C { ... }` becomes Lean `structure C where ...` plus `def C.methodName (self : C) ...`. No inheritance, no `this`-rebinding, no `instanceof`.
-
-**Not yet:** `extends`, decorators, `abstract`, `protected`.
-
-## 3 — typed exceptions
-
-**New surface:** `throws E` annotation in function signatures. `throw new E(...)`. `try { ... } catch (e: E) { ... }`. Standard `Error` subclasses.
-
-**Translation:** Functions with `throws` translate to `Except E`. `throw` becomes `Except.error`. `try/catch` becomes a pattern match on the `Except` value.
-
-## 4 — proof annotations
-
-**New surface:** JSDoc tags `@requires`, `@ensures`, `@invariant`, `@decreasing`, `@proof`, `@partial`. Parsed from doc comments. Translated to Lean preconditions/postconditions/invariants. Inline `@proof` blocks contain Lean tactic text.
-
-**Discharge order:** `decide` → `simp` with Thales-provided simp set → user-supplied `@proof` tactic block → leave as open obligation.
-
-## 5+ — equivalence with the VM path (long-term research)
-
-**Thesis:** For every Thales-TS program P in the subset, the VM's execution of `erase(P)` equals the result of compiling and running `emitLean(P)`.
-
-**Approach:** Build a Lean theorem connecting the operational semantics of the VM bytecode to the shallow embedding. A research program, not an engineering task.
-
-**Status:** Deferred indefinitely. The v1.0 example corpus demonstrates *behavioral* equivalence on a specific set of programs. This is a sanity check, not a soundness proof. Counterexamples may exist outside the corpus (the string-encoding divergence documented in `subset.md` is one such example). Do not read v1.0 as claiming semantic equivalence.
-
-## 6+ — single inheritance, async, refinement types, wider stdlib
-
-Defer until 1–5 are proven on real workloads.
+This list isn't written in stone! As Lean grows, and as our
+knowledge of Lean and TypeScript grows (it's always growing,
+thanks to Thales!) it's conceivable that some features might
+get _removed_ from this list and moved to Arc 1. (But then
+again, they might move from Arc 1 back to this list!)

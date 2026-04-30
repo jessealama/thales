@@ -6,11 +6,11 @@
 /** @throws RangeError */
 function tryParseOrFail(s: string): number {
   try {
-    if (s === "") throw new RangeError("empty");
+    if (s === '') throw new RangeError('empty');
     return parseFloat(s);
   } catch (e) {
-    throw new RangeError("rethrown");
+    throw new RangeError('rethrown');
   }
 }
 
-console.log(tryParseOrFail("42"));
+console.log(tryParseOrFail('42'));

@@ -2,8 +2,8 @@ let x: string;
 x;
 
 let y: string;
-y = "hello";
+y = 'hello';
 y;
 
-let z: string = "hello";
+let z: string = 'hello';
 z;

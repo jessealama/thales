@@ -87,13 +87,13 @@ Lean. `JSShow` implements the small subset of JS `ToString` semantics
 the v1 corpus exercises, so that stdout from `lake env lean` matches
 stdout from the VM without post-processing:
 
-| TS type    | Lean type | `JSShow` rendering                              |
-|------------|-----------|--------------------------------------------------|
-| `number`   | `Float`   | `jsNumberToString` (see below)                   |
-| `bigint`   | `Int`     | decimal followed by `n` — e.g. `5n`, `-3n`, `0n` |
-| `number` (non-negative integer contexts) | `Nat` | plain decimal       |
-| `string`   | `String`  | identity                                         |
-| `boolean`  | `Bool`    | `"true"` / `"false"`                             |
+| TS type                                  | Lean type | `JSShow` rendering                               |
+| ---------------------------------------- | --------- | ------------------------------------------------ |
+| `number`                                 | `Float`   | `jsNumberToString` (see below)                   |
+| `bigint`                                 | `Int`     | decimal followed by `n` — e.g. `5n`, `-3n`, `0n` |
+| `number` (non-negative integer contexts) | `Nat`     | plain decimal                                    |
+| `string`                                 | `String`  | identity                                         |
+| `boolean`                                | `Bool`    | `"true"` / `"false"`                             |
 
 `jsNumberToString` implements the common cases of JS number
 stringification: `NaN` prints as `"NaN"`, `0` as `"0"`, whole-valued
@@ -162,7 +162,7 @@ error records appear unqualified. `Thales.TS.ArrayOps.*` and
 `Thales.TS.Array.get?` remain fully qualified in the emitted source
 because they intentionally do not live under the opened namespace.
 
-## What the runtime does *not* provide
+## What the runtime does _not_ provide
 
 The runtime is sized to v1 — anything outside this list is out of
 scope for now and should be added alongside the TS surface feature

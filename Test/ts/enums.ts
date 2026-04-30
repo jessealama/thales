@@ -1,5 +1,13 @@
-enum Status { Pending, Active, Done }
-enum HttpMethod { GET = "GET", POST = "POST", PUT = "PUT" }
+enum Status {
+  Pending,
+  Active,
+  Done,
+}
+enum HttpMethod {
+  GET = 'GET',
+  POST = 'POST',
+  PUT = 'PUT',
+}
 
 console.log(Status.Pending);
 console.log(Status.Active);

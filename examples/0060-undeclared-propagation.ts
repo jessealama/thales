@@ -5,7 +5,7 @@
 
 /** @throws RangeError */
 function parseNumber(s: string): number {
-  if (s === "") throw new RangeError("empty");
+  if (s === '') throw new RangeError('empty');
   return parseFloat(s);
 }
 
@@ -14,4 +14,4 @@ function doubleIt(s: string): number {
   return parseNumber(s) * 2;
 }
 
-console.log(doubleIt("5"));
+console.log(doubleIt('5'));

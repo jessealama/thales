@@ -1,5 +1,9 @@
-interface A { a: string; }
-interface B { b: number; }
+interface A {
+  a: string;
+}
+interface B {
+  b: number;
+}
 
 function test<T extends A & B>(x: T) {
   let a: string = x.a;

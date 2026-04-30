@@ -1,0 +1,4 @@
+[submodule "typescript-tests"]
+	path = typescript-tests
+	url = https://github.com/microsoft/TypeScript.git
+	shallow = true

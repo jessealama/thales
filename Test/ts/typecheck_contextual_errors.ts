@@ -6,7 +6,7 @@ interface Point {
   y: number;
 }
 
-let badPoint: Point = { x: "hello", y: 2 };
+let badPoint: Point = { x: 'hello', y: 2 };
 
 // Wrong type in array literal element
-let badNums: number[] = [1, "two", 3];
+let badNums: number[] = [1, 'two', 3];

@@ -5,7 +5,7 @@
 function divide(a: number, b: number): number {
   if (b === 0) {
     // @thales-expect-error TH0060
-    throw new RangeError("zero");
+    throw new RangeError('zero');
   }
   return a / b;
 }

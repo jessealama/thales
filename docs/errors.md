@@ -4,12 +4,12 @@
 
 Every thales diagnostic either:
 
-- uses a `TSXXXX` code that tsc would also emit at the same line for the
-  same input (so thales's type-check output can be compared to tsc's by
-  `(file, line, code)` equality), or
-- uses a `TH####` code, listed below, for subset-specific violations (these
-  have no tsc equivalent and exist only because thales is stricter than tsc
-  about what programs it is willing to embed into Lean).
+- uses a `TSXXXX` code that tsc would also emit at the same
+  line for the same input
+- uses a `TH####` code, listed below, for subset-specific
+  violations. These codes have no tsc equivalent and exist
+  only because thales is stricter than tsc about what
+  programs it is willing to embed into Lean.
 
 Extra `TH####` diagnostics never cause a conformance failure. A `TSXXXX`
 diagnostic reported by thales that tsc would not produce is a bug; report it.
@@ -20,52 +20,63 @@ displayed in diagnostics for human readability.
 See `docs/superpowers/specs/2026-04-21-conformance-harness-design.md` for
 the full contract and harness details.
 
-## Overview
-
-`thales` emits two categories of diagnostics:
-
-- **TS####** — Inherited TypeScript compiler diagnostics (from standard `tsc` behavior)
-- **TH####** — Thales-TS subset violations (errors enforcing the pure-functional, Lean-embeddable subset)
-
 This reference lists all 18 subset `TH####` codes plus the 4 directive
 codes (TH9000–TH9003) with minimal detail. For full explanation,
 rationale, and idiomatic replacements, see [subset.md](./subset.md).
 
+The codes are divided into categories:
+
+- mutation
+- control flow
+- types
+- declarations
+- recursion
+- totality
+- exceptions
+
+Another category, directives, exists for meta purposes
+(doesn't correspond to a real subset of TypeScript but
+rather reflects a kind of misuse of Thales).
+
 ## Summary
 
-| Code | Category | Short Message | Addressed By |
-|------|----------|---------------|--------------|
-| TH0001 | Mutation | Cannot reassign variable | 1.5 |
-| TH0002 | Mutation | Cannot assign to array element | 1.5 |
-| TH0003 | Mutation | Cannot assign to object property | 1.5 |
-| TH0004 | Mutation | Cannot call mutating method | 1.5 |
-| TH0005 | Mutation | Cannot mutate variable captured by enclosing scope | 1.5 |
-| TH0010 | Control flow | Loop not supported | 1.5 |
-| TH0011 | Control flow | throw/try/catch not supported | **Partially lifted in v1.0** — `@throws` + try/catch now accepted |
-| TH0012 | Control flow | async/await not supported | 6+ |
-| TH0020 | Types | `any` not permitted | permanent |
-| TH0021 | Types | `unknown` not permitted in user code | 3 |
-| TH0022 | Types | Union must be discriminated | permanent |
-| TH0023 | Types | Intersection types not supported | permanent |
-| TH0024 | Types | keyof/conditional/mapped types not supported | permanent |
-| TH0025 | Types | null/undefined types not supported | **Lifted in v1.0** — `T \| null` now emits as `Option T` |
-| TH0030 | Declarations | `class` not supported | 2 |
-| TH0031 | Declarations | Inheritance (`extends`) not supported | 6+ |
-| TH0040 | Matching | Non-exhaustive switch on discriminated union | permanent |
-| TH0050 | Recursion | Cannot verify termination | 4 |
-| TH0066 | Totality | `@total` and `@throws` declared together | Remove one of the annotations |
-| TH0067 | Totality | `@total` function has uncaught throw | Catch it, or drop `@total` |
-| TH0070 | Totality | `@total` asserted but Lean rejects termination | restructure or drop `@total` |
-| TH0060 | Exceptions | Unannotated `throw` | Annotate with `@throws E` |
-| TH0061 | Exceptions | Unused `@throws` annotation | permanent |
-| TH0063 | Exceptions | Thrown value must be a record type | Throw a record, e.g. `new RangeError("...")` |
-| TH0064 | Exceptions | Undeclared propagation | Expand `@throws` declaration |
-| TH9000 | Directive | Unused `@thales-expect-error` directive | 0.5 |
-| TH9001 | Directive | Directive code mismatch | 0.5 |
-| TH9002 | Directive | Cannot emit: subset violations suppressed | 0.5 |
-| TH9003 | Directive | Malformed `@thales-expect-error` directive | 0.5 |
+| Code   | Category     | Short Message                                      |
+| ------ | ------------ | -------------------------------------------------- |
+| TH0001 | Mutation     | Cannot reassign variable                           |
+| TH0002 | Mutation     | Cannot assign to array element                     |
+| TH0003 | Mutation     | Cannot assign to object property                   |
+| TH0004 | Mutation     | Cannot call mutating method                        |
+| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope |
+| TH0010 | Control flow | Loop not supported                                 |
+| TH0012 | Control flow | async/await not supported                          |
+| TH0020 | Types        | `any` not permitted                                |
+| TH0021 | Types        | `unknown` not permitted in user code               |
+| TH0022 | Types        | Union must be discriminated                        |
+| TH0023 | Types        | Intersection types not supported                   |
+| TH0024 | Types        | keyof/conditional/mapped types not supported       |
+| TH0025 | Types        | null/undefined types not supported                 |
+| TH0030 | Declarations | `class` not supported                              |
+| TH0031 | Declarations | Inheritance (`extends`) not supported              |
+| TH0040 | Matching     | Non-exhaustive switch on discriminated union       |
+| TH0050 | Recursion    | Cannot verify termination                          |
+| TH0066 | Totality     | `@total` and `@throws` declared together           |
+| TH0067 | Totality     | `@total` function has uncaught throw               |
+| TH0070 | Totality     | `@total` asserted but Lean rejects termination     |
+| TH0060 | Exceptions   | Unannotated `throw`                                |
+| TH0061 | Exceptions   | Unused `@throws` annotation                        |
+| TH0063 | Exceptions   | Thrown value must be a record type                 |
+| TH0064 | Exceptions   | Undeclared propagation                             |
+| TH9000 | Directive    | Unused `@thales-expect-error` directive            |
+| TH9001 | Directive    | Directive code mismatch                            |
+| TH9002 | Directive    | Cannot emit: subset violations suppressed          |
+| TH9003 | Directive    | Malformed `@thales-expect-error` directive         |
 
----
+## Future of this table
+
+As Thales develops, some of the diagnostic codes might
+become obsolete. That is, they will never be emitted. This
+is because the subset of TypeScript that we intend to target
+will grow over time.
 
 ## Mutation
 
@@ -77,8 +88,6 @@ Rejected: `let x = 0; x = 1;`
 
 [Details in subset.md#th0001--cannot-reassign-variable](./subset.md#th0001--cannot-reassign-variable)
 
-1.5 adds immutable `let` bindings via `Id.run do`.
-
 ---
 
 ### TH0002 — Cannot assign to array element
@@ -88,8 +97,6 @@ Rejected: `let x = 0; x = 1;`
 Rejected: `arr[0] = 99;`
 
 [Details in subset.md#th0002--cannot-assign-to-array-element-use-concat-or-return-a-new-array](./subset.md#th0002--cannot-assign-to-array-element-use-concat-or-return-a-new-array)
-
-1.5 adds persistent array update via `Array.set` + functional update syntax.
 
 ---
 
@@ -101,8 +108,6 @@ Rejected: `obj.x = 10;`
 
 [Details in subset.md#th0003--cannot-assign-to-object-property-construct-a-new-object](./subset.md#th0003--cannot-assign-to-object-property-construct-a-new-object)
 
-1.5 adds record update via spread syntax (`{...obj, x: 10}`).
-
 ---
 
 ### TH0004 — Cannot call mutating method
@@ -113,8 +118,6 @@ Rejected: `arr.push(42);`
 
 [Details in subset.md#th0004--cannot-call-mutating-method](./subset.md#th0004--cannot-call-mutating-method)
 
-1.5 replaces mutating methods (`.push`, `.pop`, `.splice`, `.sort`, `.reverse`) with functional equivalents.
-
 ---
 
 ### TH0005 — Cannot mutate variable captured by enclosing scope
@@ -124,8 +127,6 @@ Rejected: `arr.push(42);`
 Rejected: `let sum = 0; arr.forEach(x => { sum += x; });`
 
 [Details in subset.md#th0005--cannot-mutate-variable-captured-by-enclosing-scope](./subset.md#th0005--cannot-mutate-variable-captured-by-enclosing-scope)
-
-1.5 adds mutable captured variables via reference cells.
 
 ---
 
@@ -139,11 +140,9 @@ Rejected: `for (let i = 0; i < n; i++) { ... }`
 
 [Details in subset.md#th0010--loop-not-supported-use-recursion-or-array-methods](./subset.md#th0010--loop-not-supported-use-recursion-or-array-methods)
 
-1.5 adds loops via `Id.run do`.
-
 ---
 
-### TH0011 — throw/try/catch not supported *(partially lifted in v1.0)*
+### TH0011 — throw/try/catch not supported
 
 **Status:** Partially lifted. `throw new E(msg)` inside a `@throws`-annotated function is now
 accepted and emitted as `Except.error`. `try/catch` blocks are also accepted (the catch type
@@ -230,7 +229,7 @@ Permanent — out of shallow-embedding scope.
 
 ---
 
-### TH0025 — null/undefined types not supported *(lifted in v1.0)*
+### TH0025 — null/undefined types not supported
 
 **Status:** Lifted. `T | null` and `T | undefined` are now accepted and
 emitted as `Option T`. This code is no longer emitted by `thales`.
@@ -309,13 +308,14 @@ Rejected: `function f(n: bigint): bigint { ... return f(n - 1); ... /* non-struc
 A function that may throw a declared error type does not always return a value of its declared return type — its emitted Lean signature is `Except E T`, not `T`. The two annotations make incompatible claims, so they are mutually exclusive at the source level (regardless of whether Lean would accept the emitted `def : Except E T`).
 
 Example (rejected):
+
 ```typescript
 /**
  * @total
  * @throws RangeError when age is negative
  */
 function makeUser(name: string, age: number): User {
-  if (age < 0) throw new RangeError("age must be non-negative");
+  if (age < 0) throw new RangeError('age must be non-negative');
   return { name, age };
 }
 ```
@@ -331,25 +331,31 @@ Fix: drop `@total` if the function may genuinely fail (the `@throws` signature a
 Emitted at every uncaught throw event in the body of a `@total` function. A throw is "uncaught" if it is not lexically inside a `try` block whose `catch` clause handles it. A throw inside the `catch` handler itself counts as uncaught — `@total` requires the catch path to also have no escaping failures.
 
 Example (rejected):
+
 ```typescript
 /** @total */
 function bad(n: number): number {
-  if (n < 0) throw new RangeError("negative"); // TH0067
+  if (n < 0) throw new RangeError('negative'); // TH0067
   return n;
 }
 ```
 
 Example (accepted):
+
 ```typescript
 /** @throws RangeError */
 function inner(n: number): number {
-  if (n < 0) throw new RangeError("negative");
+  if (n < 0) throw new RangeError('negative');
   return n;
 }
 
 /** @total */
 function outer(n: number): number {
-  try { return inner(n); } catch (e) { return 0; }
+  try {
+    return inner(n);
+  } catch (e) {
+    return 0;
+  }
 }
 ```
 
@@ -364,11 +370,12 @@ Fix: handle the failure case with `try`/`catch`, or annotate the function with `
 Emitted when a `/** @total */` annotated function is emitted as `def` but Lean's termination checker rejects it. The message includes Lean's own error text (truncated to 400 characters).
 
 Example (rejected):
+
 ```typescript
 /** @total */
 function fact(n: bigint): bigint {
   if (n === 0n) return 1n;
-  return n * fact(n - 1n);   // TH0070 here: Int subtraction is not a structural decrease
+  return n * fact(n - 1n); // TH0070 here: Int subtraction is not a structural decrease
 }
 ```
 
@@ -412,6 +419,7 @@ boolean, `null`, or bigint. Thales requires thrown values to have named fields s
 the emitted Lean pattern match can reference them.
 
 Example (rejected):
+
 ```typescript
 /** @throws string */
 function parse(s: string): number {
@@ -433,6 +441,7 @@ Emitted at a call site inside a `@throws`-annotated function body when the calle
 throws set includes types not covered by the enclosing function's `@throws` declaration.
 
 Example (rejected):
+
 ```typescript
 /** @throws RangeError */
 function inner(): number { throw new RangeError("x"); return 1; }
@@ -478,7 +487,8 @@ Example (rejected):
 
 ```typescript
 // @thales-expect-error TH0001
-const arr = [1]; arr[0] = 2;  // actually emits TH0002
+const arr = [1];
+arr[0] = 2; // actually emits TH0002
 ```
 
 ---

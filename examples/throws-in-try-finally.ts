@@ -5,7 +5,7 @@
 
 /** @throws RangeError */
 function risky(): number {
-  throw new RangeError("nope");
+  throw new RangeError('nope');
 }
 
 function withCleanup(): number {

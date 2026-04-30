@@ -9,4 +9,4 @@ interface Container<T> {
 type Result<T, E> = T | E;
 
 console.log(first([10, 20, 30]));
-console.log(first(["a", "b", "c"]));
+console.log(first(['a', 'b', 'c']));

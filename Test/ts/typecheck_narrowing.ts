@@ -2,7 +2,7 @@
 
 // typeof narrowing: string
 function typeofString(x: string | number): void {
-  if (typeof x === "string") {
+  if (typeof x === 'string') {
     let s: string = x;
     console.log(s);
   } else {
@@ -13,7 +13,7 @@ function typeofString(x: string | number): void {
 
 // typeof narrowing: number
 function typeofNumber(x: string | number): void {
-  if (typeof x === "number") {
+  if (typeof x === 'number') {
     let n: number = x;
     console.log(n);
   }
@@ -45,7 +45,7 @@ function neqNull(x: string | null): void {
 
 // Negation: !(typeof x === "string")
 function negation(x: string | number): void {
-  if (!(typeof x === "string")) {
+  if (!(typeof x === 'string')) {
     let n: number = x;
     console.log(n);
   }
@@ -53,7 +53,7 @@ function negation(x: string | number): void {
 
 // Compound: && narrows both variables
 function compoundAnd(x: string | number, y: string | null): void {
-  if (typeof x === "string" && typeof y === "string") {
+  if (typeof x === 'string' && typeof y === 'string') {
     let s1: string = x;
     let s2: string = y;
     console.log(s1);
@@ -63,7 +63,7 @@ function compoundAnd(x: string | number, y: string | null): void {
 
 // Compound: || in else branch
 function compoundOr(x: string | number): void {
-  if (typeof x === "string" || typeof x === "number") {
+  if (typeof x === 'string' || typeof x === 'number') {
     console.log(x);
   }
 }
@@ -82,12 +82,12 @@ function instanceofNarrow(x: Dog | string): void {
   }
 }
 
-typeofString("hello");
+typeofString('hello');
 typeofNumber(42);
-truthiness("test");
+truthiness('test');
 eqNull(null);
-neqNull("test");
+neqNull('test');
 negation(42);
-compoundAnd("hello", "world");
-compoundOr("test");
-instanceofNarrow(new Dog("Labrador"));
+compoundAnd('hello', 'world');
+compoundOr('test');
+instanceofNarrow(new Dog('Labrador'));
