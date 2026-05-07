@@ -333,9 +333,29 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
       let ty := match typeAnn with | some ann => ann.type | none => .any
       withScope [(vname, ty)] (checkStatements rest)
     | _ => checkStatements rest
-  | .importDecl _ _ _ =>
-    -- Import declarations are not type-checked; just continue
-    checkStatements rest
+  | .importDecl _ source _ =>
+    -- Special-case @thales/prelude: inject the in-memory shim bindings.
+    -- For all other imports, just continue (no filesystem resolution).
+    if source == "@thales/prelude" then
+      -- Type aliases: Integer = Natural = Byte = Bit = number
+      let aliasOf (ty : TSType) := { typeParams := [], body := ty : TypeAliasDef }
+      -- Value types for is-predicates: (x: number) => boolean
+      let numToBoolean := TSType.function [TSParamType.mk "x" .number] .boolean
+      -- Value types for as-constructors: (x: number) => number  (alias = number in Parcel 2)
+      let numToNum := TSType.function [TSParamType.mk "x" .number] .number
+      let preludeValues : List (String × TSType) := [
+        ("isInteger", numToBoolean), ("isNatural", numToBoolean),
+        ("isByte",    numToBoolean), ("isBit",     numToBoolean),
+        ("asInteger", numToNum),     ("asNatural",  numToNum),
+        ("asByte",    numToNum),     ("asBit",      numToNum)
+      ]
+      withTypeAlias "Integer" (aliasOf .number)
+        (withTypeAlias "Natural" (aliasOf .number)
+          (withTypeAlias "Byte" (aliasOf .number)
+            (withTypeAlias "Bit" (aliasOf .number)
+              (withScope preludeValues (checkStatements rest)))))
+    else
+      checkStatements rest
 
 /-- Check a JS statement without processing continuation -/
 partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
