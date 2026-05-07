@@ -48,6 +48,21 @@ abbrev Byte := { x : Float // isByte x = true }
 /-- Refinement type: `0` or `1` (and `-0` per IEEE 754). -/
 abbrev Bit := { x : Float // isBit x = true }
 
+/-- `isBit x → isByte x` (one-line proof from nesting). -/
+theorem isByte_of_isBit {x : Float} (h : isBit x = true) : isByte x = true := by
+  unfold isBit at h
+  exact (Bool.and_eq_true _ _).mp h |>.1
+
+/-- `isByte x → isNatural x`. -/
+theorem isNatural_of_isByte {x : Float} (h : isByte x = true) : isNatural x = true := by
+  unfold isByte at h
+  exact (Bool.and_eq_true _ _).mp h |>.1
+
+/-- `isNatural x → isInteger x`. -/
+theorem isInteger_of_isNatural {x : Float} (h : isNatural x = true) : isInteger x = true := by
+  unfold isNatural at h
+  exact (Bool.and_eq_true _ _).mp h |>.1
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
