@@ -377,37 +377,41 @@ function preflight() {
 // ---- per-example decision procedure ----
 
 /**
- * Translate the repo's canonical tsconfig.json into a flat `tsc` CLI argument
- * list. We invoke tsc per-file (with `--ignoreConfig` so tsc does not complain
- * about the presence of `tsconfig.json` when a file is also on the command
- * line). The tsconfig remains the single source of truth for settings; this
- * function is just the glue that forwards those settings to tsc's CLI.
+ * Run tsc --noEmit on input.ts via a per-file tsconfig.json written to a
+ * temp directory.
+ *
+ * We cannot pass `--project` together with source files on the tsc CLI, and we
+ * cannot pass `paths` via CLI flags (tsc rejects `--paths` with TS6064). The
+ * solution is to write a minimal tsconfig that inherits the repo's
+ * `compilerOptions` and adds a single `files` entry pointing to the input.
+ * This lets tsc resolve `@thales/prelude` paths correctly without any
+ * flag-serialisation hazards.
+ *
+ * The temporary directory is cleaned up synchronously before the function
+ * returns.
  */
-function tsconfigToFlags() {
-  const raw = fs.readFileSync(path.join(repoRoot, 'tsconfig.json'), 'utf8');
-  const opts = JSON.parse(raw).compilerOptions || {};
-  const flags = ['--ignoreConfig'];
-  for (const [k, v] of Object.entries(opts)) {
-    if (typeof v === 'boolean') {
-      if (v) flags.push(`--${k}`);
-    } else if (Array.isArray(v)) {
-      flags.push(`--${k}`, v.join(','));
-    } else {
-      flags.push(`--${k}`, String(v));
-    }
-  }
-  return flags;
-}
-
-/** Run tsc --noEmit on input.ts. Returns {code, stdout, stderr, diags}. */
 function runTsc(inputPath) {
-  const r = runCapture('npx', [
-    '--no-install',
-    'tsc',
-    ...tsconfigToFlags(),
-    inputPath,
-  ]);
-  return { ...r, diags: parseDiagnostics(r.stdout) };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'thales-tsc-'));
+  try {
+    const baseRaw = fs.readFileSync(path.join(repoRoot, 'tsconfig.json'), 'utf8');
+    const base = JSON.parse(baseRaw);
+    // Override baseUrl to point at the repo root (tsconfig.json's compilerOptions
+    // may have a relative "." which is fine when tsconfig lives at the root, but
+    // our temp tsconfig lives in os.tmpdir(), so use an absolute path).
+    const compilerOptions = {
+      ...base.compilerOptions,
+      baseUrl: repoRoot,
+    };
+    const tempConfig = { compilerOptions, files: [inputPath] };
+    const tempCfgPath = path.join(tmp, 'tsconfig.json');
+    fs.writeFileSync(tempCfgPath, JSON.stringify(tempConfig));
+    const r = runCapture('npx', ['--no-install', 'tsc', '--project', tempCfgPath]);
+    return { ...r, diags: parseDiagnostics(r.stdout) };
+  } finally {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  }
 }
 
 /** Run thales --no-emit on input.ts. */
