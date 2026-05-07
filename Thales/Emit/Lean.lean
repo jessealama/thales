@@ -384,6 +384,18 @@ private def preludeRefinementName? : String → Option RefinementKind
   | "Bit" => some .bit
   | _ => none
 
+/-- Rewrite `.ref "Integer" []` / `"Natural"` / etc. to the `.refinement`
+    form. Used when populating `bindingEnv` so that the index-bounds
+    analyzer (which only matches on `.refinement`) sees these as
+    refinement-typed. -/
+private def normalizeRefinementRef (ty : TSType) : TSType :=
+  match ty with
+  | .ref name [] =>
+      match preludeRefinementName? name with
+      | some k => .refinement k
+      | none => ty
+  | _ => ty
+
 /-- Resolve a target type to a refinement kind, following one level of
     type-alias indirection through `aliasEnv`. Used to detect refinement
     targets like `Byte` (a TS alias tagged `.refinement` by the type-checker
@@ -781,7 +793,8 @@ partial def emitVarDecl (env : EmitEnv)
             | _ => none
           let env' :=
             match typeAnnotation with
-            | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
+            | some t =>
+                { env with bindingEnv := env.bindingEnv.insert id.name (normalizeRefinementRef t) }
             | none =>
               match inferredFromInit with
               | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
@@ -1025,8 +1038,12 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     (total : Bool := false) : Option LDecl :=
   let normalizedRetTy := normalizeForEmit retTy
   let normalizedParams := params.map fun (n, t) => (n, normalizeForEmit t)
+  -- For the binding env we additionally rewrite bare `Integer`/`Natural`/
+  -- `Byte`/`Bit` references to their `.refinement` form. This is the key
+  -- the index-bounds analyzer matches on, and the typed AST does not
+  -- itself rewrite refinement names introduced via `@thales/prelude`.
   let bindingEnv : Std.HashMap String TSType :=
-    normalizedParams.foldl (fun m (n, t) => m.insert n t) {}
+    normalizedParams.foldl (fun m (n, t) => m.insert n (normalizeRefinementRef t)) {}
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
                          throwTypes := throws, funcThrowsEnv }
   let bodyExpr := match body with
@@ -1133,7 +1150,8 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
   -- `IndexBounds.classify` can mark P1 indexing sites.
   let topBindingEnv : Std.HashMap String TSType := prog.body.foldl (fun acc ts =>
     match ts with
-    | .annotatedVarDecl _ _ name (some typeAnn) _ => acc.insert name typeAnn.type
+    | .annotatedVarDecl _ _ name (some typeAnn) _ =>
+        acc.insert name (normalizeRefinementRef typeAnn.type)
     | .annotatedVarDecl _ _ name none (some (.arrayExpr _ elems)) =>
         acc.insert name (.tuple (List.replicate elems.length .any))
     | _ => acc) {}

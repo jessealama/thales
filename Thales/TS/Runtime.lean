@@ -271,6 +271,13 @@ instance : JSShow Integer := ⟨fun x => jsNumberToString x.val⟩
 instance : JSShow Natural := ⟨fun x => jsNumberToString x.val⟩
 instance : JSShow Byte    := ⟨fun x => jsNumberToString x.val⟩
 instance : JSShow Bit     := ⟨fun x => jsNumberToString x.val⟩
+/-- JS `console.log(undefined)` prints `undefined`. JS `console.log(null)`
+    prints `null`. Our `Option α` is the lowering of TS `T | undefined` —
+    the `none` branch always prints `undefined`. (`null` is currently
+    indistinguishable from `undefined` in our lowering.) -/
+instance {α : Type} [JSShow α] : JSShow (Option α) := ⟨fun
+  | .none => "undefined"
+  | .some v => JSShow.jsShow v⟩
 /-- TS `bigint` is emitted as Lean `Int`. JS's `console.log` on a bigint
     renders the decimal followed by an `n` suffix (e.g. `5n`, `-3n`, `0n`),
     matching `BigInt.prototype.toString` with the literal-form marker that
