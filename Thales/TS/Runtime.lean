@@ -36,6 +36,18 @@ def isByte (x : Float) : Bool := isNatural x && x ≤ 255.0
     the coercion `Bit → Byte` provable as a one-line lemma. -/
 def isBit (x : Float) : Bool := isByte x && (x == 0.0 || x == 1.0)
 
+/-- Refinement type: safe integer. -/
+abbrev Integer := { x : Float // isInteger x = true }
+
+/-- Refinement type: non-negative safe integer. -/
+abbrev Natural := { x : Float // isNatural x = true }
+
+/-- Refinement type: integer in `[0, 255]`. -/
+abbrev Byte := { x : Float // isByte x = true }
+
+/-- Refinement type: `0` or `1` (and `-0` per IEEE 754). -/
+abbrev Bit := { x : Float // isBit x = true }
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
