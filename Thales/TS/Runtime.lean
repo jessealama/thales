@@ -99,19 +99,50 @@ def Integer.toInt (x : Integer) : Int :=
   if x.val ≥ 0.0 then (x.val.toUInt64.toNat : Int)
   else -((-x.val).toUInt64.toNat : Int)
 
-/-- Lift an in-range `Int` into `Integer`. The witness is built from a
-    Nat-to-Float conversion plus the `Nat.toFloat_isSafeInteger`
-    boundary axiom (Task 1.9 / Task 1.10). -/
-def Integer.ofInt (n : Int) (h : n.natAbs ≤ 9007199254740991) : Integer :=
-  ⟨if n < 0 then -((n.natAbs).toFloat) else (n.natAbs).toFloat, by sorry⟩
-
 /-! ## Float↔Int boundary axioms
 
 These axioms are the irreducible Float-Int IEEE-754 boundary
 relationships that Lean's standard `Float` library does not give us.
 Three of them (`ofInt_neg`, `ofInt_lt`, `ofInt_le`) were validated
-by the `feat/thales-grind-poc` branch. They are reasoned from
-IEEE 754 first principles. -/
+by the `feat/thales-grind-poc` branch. Two more
+(`Nat.toFloat_isSafeInteger`, `Float.neg_isSafeInteger`) are
+load-bearing for `Integer.ofInt`. They are reasoned from IEEE 754
+first principles.
+
+`Nat.toFloat_isSafeInteger` and `Float.neg_isSafeInteger` are
+declared first because `Integer.ofInt` depends on them in its
+proof obligation. The `ofInt_*` axioms (which mention
+`Integer.ofInt`) follow the definition. -/
+
+/-- Any `Nat` bounded by `MAX_SAFE_INTEGER` converts to a Float that
+    is a safe integer. The standard library's `Nat.toFloat` is
+    surjective onto integer-valued safe-range Floats and is exact in
+    this range, but Lean's stdlib does not state this; we postulate
+    it as an IEEE-754 boundary axiom. -/
+axiom Nat.toFloat_isSafeInteger (n : Nat) (h : n ≤ 9007199254740991) :
+  Float.isSafeInteger n.toFloat = true
+
+/-- Negating a safe-integer-valued Float preserves `isSafeInteger`.
+    IEEE-754 negation flips the sign bit and is exact, so finiteness,
+    integer-valuedness, and the absolute-value bound are preserved. -/
+axiom Float.neg_isSafeInteger (x : Float) (h : Float.isSafeInteger x = true) :
+  Float.isSafeInteger (-x) = true
+
+/-- Lift an in-range `Int` into `Integer`. The witness is built from a
+    Nat-to-Float conversion. The proof goes through
+    `Nat.toFloat_isSafeInteger` and `Float.neg_isSafeInteger`:
+    `n.toFloat` is a safe integer for any `n ≤ MAX_SAFE_INTEGER`,
+    and negating a safe integer preserves `isSafeInteger`. -/
+def Integer.ofInt (n : Int) (h : n.natAbs ≤ 9007199254740991) : Integer :=
+  ⟨if n < 0 then -((n.natAbs).toFloat) else (n.natAbs).toFloat,
+    by
+      show isInteger _ = true
+      unfold isInteger
+      split
+      · -- n < 0 branch: value is -(n.natAbs.toFloat).
+        exact Float.neg_isSafeInteger _ (Nat.toFloat_isSafeInteger _ h)
+      · -- n ≥ 0 branch: value is n.natAbs.toFloat.
+        exact Nat.toFloat_isSafeInteger _ h⟩
 
 axiom Float.ofInt_neg (n : Int) (h : n.natAbs ≤ 9007199254740991) :
   (Integer.ofInt (-n) (by simpa using h)).val = -((Integer.ofInt n h).val)
