@@ -93,6 +93,13 @@ def asBit (x : Float) : Bit :=
   if h : isBit x = true then ⟨x, h⟩
   else panic! s!"not a bit: {x}"
 
+/-- Convert a `Natural` to `Nat`. Sound by virtue of `n.property` —
+    `n.val` is a non-negative safe integer in Float form, so
+    `Float.toUInt64.toNat` recovers the integer value exactly.
+    The semantic is established by `Float.toUInt64_of_isNatural`
+    (boundary axiom, Task 1.9). -/
+def Natural.toNat (n : Natural) : Nat := n.val.toUInt64.toNat
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
