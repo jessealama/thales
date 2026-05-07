@@ -19,6 +19,15 @@ structure EmitEnv where
   retTy         : Option TSType := none
   throwTypes    : List String := []
   funcThrowsEnv : Std.HashMap String (List String) := {}
+  -- Bounds proofs in scope: a list of `(idxVar, arrayName, hypothesisName)`
+  -- entries. The hypothesis is the dite-bound proof
+  -- `<idxVar>.toNat < <arrayName>.size`. P2 indexing in `xs[i]'h` consults
+  -- this list to discharge its bounds proof. Populated by Task 5.3 when
+  -- entering a `dite` from an in-bounds-fact-bearing `if`.
+  boundsProofs  : List (String × String × String) := []
+  -- Counter used to generate unique dite-binder names. Bumped each time
+  -- a fresh `h_i` is introduced.
+  diteBinderCounter : Nat := 0
 
 /-- Resolve a TSType through one level of type-alias references. -/
 private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
@@ -410,14 +419,15 @@ private def emitRefinementLiteral
   some (.anonCtor [v] "by native_decide")
 
 /-- Wrap a return expression in `.some` when the expected return type is `Option T`.
-    If the expression is already `.none` (null literal), leave it as-is.
-    If the expression is a value, wrap in `.some`. -/
+    If the expression is already `.none` (null literal) or refers to the bare
+    `undefined` identifier, leave it as `.none`. Otherwise wrap in `.some`. -/
 private def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
   match retTy with
   | some (.option _) =>
     match e with
-    | .ctor "none" [] => e  -- null → keep as .none
-    | other => .ctor "some" [other]  -- value → wrap in .some
+    | .ctor "none" [] => e
+    | .var "undefined" => .ctor "none" []
+    | other => .ctor "some" [other]
   | _ => e
 
 /-- Right-associative `LType.sum` chain over the throws list:
@@ -482,6 +492,51 @@ private def coerceToFloat (env : EmitEnv) (e : Expression) (rendered : LExpr) : 
   | .identifier _ name =>
       if isRefinementBinding env name then .proj rendered "val" else rendered
   | _ => rendered
+
+/-- Recognize an `arr.length` expression. -/
+private def isLengthMember : Expression → Option String
+  | .memberExpr _ (.identifier _ arr) (.identifier _ "length") false _ => some arr
+  | _ => none
+
+/-- Detect a bounds-fact comparison that triggers P2 indexing. Returns the
+    `(idxVar, arrayName)` pair when the cond is `i < xs.length` or
+    `xs.length > i` (where `i` is a refinement-typed identifier in `env`,
+    and `xs` is an array/tuple binding). -/
+private def detectBoundsFact (env : EmitEnv)
+    : Expression → Option (String × String)
+  | .binaryExpr _ .lt (.identifier _ idxVar) right =>
+      match isLengthMember right with
+      | some arr =>
+          if isRefinementBinding env idxVar then some (idxVar, arr) else none
+      | none => none
+  | .binaryExpr _ .gt left (.identifier _ idxVar) =>
+      match isLengthMember left with
+      | some arr =>
+          if isRefinementBinding env idxVar then some (idxVar, arr) else none
+      | none => none
+  | _ => none
+
+/-- Detect a positive-length cond `xs.length > 0`. Returns the array name. -/
+private def detectLengthPositive : Expression → Option String
+  | .binaryExpr _ .gt left (.literal _ (.number n) _) =>
+      if n == 0.0 then isLengthMember left else none
+  | .binaryExpr _ .lt (.literal _ (.number n) _) right =>
+      if n == 0.0 then isLengthMember right else none
+  | _ => none
+
+/-- Walk a logical-conjunction expression and gather the set of in-bounds
+    facts it carries (left-to-right). Refinement-narrowing predicates
+    `isNatural(i)`/`isInteger(i)` are also collected as side guards
+    because Task 5.6 emits them as a `dite` shadow-let; the bounds
+    detection here treats their conjunction with `i < xs.length` as a
+    bounds fact under the post-narrowed type. -/
+private partial def collectCondBounds (env : EmitEnv) :
+    Expression → List (String × String)
+  | .logicalExpr _ .«and» l r => collectCondBounds env l ++ collectCondBounds env r
+  | other =>
+      match detectBoundsFact env other with
+      | some bf => [bf]
+      | none => []
 
 mutual
 
@@ -625,6 +680,46 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
     skipped — the caller must guarantee operands are `Float`-typed. -/
 partial def emitExpr : Expression → LExpr := emitExprEnv {}
 
+/-- Emit a condition expression in a form Lean will accept as a `Decidable`
+    proposition usable in `dite`. Recognizes the bounds-comparison shapes
+    we care about and rewrites them to their `Nat`-typed counterparts so
+    that `if h : c then ...` elaborates without needing a boolean coercion.
+    For `i < xs.length` (with `i` a refinement-typed identifier and `xs` an
+    array binding), emits `i.toNat < xs.size`. For `xs.length > 0`, emits
+    `0 < xs.size`. Falls back to `emitExprEnv env` for shapes we don't
+    rewrite. -/
+partial def emitCondForDite (env : EmitEnv) (cond : Expression) : LExpr :=
+  match cond with
+  | .binaryExpr _ .lt (.identifier _ idxVar) right =>
+      match isLengthMember right with
+      | some arr =>
+          if isRefinementBinding env idxVar then
+            .binOp "<" (.proj (.var idxVar) "toNat") (.proj (.var arr) "size")
+          else
+            emitExprEnv env cond
+      | none => emitExprEnv env cond
+  | .binaryExpr _ .gt left (.identifier _ idxVar) =>
+      match isLengthMember left with
+      | some arr =>
+          if isRefinementBinding env idxVar then
+            .binOp "<" (.proj (.var idxVar) "toNat") (.proj (.var arr) "size")
+          else
+            emitExprEnv env cond
+      | none => emitExprEnv env cond
+  | .binaryExpr _ .gt left (.literal _ (.number n) _) =>
+      if n == 0.0 then
+        match isLengthMember left with
+        | some arr => .binOp "<" (.nat 0) (.proj (.var arr) "size")
+        | none => emitExprEnv env cond
+      else emitExprEnv env cond
+  | .binaryExpr _ .lt (.literal _ (.number n) _) right =>
+      if n == 0.0 then
+        match isLengthMember right with
+        | some arr => .binOp "<" (.nat 0) (.proj (.var arr) "size")
+        | none => emitExprEnv env cond
+      else emitExprEnv env cond
+  | _ => emitExprEnv env cond
+
 /-- Emit a list of variable declarators as nested `let` bindings.
     `env` is consulted so that initializers whose target type resolves
     to a refinement (e.g. `Byte`, `Natural`) get wrapped in a Subtype
@@ -694,6 +789,43 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
         emitVarDecl env decls (fun env' => emitBodyEnv env' rest)
   -- `if (x === null) thn else rest` with `x : Option T` becomes a match.
   | .ifStmt _ cond thn elsOpt :: rest =>
+      -- First try the bounds-fact dite rewrite. The cond is checked for an
+      -- in-bounds shape (`i < xs.length`, `xs.length > i`, or `xs.length > 0`);
+      -- when present, emit `if h : <Nat-cond> then ... else ...` and stash
+      -- the proof in `env.boundsProofs` so Task 5.5's P2 indexing can use it.
+      let boundsFacts := collectCondBounds env cond
+      let lengthPos := detectLengthPositive cond
+      if boundsFacts.length = 1 && lengthPos.isNone then
+        let (idxVar, arrName) := boundsFacts.head!
+        let hName := s!"h{env.diteBinderCounter}"
+        let condExpr := emitCondForDite env cond
+        let env' : EmitEnv :=
+          { env with
+              boundsProofs := (idxVar, arrName, hName) :: env.boundsProofs,
+              diteBinderCounter := env.diteBinderCounter + 1 }
+        let thnExpr := emitBodyEnv env' (thn :: rest)
+        let elsExpr := match elsOpt with
+          | some els => emitBodyEnv env (els :: rest)
+          | none => emitBodyEnv env rest
+        .dite_ hName condExpr thnExpr elsExpr
+      else if lengthPos.isSome && boundsFacts.isEmpty then
+        let arrName := lengthPos.get!
+        let hName := s!"h{env.diteBinderCounter}"
+        let condExpr := emitCondForDite env cond
+        -- Mark the literal index `0` access in the body as P1-equivalent;
+        -- record the proof under a synthetic indexVar `__zero` so the
+        -- emit-side P2 path can discover it via the literal-zero
+        -- specialization in Task 5.5.
+        let env' : EmitEnv :=
+          { env with
+              boundsProofs := ("__zero", arrName, hName) :: env.boundsProofs,
+              diteBinderCounter := env.diteBinderCounter + 1 }
+        let thnExpr := emitBodyEnv env' (thn :: rest)
+        let elsExpr := match elsOpt with
+          | some els => emitBodyEnv env (els :: rest)
+          | none => emitBodyEnv env rest
+        .dite_ hName condExpr thnExpr elsExpr
+      else
       match nullCheckVar cond with
       | some varName =>
           match env.bindingEnv.get? varName with
