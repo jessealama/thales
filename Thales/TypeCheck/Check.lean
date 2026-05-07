@@ -7,6 +7,7 @@ import Thales.TypeCheck.Diagnostic
 import Thales.TypeCheck.Builtins
 import Thales.TypeCheck.Generic
 import Thales.TypeCheck.Narrowing
+import Thales.TypeCheck.IndexBounds
 
 namespace Thales.TypeCheck
 
@@ -393,7 +394,13 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
       let resolvedBindings ← resolveBindingsForNarrowing guard ctx.bindings
       let thenBindings := Narrowing.applyGuard guard resolvedBindings
       let elseBindings := Narrowing.applyNegatedGuard guard resolvedBindings
-      withScope (Narrowing.bindingsDiff thenBindings ctx.bindings) (checkJSStatementRaw consequent)
+      -- Collect bounds-facts (from `i < xs.length` style conjuncts) for the
+      -- true branch so the index-bounds analyzer can see them when it visits
+      -- `xs[i]` accesses inside `consequent`.
+      let scopedFacts := (IndexBounds.collectBoundsFacts guard).map fun bf =>
+        ({ indexVar := bf.indexVar, arrayName := bf.arrayName } : ScopedBoundsFact)
+      withScope (Narrowing.bindingsDiff thenBindings ctx.bindings)
+        (withBoundsFacts scopedFacts (checkJSStatementRaw consequent))
       let thenDA ← saveAssignmentState
       restoreAssignmentState preBranchDA
       match alternate with
@@ -425,7 +432,10 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     | some guard =>
       let resolvedBindings ← resolveBindingsForNarrowing guard ctx.bindings
       let narrowed := Narrowing.applyGuard guard resolvedBindings
-      withScope (widened ++ Narrowing.bindingsDiff narrowed ctx.bindings) (checkJSStatementRaw body)
+      let scopedFacts := (IndexBounds.collectBoundsFacts guard).map fun bf =>
+        ({ indexVar := bf.indexVar, arrayName := bf.arrayName } : ScopedBoundsFact)
+      withScope (widened ++ Narrowing.bindingsDiff narrowed ctx.bindings)
+        (withBoundsFacts scopedFacts (checkJSStatementRaw body))
     | none =>
       withScope widened (checkJSStatementRaw body)
     restoreAssignmentState preLoopDA

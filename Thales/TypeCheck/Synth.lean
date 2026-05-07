@@ -254,7 +254,9 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
     let objTyped ← synthJSExpr obj
     let idxTyped ← synthJSExpr idx
     let ctx ← read
-    let _kind := IndexBounds.classify obj idx ctx.bindings []
+    let scopedFacts := ctx.boundsFacts.map fun bf =>
+      ({ indexVar := bf.indexVar, arrayName := bf.arrayName } : IndexBounds.BoundsFact)
+    let _kind := IndexBounds.classify obj idx ctx.bindings scopedFacts
     -- (mark not stored; analyzer is exercised here so a future Parcel 5
     -- consumer can re-derive without surprising regressions in 3)
     return mk .any #[objTyped, idxTyped]

@@ -32,6 +32,15 @@ structure TypeCheckState where
   needsAssignmentCheck : Std.HashSet String := {}
   deriving Inhabited
 
+/-- An "i is in-bounds for xs" fact in scope. Used by the index-bounds
+    analyzer (`Thales.TypeCheck.IndexBounds`) to recognize the P2 pattern.
+    Stored as plain `(indexVar, arrayName)` pairs; the analyzer module
+    re-uses this shape via its own `BoundsFact` structure. -/
+structure ScopedBoundsFact where
+  indexVar : String
+  arrayName : String
+  deriving Inhabited
+
 /-- Read-only type context (per scope via ReaderT) -/
 structure TypeContext where
   bindings : Std.HashMap String TSType := {}
@@ -41,6 +50,8 @@ structure TypeContext where
   enums : Std.HashMap String TSType := {}
   classes : Std.HashMap String TSType := {}  -- class name → instance object type
   returnType : Option TSType := none  -- expected return type in current function
+  -- In-scope bounds facts (e.g. inside a true-branch of `if (i < xs.length) { … }`).
+  boundsFacts : List ScopedBoundsFact := []
   deriving Inhabited
 
 /-- The type checking monad: pure, no IO -/
@@ -165,6 +176,15 @@ def withTypeAlias {α : Type} (name : String) (def_ : TypeAliasDef) (m : TypeChe
   StateT.mk fun s =>
     ReaderT.mk fun ctx =>
       (m.run s).run { ctx with typeAliases := ctx.typeAliases.insert name def_ }
+
+/-- Run a computation with additional bounds-facts in scope (e.g. for the
+    true branch of `if (i < xs.length) { … }`). The new facts are appended
+    to the existing list; duplicates are tolerated by the analyzer. -/
+def withBoundsFacts {α : Type} (extra : List ScopedBoundsFact)
+    (m : TypeCheckM α) : TypeCheckM α :=
+  StateT.mk fun s =>
+    ReaderT.mk fun ctx =>
+      (m.run s).run { ctx with boundsFacts := extra ++ ctx.boundsFacts }
 
 /-- Run a computation with a registered interface -/
 def withInterface {α : Type} (name : String) (def_ : InterfaceDef) (m : TypeCheckM α) : TypeCheckM α :=
