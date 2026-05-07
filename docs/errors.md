@@ -42,39 +42,39 @@ soundness check).
 
 ## Summary
 
-| Code   | Category     | Short Message                                      |
-| ------ | ------------ | -------------------------------------------------- |
-| TH0001 | Mutation     | Cannot reassign variable                           |
-| TH0002 | Mutation     | Cannot assign to array element                     |
-| TH0003 | Mutation     | Cannot assign to object property                   |
-| TH0004 | Mutation     | Cannot call mutating method                        |
-| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope |
-| TH0010 | Control flow | Loop not supported                                 |
-| TH0012 | Control flow | async/await not supported                          |
-| TH0020 | Types        | `any` not permitted                                |
-| TH0021 | Types        | `unknown` not permitted in user code               |
-| TH0022 | Types        | Union must be discriminated                        |
-| TH0023 | Types        | Intersection types not supported                   |
-| TH0024 | Types        | keyof/conditional/mapped types not supported       |
-| TH0025 | Types        | null/undefined types not supported                 |
-| TH0030 | Declarations | `class` not supported                              |
-| TH0031 | Declarations | Inheritance (`extends`) not supported              |
-| TH0040 | Matching     | Non-exhaustive switch on discriminated union       |
-| TH0050 | Recursion    | Cannot verify termination                          |
-| TH0066 | Totality     | `@total` and `@throws` declared together           |
-| TH0067 | Totality     | `@total` function has uncaught throw               |
-| TH0070 | Totality     | `@total` asserted but Lean rejects termination     |
-| TH0060 | Exceptions   | Unannotated `throw`                                |
-| TH0061 | Exceptions   | Unused `@throws` annotation                        |
-| TH0063 | Exceptions   | Thrown value must be a record type                 |
-| TH0064 | Exceptions   | Undeclared propagation                             |
-| TH0080 | Refinement   | Literal value out of range for refinement type     |
-| TH0081 | Refinement   | Value not assignable to refinement without evidence|
-| TH9000 | Directive    | Unused `@thales-expect-error` directive            |
-| TH9001 | Directive    | Directive code mismatch                            |
-| TH9002 | Directive    | Cannot emit: subset violations suppressed          |
-| TH9003 | Directive    | Malformed `@thales-expect-error` directive         |
-| TH9004 | Directive    | Emitted Lean code contains `sorry`                 |
+| Code   | Category     | Short Message                                       |
+| ------ | ------------ | --------------------------------------------------- |
+| TH0001 | Mutation     | Cannot reassign variable                            |
+| TH0002 | Mutation     | Cannot assign to array element                      |
+| TH0003 | Mutation     | Cannot assign to object property                    |
+| TH0004 | Mutation     | Cannot call mutating method                         |
+| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope  |
+| TH0010 | Control flow | Loop not supported                                  |
+| TH0012 | Control flow | async/await not supported                           |
+| TH0020 | Types        | `any` not permitted                                 |
+| TH0021 | Types        | `unknown` not permitted in user code                |
+| TH0022 | Types        | Union must be discriminated                         |
+| TH0023 | Types        | Intersection types not supported                    |
+| TH0024 | Types        | keyof/conditional/mapped types not supported        |
+| TH0025 | Types        | null/undefined types not supported                  |
+| TH0030 | Declarations | `class` not supported                               |
+| TH0031 | Declarations | Inheritance (`extends`) not supported               |
+| TH0040 | Matching     | Non-exhaustive switch on discriminated union        |
+| TH0050 | Recursion    | Cannot verify termination                           |
+| TH0066 | Totality     | `@total` and `@throws` declared together            |
+| TH0067 | Totality     | `@total` function has uncaught throw                |
+| TH0070 | Totality     | `@total` asserted but Lean rejects termination      |
+| TH0060 | Exceptions   | Unannotated `throw`                                 |
+| TH0061 | Exceptions   | Unused `@throws` annotation                         |
+| TH0063 | Exceptions   | Thrown value must be a record type                  |
+| TH0064 | Exceptions   | Undeclared propagation                              |
+| TH0080 | Refinement   | Literal value out of range for refinement type      |
+| TH0081 | Refinement   | Value not assignable to refinement without evidence |
+| TH9000 | Directive    | Unused `@thales-expect-error` directive             |
+| TH9001 | Directive    | Directive code mismatch                             |
+| TH9002 | Directive    | Cannot emit: subset violations suppressed           |
+| TH9003 | Directive    | Malformed `@thales-expect-error` directive          |
+| TH9004 | Directive    | Emitted Lean code contains `sorry`                  |
 
 ## Future of this table
 
@@ -557,17 +557,17 @@ diagnostic (it sees the refinement types as plain `number`).
 
 Range summary:
 
-| Type    | Valid range                         |
-| ------- | ----------------------------------- |
+| Type    | Valid range                                       |
+| ------- | ------------------------------------------------- |
 | Integer | −9007199254740991 to 9007199254740991 (±2^53 − 1) |
-| Natural | 0 to 9007199254740991               |
-| Byte    | 0 to 255                            |
-| Bit     | 0 or 1                              |
+| Natural | 0 to 9007199254740991                             |
+| Byte    | 0 to 255                                          |
+| Bit     | 0 or 1                                            |
 
 Example (rejected):
 
 ```typescript
-import { Byte } from "@thales/prelude";
+import { Byte } from '@thales/prelude';
 // @thales-expect-error TH0080
 const b: Byte = 256; // 256 > 255
 ```
@@ -588,7 +588,7 @@ membership evidence. `tsc` does not produce this diagnostic.
 Example (rejected):
 
 ```typescript
-import { Integer } from "@thales/prelude";
+import { Integer } from '@thales/prelude';
 function wrap(n: number): Integer {
   // @thales-expect-error TH0081
   return n; // no evidence that n is a safe integer
