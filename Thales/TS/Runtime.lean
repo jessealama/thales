@@ -8,6 +8,19 @@ set_option autoImplicit false
 
 namespace Thales.TS
 
+/-- The largest exact integer representable as a Float (`2^53 − 1`),
+    matching JS `Number.MAX_SAFE_INTEGER`. -/
+def Float.maxSafeInteger : Float := 9007199254740991.0
+
+/-- Predicate: `x` is an integer-valued, finite float. Mirrors JS
+    `Number.isInteger(x)`. NOT same as `isSafeInteger` (no range check). -/
+def Float.isInteger (x : Float) : Bool :=
+  x.isFinite && x == x.floor
+
+/-- Predicate: `x` is a safe integer. Mirrors JS `Number.isSafeInteger(x)`. -/
+def Float.isSafeInteger (x : Float) : Bool :=
+  x.isFinite && x == x.floor && x.abs ≤ Float.maxSafeInteger
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
