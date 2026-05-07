@@ -61,6 +61,8 @@ partial def emitType : TSType → LType
   | .stringLit _ => .const "String"
   | .numberLit _ => .const "Float"
   | .booleanLit _ => .const "Bool"
+  -- Refinement subtypes of number map to their Lean Subtype abbreviations.
+  | .refinement k => .const k.name
   | .array elem => .app "Array" [emitType elem]
   | .tuple elems =>
     match elems with
@@ -355,6 +357,58 @@ private def emitLiteralAsCtor
     if b == lit then literalCtorText b else none
   some (.ctor s!"«{matchedText}»" [])
 
+/-- Strip `paren` wrappers (bounded — the parser only ever produces a
+    finite chain). -/
+private partial def stripParen : TSType → TSType
+  | .paren inner => stripParen inner
+  | other => other
+
+/-- Refinement names introduced by `@thales/prelude`. These are recognized
+    bare so an imported `const b: Byte = …` resolves to `.refinement .byte`
+    even though the prelude bindings aren't in the local `aliasEnv` (the
+    emit only sees `typeAliasDecl` for in-file aliases). -/
+private def preludeRefinementName? : String → Option RefinementKind
+  | "Integer" => some .integer
+  | "Natural" => some .natural
+  | "Byte" => some .byte
+  | "Bit" => some .bit
+  | _ => none
+
+/-- Resolve a target type to a refinement kind, following one level of
+    type-alias indirection through `aliasEnv`. Used to detect refinement
+    targets like `Byte` (a TS alias tagged `.refinement` by the type-checker
+    via the prelude shim). -/
+private partial def resolveRefinementTarget
+    (aliasEnv : Std.HashMap String TSType) : TSType → Option RefinementKind
+  | .refinement k => some k
+  | .paren inner => resolveRefinementTarget aliasEnv inner
+  | .ref name [] =>
+      match preludeRefinementName? name with
+      | some k => some k
+      | none =>
+          match aliasEnv[name]? with
+          | some inner => resolveRefinementTarget aliasEnv (stripParen inner)
+          | none => none
+  | _ => none
+
+/-- If the target type resolves to a refinement and the expression is a
+    numeric literal in range, emit `⟨lit, by native_decide⟩`. Otherwise
+    return `none` and let the caller fall through to the normal expression
+    path. The compile-time literal-range check is enforced by Parcel 3
+    (TH0080); here we just emit the constructor wrapper. -/
+private def emitRefinementLiteral
+    (aliasEnv : Std.HashMap String TSType) (targetTy : Option TSType)
+    (expr : Expression) : Option LExpr := do
+  let ty ← targetTy
+  let _ ← resolveRefinementTarget aliasEnv ty
+  -- Recognize a numeric literal (or its negation).
+  let litExpr : Option LExpr := match expr with
+    | .literal _ (.number n) _ => some (.float n)
+    | .unaryExpr _ .neg _ (.literal _ (.number n) _) => some (.float (-n))
+    | _ => none
+  let v ← litExpr
+  some (.anonCtor [v] "by native_decide")
+
 /-- Wrap a return expression in `.some` when the expected return type is `Option T`.
     If the expression is already `.none` (null literal), leave it as-is.
     If the expression is a value, wrap in `.some`. -/
@@ -520,25 +574,36 @@ partial def emitExpr : Expression → LExpr
   -- Everything else
   | _ => .var "(unsupported expr)"
 
-/-- Emit a list of variable declarators as nested `let` bindings. -/
-partial def emitVarDecl (decls : List VariableDeclarator) (body : LExpr) : LExpr :=
+/-- Emit a list of variable declarators as nested `let` bindings.
+    `aliasEnv` is consulted so that initializers whose target type resolves
+    to a refinement (e.g. `Byte`, `Natural`) get wrapped in a Subtype
+    constructor (`⟨lit, by native_decide⟩`). -/
+partial def emitVarDecl (aliasEnv : Std.HashMap String TSType)
+    (decls : List VariableDeclarator) (body : LExpr) : LExpr :=
   match decls with
   | [] => body
   | d :: rest =>
       match d with
       | .mk _ (.identifier id) init typeAnnotation =>
           let ty := typeAnnotation.map emitType
+          let targetTy : Option TSType := typeAnnotation
           let initExpr := match init with
-            | some e => emitExpr e
+            | some e =>
+                ((emitRefinementLiteral aliasEnv targetTy e)
+                  <|> (emitLiteralAsCtor aliasEnv targetTy e))
+                  |>.getD (emitExpr e)
             | none   => .var "()"
-          .letE id.name ty initExpr (emitVarDecl rest body)
-      | _ => emitVarDecl rest body  -- destructuring patterns skipped for v1
+          .letE id.name ty initExpr (emitVarDecl aliasEnv rest body)
+      | _ => emitVarDecl aliasEnv rest body  -- destructuring patterns skipped for v1
 
 /-- Emit a list of statements as a Lean expression. Handles var decls, `if`,
     block, expression, `return`, and `switch` on discriminated unions. -/
 partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
   | .returnStmt _ (some e) :: _ =>
-      let emitted := emitLiteralAsCtor env.aliasEnv env.retTy e |>.getD (emitExpr e)
+      let emitted :=
+        ((emitRefinementLiteral env.aliasEnv env.retTy e)
+          <|> (emitLiteralAsCtor env.aliasEnv env.retTy e))
+          |>.getD (emitExpr e)
       let inner := wrapReturn env.retTy emitted
       if env.throwTypes.isEmpty then inner else .ctor "ok" [inner]
   | .returnStmt _ none :: _     => .var "()"
@@ -566,10 +631,10 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
                     | _ => .ctor "error" [.var errVar]
                 let errArm : LPattern × LExpr := (.ctor "error" [.var errVar], errExpr)
                 .match_ callLExpr [okArm, errArm]
-            | none => emitVarDecl decls (emitBodyEnv env rest)
-        | _ => emitVarDecl decls (emitBodyEnv env rest)
+            | none => emitVarDecl env.aliasEnv decls (emitBodyEnv env rest)
+        | _ => emitVarDecl env.aliasEnv decls (emitBodyEnv env rest)
       else
-        emitVarDecl decls (emitBodyEnv env rest)
+        emitVarDecl env.aliasEnv decls (emitBodyEnv env rest)
   -- `if (x === null) thn else rest` with `x : Option T` becomes a match.
   | .ifStmt _ cond thn elsOpt :: rest =>
       match nullCheckVar cond with
@@ -865,7 +930,8 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
             -- Non-arrow const requires a type annotation; without it the Lean type is unknown.
             optToList (typeAnn.map fun ann =>
               let initExpr :=
-                emitLiteralAsCtor resolvedAliases (some ann.type) other
+                (emitRefinementLiteral resolvedAliases (some ann.type) other)
+                  <|> (emitLiteralAsCtor resolvedAliases (some ann.type) other)
                   |>.getD (emitExpr other)
               .def_ name [] [] (emitType ann.type) initExpr)
     -- Top-level `console.log(arg)` → `#eval consoleLog arg`. When `arg` is a
