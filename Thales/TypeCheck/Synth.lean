@@ -190,7 +190,10 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
   let mk ty children := { expr := .js expr, type := ty, children := children : TypedExpression }
   match expr with
   -- Literals
-  | .literal _ (.number _) _ => return mk .number #[]
+  -- We keep numeric literals as `.numberLit n` (rather than widening to `.number`)
+  -- so that the assignability checker can detect out-of-range literals being
+  -- assigned to refinement-typed slots and emit TH0080 instead of TS2322.
+  | .literal _ (.number n) _ => return mk (.numberLit n) #[]
   | .literal _ (.string s) _ => return mk (.stringLit s) #[]
   | .literal _ (.boolean b) _ => return mk (.booleanLit b) #[]
   | .literal _ .null _ => return mk .null_ #[]
