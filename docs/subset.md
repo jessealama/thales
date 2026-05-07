@@ -996,6 +996,15 @@ function sumAll(arr: number[]): number {
 }
 ```
 
-### P3 — `forEach` (planned)
+### P3 — `forEach` callback indexing (deferred to v0.7)
 
-`Array.prototype.forEach` with a typed callback is planned for a future release. The callback receives a value of type `T` (not `T | undefined`) because the runtime guarantees index validity. This pattern is parked pending broader Array method support.
+The full P3 pattern lifts `arr[i]` to `T` (not `T | undefined`) inside `arr.forEach((value, i) => ...)`, because the iteration framework guarantees `i < arr.size`. **Full P3 is deferred to v0.7.**
+
+What v0.6 ships (the cheap surface piece): `Array<T>.prototype.forEach`, `map`, `filter`, and `reduce` are surfaced as built-in methods whose callback's `index` parameter (position 1) is typed as `Natural` rather than `number`. This lays the surface so that v0.7 can:
+
+1. Type-check arrow function bodies (`Thales.TypeCheck.Synth.synthJSExpr` currently treats `.arrowFunctionExpr` as `any`),
+2. Thread a per-callback "index `i` is bounded by source array length" fact through `Thales.TypeCheck.IndexBounds`,
+3. Lower `arr.forEach(callback)` to a Lean fold/iteration that supplies the proof witness, and
+4. Discharge `arr[i]` inside the callback via that witness in `Thales.Emit.Lean`.
+
+What v0.6 does **not** ship: the per-array bound threading, the arrow-body type-check, and the emit lowering. The fixture `examples/future/indexing-foreach.ts` is parked (lives under `examples/future/`, not in the harness corpus) until v0.7 lands all four pieces.

@@ -87,6 +87,19 @@ def builtinBindings : List (String × TSType) :=
     ("Infinity", .number)
   ]
 
+/-- The element type of an array-like type. `.array T` returns `T`;
+    tuples return the union of their element types; `.ref "Array" [T]`
+    returns `T`; everything else returns `.any` (only used as a fallback
+    for property lookup, which won't see those cases). -/
+private def arrayElementType (ty : TSType) : TSType :=
+  match ty with
+  | .array elem => elem
+  | .ref "Array" [elem] => elem
+  | .tuple [] => .any
+  | .tuple [single] => single
+  | .tuple es => .union es
+  | _ => .any
+
 /-- Look up a property on a built-in primitive type -/
 def builtinProperty (ty : TSType) (name : String) : Option TSType :=
   match ty with
@@ -94,8 +107,8 @@ def builtinProperty (ty : TSType) (name : String) : Option TSType :=
   | .number | .numberLit _ => numberProperty name
   | .boolean | .booleanLit _ => booleanProperty name
   | .refinement _ => numberProperty name
-  | .array _ | .ref "Array" _ => arrayProperty name
-  | .tuple _ => arrayProperty name
+  | .array _ | .ref "Array" _ => arrayProperty (arrayElementType ty) name
+  | .tuple _ => arrayProperty (arrayElementType ty) name
   | _ => none
 where
   stringProperty (name : String) : Option TSType :=
@@ -143,12 +156,52 @@ where
     | "toString" => some (fnType [] .string)
     | "valueOf" => some (fnType [] .boolean)
     | _ => none
-  arrayProperty (name : String) : Option TSType :=
+  arrayProperty (elem : TSType) (name : String) : Option TSType :=
     match name with
     -- `Array<T>.length` and tuple `length` are non-negative; we expose them
     -- as `Natural` so `i < xs.length` participates in the bounds analyzer
     -- (see Tasks 3.6 and 3.10).
     | "length" => some (.refinement .natural)
+    -- v0.6 forEach/map/filter/reduce surface signatures. The callback's
+    -- index parameter (`i`) is exposed as `Natural` so that future P3
+    -- per-array-bound threading can lift `xs[i]` from `T | undefined`
+    -- to `T` (deferred to v0.7 — see docs/subset.md "P3 deferral").
+    -- The element parameter is the array's element type.
+    | "forEach" =>
+      some (fnType
+        [("callback", .function
+          [.mk "value" elem false false,
+           .mk "index" (.refinement .natural) false false]
+          .void_)]
+        .void_)
+    | "map" =>
+      -- The TS-side return type is `Array<U>` where U is inferred from
+      -- the callback's return; v0.6 does not perform that inference, so
+      -- we use `Array<any>` as a conservative placeholder. Callers using
+      -- `.map` will still type-check without P3 lift.
+      some (fnType
+        [("callback", .function
+          [.mk "value" elem false false,
+           .mk "index" (.refinement .natural) false false]
+          .any)]
+        (.array .any))
+    | "filter" =>
+      some (fnType
+        [("predicate", .function
+          [.mk "value" elem false false,
+           .mk "index" (.refinement .natural) false false]
+          .boolean)]
+        (.array elem))
+    | "reduce" =>
+      -- Like `map`, accumulator type stays `any` until v0.7's inference.
+      some (fnType
+        [("callback", .function
+          [.mk "acc" .any false false,
+           .mk "value" elem false false,
+           .mk "index" (.refinement .natural) false false]
+          .any),
+         ("init", .any)]
+        .any)
     | _ => none
 
 /-- Create the initial type context with built-in bindings -/
