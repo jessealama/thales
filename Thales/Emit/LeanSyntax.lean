@@ -13,6 +13,10 @@ inductive LType where
   | arrow (from_ : LType) (to_ : LType)        -- α → β
   | prod (left : LType) (right : LType)        -- α × β
   | sum (left : LType) (right : LType)         -- α ⊕ β (right-associative for union chains)
+  -- A placeholder that renders to nothing and tells the printer to omit
+  -- the `: T` annotation entirely. Used at top-level `def` sites where the
+  -- type is fully inferable from the body (e.g. `const bit = asBit(1)`).
+  | inferred
   deriving Inhabited
 
 /-- Lean pattern (for match arms). -/
@@ -129,6 +133,7 @@ mutual
     | .arrow f t => s!"({renderType f} → {renderType t})"
     | .prod l r  => s!"({renderType l} × {renderType r})"
     | .sum l r   => s!"{renderTypeAtom l} ⊕ {renderType r}"
+    | .inferred  => "_"
 
   partial def renderTypeAtom : LType → String
     | .var n   => n
@@ -227,7 +232,10 @@ partial def renderDecl : LDecl → String
       let paramsLine :=
         if paramsS.isEmpty then "" else " " ++ String.intercalate " " paramsS
       let keyword := if isPartial then "partial def" else "def"
-      s!"{keyword} {name}{tpsS}{paramsLine} : {renderType retTy} :=\n{indent (renderExpr body)}"
+      let retAnnot := match retTy with
+        | .inferred => ""
+        | other => s!" : {renderType other}"
+      s!"{keyword} {name}{tpsS}{paramsLine}{retAnnot} :=\n{indent (renderExpr body)}"
   | .struct name tps fields =>
       let tpsS       := renderTypeParams tps
       let fieldLines := fields.map fun (n, t) => s!"{n} : {renderType t}"
