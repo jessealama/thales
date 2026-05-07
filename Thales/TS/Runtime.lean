@@ -21,6 +21,21 @@ def Float.isInteger (x : Float) : Bool :=
 def Float.isSafeInteger (x : Float) : Bool :=
   x.isFinite && x == x.floor && x.abs ≤ Float.maxSafeInteger
 
+/-- Predicate guard for `Integer`. Same as `Float.isSafeInteger`. -/
+def isInteger (x : Float) : Bool := Float.isSafeInteger x
+
+/-- Predicate guard for `Natural`. Nested: `isInteger ∧ x ≥ 0`. -/
+def isNatural (x : Float) : Bool := isInteger x && x ≥ 0.0
+
+/-- Predicate guard for `Byte`. Nested: `isNatural ∧ x ≤ 255`. -/
+def isByte (x : Float) : Bool := isNatural x && x ≤ 255.0
+
+/-- Predicate guard for `Bit`. Nested: `isByte ∧ (x = 0 ∨ x = 1)`.
+    The `isByte` conjunct is logically redundant on inputs satisfying
+    the disjunction (both 0 and 1 are bytes), but the nesting makes
+    the coercion `Bit → Byte` provable as a one-line lemma. -/
+def isBit (x : Float) : Bool := isByte x && (x == 0.0 || x == 1.0)
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
