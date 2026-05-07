@@ -551,6 +551,28 @@ private partial def collectCondBounds (env : EmitEnv) :
       | some bf => [bf]
       | none => []
 
+/-- Detect the prelude refinement-narrowing predicates `isInteger(x)`,
+    `isNatural(x)`, `isByte(x)`, `isBit(x)`, and `Number.isSafeInteger(x)`
+    (the latter is treated as `isInteger`). Returns the var name being
+    narrowed and the kind it gets refined to. -/
+private def detectRefinementPredicate : Expression → Option (String × RefinementKind)
+  | .callExpr _ (.identifier _ "isInteger") [.identifier _ v] _ => some (v, .integer)
+  | .callExpr _ (.identifier _ "isNatural") [.identifier _ v] _ => some (v, .natural)
+  | .callExpr _ (.identifier _ "isByte") [.identifier _ v] _ => some (v, .byte)
+  | .callExpr _ (.identifier _ "isBit") [.identifier _ v] _ => some (v, .bit)
+  | .callExpr _ (.memberExpr _ (.identifier _ "Number") (.identifier _ "isSafeInteger") false _)
+              [.identifier _ v] _ =>
+      some (v, .integer)
+  | _ => none
+
+/-- Map a refinement kind to the runtime predicate name (used by both the
+    refinement Subtype's witness type and the dite condition). -/
+private def refinementKindPredicate : RefinementKind → String
+  | .integer => "isInteger"
+  | .natural => "isNatural"
+  | .byte => "isByte"
+  | .bit => "isBit"
+
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
@@ -843,7 +865,30 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
         emitVarDecl env decls (fun env' => emitBodyEnv env' rest)
   -- `if (x === null) thn else rest` with `x : Option T` becomes a match.
   | .ifStmt _ cond thn elsOpt :: rest =>
-      -- First try the bounds-fact dite rewrite. The cond is checked for an
+      -- Refinement-narrowing predicate: `if (isInteger(x)) { … }` becomes
+      -- `if h : isInteger x = true then let x : Integer := ⟨x, h⟩ in … else …`.
+      -- The shadow-let makes `x` flow at the refined type inside the body.
+      let predOpt := detectRefinementPredicate cond
+      match predOpt with
+      | some (varName, kind) =>
+          let hName := s!"h{env.diteBinderCounter}"
+          let predName := refinementKindPredicate kind
+          let condExpr : LExpr :=
+            .binOp "=" (.app (.var predName) [.var varName]) (.bool true)
+          let env' : EmitEnv :=
+            { env with
+                bindingEnv := env.bindingEnv.insert varName (.refinement kind),
+                diteBinderCounter := env.diteBinderCounter + 1 }
+          let inner := emitBodyEnv env' (thn :: rest)
+          let shadowed : LExpr :=
+            .letE varName (some (.const kind.name))
+              (.anonCtor [.var varName] hName) inner
+          let elsExpr := match elsOpt with
+            | some els => emitBodyEnv env (els :: rest)
+            | none => emitBodyEnv env rest
+          .dite_ hName condExpr shadowed elsExpr
+      | none =>
+      -- Otherwise try the bounds-fact dite rewrite. The cond is checked for an
       -- in-bounds shape (`i < xs.length`, `xs.length > i`, or `xs.length > 0`);
       -- when present, emit `if h : <Nat-cond> then ... else ...` and stash
       -- the proof in `env.boundsProofs` so Task 5.5's P2 indexing can use it.
