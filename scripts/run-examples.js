@@ -408,7 +408,10 @@ function preflight() {
 function runTsc(inputPath) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'thales-tsc-'));
   try {
-    const baseRaw = fs.readFileSync(path.join(repoRoot, 'tsconfig.json'), 'utf8');
+    const baseRaw = fs.readFileSync(
+      path.join(repoRoot, 'tsconfig.json'),
+      'utf8',
+    );
     const base = JSON.parse(baseRaw);
     // Override baseUrl to point at the repo root (tsconfig.json's compilerOptions
     // may have a relative "." which is fine when tsconfig lives at the root, but
@@ -420,7 +423,12 @@ function runTsc(inputPath) {
     const tempConfig = { compilerOptions, files: [inputPath] };
     const tempCfgPath = path.join(tmp, 'tsconfig.json');
     fs.writeFileSync(tempCfgPath, JSON.stringify(tempConfig));
-    const r = runCapture('npx', ['--no-install', 'tsc', '--project', tempCfgPath]);
+    const r = runCapture('npx', [
+      '--no-install',
+      'tsc',
+      '--project',
+      tempCfgPath,
+    ]);
     return { ...r, diags: parseDiagnostics(r.stdout) };
   } finally {
     try {
