@@ -54,6 +54,7 @@ def builtinBindings : List (String × TSType) :=
     ("Number", .object [
       .property "isNaN" (fnType [("n", .any)] .boolean) false false,
       .property "isFinite" (fnType [("n", .any)] .boolean) false false,
+      .property "isSafeInteger" (fnType [("n", .any)] .boolean) false false,
       .property "parseInt" (fnType [("s", .string)] .number) false false,
       .property "parseFloat" (fnType [("s", .string)] .number) false false
     ]),
