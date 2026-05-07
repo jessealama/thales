@@ -74,7 +74,8 @@ private partial def lookupProperty (objType : TSType) (propName : String) (depth
       lookupProperty resolved propName (depth + 1)
     else
       return none
-  | .string | .stringLit _ | .number | .numberLit _ | .boolean | .booleanLit _ =>
+  | .string | .stringLit _ | .number | .numberLit _ | .boolean | .booleanLit _
+  | .refinement _ | .array _ | .tuple _ =>
     return builtinProperty objType propName
   | _ => return none
 

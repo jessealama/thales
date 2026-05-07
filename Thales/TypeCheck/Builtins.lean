@@ -93,11 +93,16 @@ def builtinProperty (ty : TSType) (name : String) : Option TSType :=
   | .string | .stringLit _ => stringProperty name
   | .number | .numberLit _ => numberProperty name
   | .boolean | .booleanLit _ => booleanProperty name
+  | .refinement _ => numberProperty name
+  | .array _ | .ref "Array" _ => arrayProperty name
+  | .tuple _ => arrayProperty name
   | _ => none
 where
   stringProperty (name : String) : Option TSType :=
     match name with
-    | "length" => some .number
+    -- `string.length` is non-negative (and at most 2^53-1 on JS strings),
+    -- so we expose it as `Natural` to enable bounds-aware indexing.
+    | "length" => some (.refinement .natural)
     | "charAt" => some (fnType [("pos", .number)] .string)
     | "charCodeAt" => some (fnType [("index", .number)] .number)
     | "indexOf" => some (fnType [("searchString", .string)] .number)
@@ -137,6 +142,13 @@ where
     match name with
     | "toString" => some (fnType [] .string)
     | "valueOf" => some (fnType [] .boolean)
+    | _ => none
+  arrayProperty (name : String) : Option TSType :=
+    match name with
+    -- `Array<T>.length` and tuple `length` are non-negative; we expose them
+    -- as `Natural` so `i < xs.length` participates in the bounds analyzer
+    -- (see Tasks 3.6 and 3.10).
+    | "length" => some (.refinement .natural)
     | _ => none
 
 /-- Create the initial type context with built-in bindings -/
