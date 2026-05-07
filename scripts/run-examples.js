@@ -451,6 +451,32 @@ function runTsx(inputPath) {
 }
 
 /**
+ * Check an emitted Lean file for `sorry` or `sorryAx`. Returns a TH9004
+ * diagnostic string if found, else null.
+ *
+ * This check catches emit-pipeline regressions where a soundness bug causes
+ * the emitter to produce `sorry`-bearing proof terms. TH9004 is not a user
+ * error; it signals a Thales bug. The grep is applied ONLY to files emitted
+ * by thales (not to Test/ WIP proofs or Thales/ sources).
+ */
+function checkNoSorry(leanPath) {
+  let src;
+  try {
+    src = fs.readFileSync(leanPath, 'utf8');
+  } catch {
+    return null; // file not found — emitter already reported the error
+  }
+  const sorryRe = /\bsorry(?:Ax)?\b/;
+  if (sorryRe.test(src)) {
+    return (
+      `TH9004: emitted Lean file contains 'sorry' or 'sorryAx': ${leanPath}\n` +
+      `This is a Thales emit-pipeline bug, not a user error. Please file a bug report.`
+    );
+  }
+  return null;
+}
+
+/**
  * Emit inputPath with thales --overwrite into a fresh temp dir, then run the resulting
  * .lean via lake env lean. Always cleans up the temp dir on exit.
  */
@@ -472,6 +498,16 @@ function runThcThenLean(inputPath) {
     const moduleName =
       base.charAt(0).toUpperCase() + base.slice(1).replace(/[^A-Za-z0-9]/g, '');
     const leanPath = path.join(outDir, moduleName + '.lean');
+    // TH9004: post-emit noSorry check — applied only to files emitted by thales.
+    const sorryFail = checkNoSorry(leanPath);
+    if (sorryFail) {
+      return {
+        code: 1,
+        stdout: sorryFail,
+        stderr: '',
+        stage: 'nosorry',
+      };
+    }
     const r2 = runCapture('lake', ['env', 'lean', leanPath], { cwd: repoRoot });
     return {
       code: r2.code,
