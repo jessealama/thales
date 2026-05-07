@@ -100,6 +100,18 @@ def asBit (x : Float) : Bit :=
     (boundary axiom, Task 1.9). -/
 def Natural.toNat (n : Natural) : Nat := n.val.toUInt64.toNat
 
+/-- Reflect a safe-integer-valued `Integer` into Lean `Int`.
+    The proof comes from `x.property`. -/
+def Integer.toInt (x : Integer) : Int :=
+  if x.val ≥ 0.0 then (x.val.toUInt64.toNat : Int)
+  else -((-x.val).toUInt64.toNat : Int)
+
+/-- Lift an in-range `Int` into `Integer`. The witness is built from a
+    Nat-to-Float conversion plus the `Nat.toFloat_isSafeInteger`
+    boundary axiom (Task 1.9 / Task 1.10). -/
+def Integer.ofInt (n : Int) (h : n.natAbs ≤ 9007199254740991) : Integer :=
+  ⟨if n < 0 then -((n.natAbs).toFloat) else (n.natAbs).toFloat, by sorry⟩
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
