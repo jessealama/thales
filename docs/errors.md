@@ -20,8 +20,8 @@ displayed in diagnostics for human readability.
 See `docs/superpowers/specs/2026-04-21-conformance-harness-design.md` for
 the full contract and harness details.
 
-This reference lists all 18 subset `TH####` codes plus the 4 directive
-codes (TH9000–TH9003) with minimal detail. For full explanation,
+This reference lists all 20 subset `TH####` codes plus the 5 directive
+codes (TH9000–TH9004) with minimal detail. For full explanation,
 rationale, and idiomatic replacements, see [subset.md](./subset.md).
 
 The codes are divided into categories:
@@ -33,10 +33,12 @@ The codes are divided into categories:
 - recursion
 - totality
 - exceptions
+- refinement types
 
 Another category, directives, exists for meta purposes
 (doesn't correspond to a real subset of TypeScript but
-rather reflects a kind of misuse of Thales).
+rather reflects a kind of misuse of Thales or an emit-pipeline
+soundness check).
 
 ## Summary
 
@@ -66,10 +68,13 @@ rather reflects a kind of misuse of Thales).
 | TH0061 | Exceptions   | Unused `@throws` annotation                        |
 | TH0063 | Exceptions   | Thrown value must be a record type                 |
 | TH0064 | Exceptions   | Undeclared propagation                             |
+| TH0080 | Refinement   | Literal value out of range for refinement type     |
+| TH0081 | Refinement   | Value not assignable to refinement without evidence|
 | TH9000 | Directive    | Unused `@thales-expect-error` directive            |
 | TH9001 | Directive    | Directive code mismatch                            |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed          |
 | TH9003 | Directive    | Malformed `@thales-expect-error` directive         |
+| TH9004 | Directive    | Emitted Lean code contains `sorry`                 |
 
 ## Future of this table
 
@@ -519,3 +524,78 @@ Example (rejected):
 // @thales-expect-erorr TH0001   — typo, won't suppress
 const x = 0;
 ```
+
+---
+
+### TH9004 — Emitted Lean code contains `sorry`
+
+**Message:** (surfaced by the conformance harness, not by `thales` itself)
+
+Emitted by the conformance harness when it detects `sorry` or `sorryAx`
+in a `.lean` file that `thales` emitted. This indicates an emit-pipeline
+soundness regression, not a user error. Do not work around by adding
+`-- sorry` suppressions; file a bug against Thales.
+
+This check applies only to `.lean` files that `thales` emits (not to
+`Test/` WIP proofs or the runtime library).
+
+---
+
+## Refinement types
+
+The four prelude refinement types (`Integer`, `Natural`, `Byte`, `Bit`)
+are supported since v0.6. These codes enforce the refinement contract at
+compile time.
+
+### TH0080 — Literal value out of range for refinement type
+
+**Message:** `Literal <N> out of range for <Type> (must be in [<lo>, <hi>])`
+
+Emitted when a numeric literal is assigned to a refinement-typed slot and
+the literal falls outside the type's range. `tsc` does not produce this
+diagnostic (it sees the refinement types as plain `number`).
+
+Range summary:
+
+| Type    | Valid range                         |
+| ------- | ----------------------------------- |
+| Integer | −9007199254740991 to 9007199254740991 (±2^53 − 1) |
+| Natural | 0 to 9007199254740991               |
+| Byte    | 0 to 255                            |
+| Bit     | 0 or 1                              |
+
+Example (rejected):
+
+```typescript
+import { Byte } from "@thales/prelude";
+// @thales-expect-error TH0080
+const b: Byte = 256; // 256 > 255
+```
+
+Fix: use an in-range literal, or use the `as<T>(...)` constructor for
+dynamic conversion (which throws `RangeError` at runtime if out of range).
+
+---
+
+### TH0081 — Value not assignable to refinement type without evidence
+
+**Message:** `Value '<name>' of type 'number' is not assignable to '<Type>' without narrowing or constructor evidence`
+
+Emitted when a `number`-typed expression is assigned to a refinement-typed
+slot without any narrowing guard or constructor call to establish
+membership evidence. `tsc` does not produce this diagnostic.
+
+Example (rejected):
+
+```typescript
+import { Integer } from "@thales/prelude";
+function wrap(n: number): Integer {
+  // @thales-expect-error TH0081
+  return n; // no evidence that n is a safe integer
+}
+```
+
+Fix: narrow with a predicate guard (`if (isInteger(n)) { ... }`) or use
+the throwing constructor (`asInteger(n)`) which validates at runtime.
+
+[Details in subset.md](./subset.md#prelude-refinement-types)
