@@ -22,6 +22,7 @@ partial def formatType : TSType → String
   | .any => "any"
   | .never => "never"
   | .unknown => "unknown"
+  | .refinement k => k.name
   | .numberLit n => toString n
   | .stringLit s => s!"\"{s}\""
   | .booleanLit true => "true"
