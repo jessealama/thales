@@ -155,6 +155,40 @@ axiom Float.ofInt_le (m n : Int) (hm : m.natAbs ≤ 9007199254740991)
     (hn : n.natAbs ≤ 9007199254740991) :
   (Integer.ofInt m hm).val ≤ (Integer.ofInt n hn).val ↔ m ≤ n
 
+/-! ## Reflection theorems
+
+Round-trip identity for `toInt`/`ofInt`, plus add/sub/mul
+homomorphisms. These are the user-facing reflection lemmas that
+Thales-emitted Lean code uses to reason about safe-integer
+arithmetic. Per the spec V2 §9, the boundary-axiom set is
+permitted to expand when proofs from existing axioms are not
+constructible in the pinned toolchain. The four statements below
+are postulated as axioms because reasoning about
+`Float.toUInt64.toNat` round-trips and IEEE 754 add/sub/mul
+exactness on safe-integer inputs requires Float-Int internals
+that Lean's stdlib does not expose. They are reasoned from
+IEEE 754 first principles, same justification as the axioms
+above. -/
+
+axiom Integer.toInt_ofInt (n : Int) (h : n.natAbs ≤ 9007199254740991) :
+  (Integer.ofInt n h).toInt = n
+
+axiom Integer.add_homomorphism
+    (x y : Integer)
+    (hsum : isInteger (x.val + y.val) = true) :
+  Integer.toInt ⟨x.val + y.val, hsum⟩ = x.toInt + y.toInt
+
+axiom Integer.sub_homomorphism
+    (x y : Integer)
+    (hdiff : isInteger (x.val - y.val) = true) :
+  Integer.toInt ⟨x.val - y.val, hdiff⟩ = x.toInt - y.toInt
+
+axiom Integer.mul_homomorphism
+    (x y : Integer)
+    (hprod : isInteger (x.val * y.val) = true) :
+  Integer.toInt ⟨x.val * y.val, hprod⟩ = x.toInt * y.toInt
+
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
