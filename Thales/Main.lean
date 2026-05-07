@@ -205,14 +205,22 @@ def main (args : List String) : IO UInt32 := do
             let leanSrc := Thales.Emit.emit tsProg moduleName
             checkTotality leanSrc totalEntries lakeRoot
 
-      let allRawTh := propDiags ++ throwsListDiags ++ totalDiags ++ rawSubsetDiags ++ rawTotalityDiags
+      -- TH0080 (literal out of range) and TH0081 (needs evidence) are emitted
+      -- by the type-checker rather than the subset-checker, because they arise
+      -- during assignability checks in Check.lean. We separate them from the
+      -- pure TS diagnostics and route them through DirectiveApply so that
+      -- `@thales-expect-error TH0080` / `TH0081` directives can suppress them.
+      let tsOnlyDiags := tsDiags.filter fun d => match d.kind with | .thales _ => false | _ => true
+      let tcThDiags   := tsDiags.filter fun d => match d.kind with | .thales _ => true  | _ => false
+
+      let allRawTh := propDiags ++ throwsListDiags ++ totalDiags ++ rawSubsetDiags ++ rawTotalityDiags ++ tcThDiags
 
       let thDiags : Array Diagnostic :=
         if cli.ignoreExpectError
         then allRawTh
         else DirectiveApply.apply allRawTh tsProg.expectErrorDirectives
 
-      let allDiags : Array Diagnostic := tsDiags ++ thDiags
+      let allDiags : Array Diagnostic := tsOnlyDiags ++ thDiags
       let sorted := allDiags.qsort fun a b =>
         match a.location, b.location with
         | some la, some lb =>
