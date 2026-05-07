@@ -19,6 +19,9 @@ structure EmitEnv where
   retTy         : Option TSType := none
   throwTypes    : List String := []
   funcThrowsEnv : Std.HashMap String (List String) := {}
+  -- Counter used to generate unique dite-binder names. Bumped each time
+  -- a fresh `h_i` is introduced (e.g. for `is<T>`-narrowing shadow-lets).
+  diteBinderCounter : Nat := 0
 
 /-- Resolve a TSType through one level of type-alias references. -/
 private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
@@ -410,14 +413,15 @@ private def emitRefinementLiteral
   some (.anonCtor [v] "by native_decide")
 
 /-- Wrap a return expression in `.some` when the expected return type is `Option T`.
-    If the expression is already `.none` (null literal), leave it as-is.
-    If the expression is a value, wrap in `.some`. -/
+    If the expression is already `.none` (null literal) or refers to the bare
+    `undefined` identifier, leave it as `.none`. Otherwise wrap in `.some`. -/
 private def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
   match retTy with
   | some (.option _) =>
     match e with
-    | .ctor "none" [] => e  -- null → keep as .none
-    | other => .ctor "some" [other]  -- value → wrap in .some
+    | .ctor "none" [] => e
+    | .var "undefined" => .ctor "none" []
+    | other => .ctor "some" [other]
   | _ => e
 
 /-- Right-associative `LType.sum` chain over the throws list:
