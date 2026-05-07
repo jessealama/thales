@@ -63,6 +63,11 @@ theorem isInteger_of_isNatural {x : Float} (h : isNatural x = true) : isInteger 
   unfold isNatural at h
   exact (Bool.and_eq_true _ _).mp h |>.1
 
+instance : Coe Bit Byte := ⟨fun b => ⟨b.val, isByte_of_isBit b.property⟩⟩
+instance : Coe Byte Natural := ⟨fun b => ⟨b.val, isNatural_of_isByte b.property⟩⟩
+instance : Coe Natural Integer := ⟨fun n => ⟨n.val, isInteger_of_isNatural n.property⟩⟩
+instance : Coe Integer Float := ⟨Subtype.val⟩
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
