@@ -317,7 +317,21 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
           | _ =>
             let argTyped ← synthJSExpr args[i]!
             argChildren := argChildren.push argTyped
-      return mk retTy (#[calleeTyped] ++ argChildren)
+      -- Refinement-aware overloads: a small fixed table of stdlib calls whose
+      -- return type narrows when the argument is a refinement subtype.
+      -- Currently: `Math.abs(x)` returns `Natural` when `x : Integer` (and
+      -- therefore also when `x : Natural | Byte | Bit` by lattice widening),
+      -- and `number` otherwise.
+      let refinedRetTy : TSType ← (do
+        match callee, argChildren.toList with
+        | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _,
+          firstArg :: _ =>
+          let resolvedArgTy ← resolveTypeGeneric firstArg.type
+          match resolvedArgTy with
+          | .refinement _ => return (.refinement .natural : TSType)
+          | _ => return retTy
+        | _, _ => return retTy)
+      return mk refinedRetTy (#[calleeTyped] ++ argChildren)
     | .any => return mk .any #[calleeTyped]
     | _ =>
       emitDiagnostic (.notCallable resolved) base.loc
