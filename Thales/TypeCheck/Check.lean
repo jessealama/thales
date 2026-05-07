@@ -244,7 +244,8 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
         -- Both annotation and initializer: check initializer against annotation
         let annTy := ann.type
         let initTyped ← synthExpr (.js initExpr)
-        checkAssignable initTyped.type annTy (exprLoc initExpr)
+        let srcName := tsExprSourceName (.js initExpr)
+        checkAssignable initTyped.type annTy (exprLoc initExpr) srcName
         pure annTy
       | some ann, none =>
         -- Annotation only
@@ -374,7 +375,7 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     match ctx.returnType, arg with
     | some expected, some expr =>
       let actualTyped ← synthJSExpr expr
-      checkAssignable actualTyped.type expected (exprLoc expr)
+      checkAssignable actualTyped.type expected (exprLoc expr) (exprSourceName expr)
     | some expected, none =>
       -- Return without value in a function that expects a return type
       match expected with
@@ -462,7 +463,7 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
         | some annTy, some expr =>
           -- Both annotation and initializer: check init against annotation
           let initTyped ← synthJSExpr expr
-          checkAssignable initTyped.type annTy (exprLoc expr)
+          checkAssignable initTyped.type annTy (exprLoc expr) (exprSourceName expr)
           markAssigned id.name
         | _annTy, none =>
           -- No initializer: track for definite assignment if let/const

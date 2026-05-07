@@ -95,6 +95,24 @@ private def tsExprLoc : TSExpression → Option SourceLocation
   | .satisfiesExpr inner _ => tsExprLoc inner
   | .nonNullAssert inner => tsExprLoc inner
 
+/-- Best-effort extraction of a "source name" for a JS expression, used in
+    TH0081 diagnostics (`Value '<name>' of type 'number' is not assignable…`).
+    Returns the identifier name for a bare identifier, the dotted path for a
+    member access, and the empty string otherwise. -/
+partial def exprSourceName : Expression → String
+  | .identifier _ name => name
+  | .memberExpr _ obj (.identifier _ propName) false _ =>
+    let parent := exprSourceName obj
+    if parent.isEmpty then propName else s!"{parent}.{propName}"
+  | _ => ""
+
+/-- Best-effort source-name for a TS expression. -/
+partial def tsExprSourceName : TSExpression → String
+  | .js e => exprSourceName e
+  | .asExpr inner _ => tsExprSourceName inner
+  | .satisfiesExpr inner _ => tsExprSourceName inner
+  | .nonNullAssert inner => tsExprSourceName inner
+
 /-- Check if a type contains any typeVar -/
 private partial def containsTypeVar : TSType → Bool
   | .typeVar .. => true
@@ -255,6 +273,24 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
         emitDiagnostic (.argumentCountMismatch requiredCount args.length) base.loc
       else if !hasRest && args.length > params.length then
         emitDiagnostic (.argumentCountMismatch params.length args.length) base.loc
+      -- Helper: emit the right diagnostic when an argument's type is not
+      -- assignable to its parameter. Refinement targets get TH0080/TH0081
+      -- instead of TS2345 so users get a precise out-of-range / needs-evidence
+      -- message; everything else falls back to argumentTypeMismatch.
+      let emitArgMismatch (argIdx : Nat) (srcTy tgtTy : TSType)
+          (argExpr : Expression) : TypeCheckM Unit := do
+        let resolvedTgt ← resolveTypeGeneric tgtTy
+        let resolvedSrc ← resolveTypeGeneric srcTy
+        match resolvedSrc, resolvedTgt with
+        | .numberLit n, .refinement k =>
+          let (lo, hi) := k.bounds
+          emitDiagnostic (.thales (.literalOutOfRange n k.name lo hi)) (exprLoc argExpr)
+        | .number, .refinement k =>
+          let nm := exprSourceName argExpr
+          let nameForMsg := if nm.isEmpty then "<expr>" else nm
+          emitDiagnostic (.thales (.refinementNeedsEvidence nameForMsg k.name)) (exprLoc argExpr)
+        | _, _ =>
+          emitDiagnostic (.argumentTypeMismatch argIdx srcTy tgtTy) (exprLoc argExpr)
       let mut argChildren : Array TypedExpression := #[]
       for i in [:args.length] do
         if i < params.length then
@@ -268,7 +304,7 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
           argChildren := argChildren.push argTyped
           let ok ← isSubtype argTyped.type checkTy
           if !ok then
-            emitDiagnostic (.argumentTypeMismatch i argTyped.type checkTy) (exprLoc args[i]!)
+            emitArgMismatch i argTyped.type checkTy args[i]!
         else
           match params.getLast? with
           | some (.mk _ paramTy _ true) =>
@@ -277,7 +313,7 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
             argChildren := argChildren.push argTyped
             let ok ← isSubtype argTyped.type checkTy
             if !ok then
-              emitDiagnostic (.argumentTypeMismatch i argTyped.type checkTy) (exprLoc args[i]!)
+              emitArgMismatch i argTyped.type checkTy args[i]!
           | _ =>
             let argTyped ← synthJSExpr args[i]!
             argChildren := argChildren.push argTyped
@@ -347,7 +383,8 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       markAssigned name
       -- Validate RHS against declared type
       match ← lookupDeclaredType name with
-      | some declaredTy => checkAssignable rightTyped.type declaredTy (exprLoc right)
+      | some declaredTy =>
+        checkAssignable rightTyped.type declaredTy (exprLoc right) (exprSourceName right)
       | none => pure ()
     | _ => pure ()
     return { expr := .js expr, type := rightTyped.type, children := #[rightTyped] }
@@ -467,7 +504,7 @@ end
 /-- Check that an expression has a type assignable to the expected type -/
 def checkExpr (expr : TSExpression) (expected : TSType) : TypeCheckM TypedExpression := do
   let typed ← synthExpr expr (some expected)
-  checkAssignable typed.type expected (tsExprLoc expr)
+  checkAssignable typed.type expected (tsExprLoc expr) (tsExprSourceName expr)
   return typed
 
 end Thales.TypeCheck
