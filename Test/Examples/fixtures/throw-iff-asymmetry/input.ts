@@ -1,12 +1,14 @@
-// Fixture: throw-iff-asymmetry
+// Fixture: throw-iff-asymmetry (post-Parcel-5)
 //
-// Demonstrates the harness detecting throw asymmetry for @thales/prelude-importing
-// programs. asInteger(3.14) throws in tsx (RangeError) but the emitted Lean
-// does not yet propagate the throw to a non-zero exit (Parcel 5 will fix this).
+// Validates the harness's relaxed throw-iff equivalence for @thales/prelude
+// programs. `asInteger(3.14)` throws RangeError in tsx; Parcel 5's
+// `asIntegerEffect` lowering makes the emitted Lean exit nonzero on the same
+// input. Both sides throw → harness classifies as pass:both-throw.
 //
-// Expected outcome until Parcel 5 ships: fail:throw-asymmetry (tsx exits 1,
-// Lean exits 0). Update to pass:both-throw once Parcel 5 emit is in place.
-import { asInteger } from '@thales/prelude';
-console.log('before');
+// Note: the directory name predates Parcel 5, when this fixture demonstrated
+// genuine asymmetry (Lean did not propagate the throw). Kept to preserve
+// fixture-name stability across the v0.6 history.
+import { asInteger } from "@thales/prelude";
+console.log("before");
 asInteger(3.14);
-console.log('after');
+console.log("after");
