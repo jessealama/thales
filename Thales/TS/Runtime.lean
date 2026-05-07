@@ -112,6 +112,33 @@ def Integer.toInt (x : Integer) : Int :=
 def Integer.ofInt (n : Int) (h : n.natAbs ≤ 9007199254740991) : Integer :=
   ⟨if n < 0 then -((n.natAbs).toFloat) else (n.natAbs).toFloat, by sorry⟩
 
+/-! ## Float↔Int boundary axioms
+
+These axioms are the irreducible Float-Int IEEE-754 boundary
+relationships that Lean's standard `Float` library does not give us.
+Three of them (`ofInt_neg`, `ofInt_lt`, `ofInt_le`) were validated
+by the `feat/thales-grind-poc` branch. The fourth
+(`toUInt64_of_isNatural`) is added for v0.6 and is the soundness
+basis for `Natural.toNat`. They are reasoned from IEEE 754 first
+principles. -/
+
+axiom Float.ofInt_neg (n : Int) (h : n.natAbs ≤ 9007199254740991) :
+  (Integer.ofInt (-n) (by simpa using h)).val = -((Integer.ofInt n h).val)
+
+axiom Float.ofInt_lt (m n : Int) (hm : m.natAbs ≤ 9007199254740991)
+    (hn : n.natAbs ≤ 9007199254740991) :
+  (Integer.ofInt m hm).val < (Integer.ofInt n hn).val ↔ m < n
+
+axiom Float.ofInt_le (m n : Int) (hm : m.natAbs ≤ 9007199254740991)
+    (hn : n.natAbs ≤ 9007199254740991) :
+  (Integer.ofInt m hm).val ≤ (Integer.ofInt n hn).val ↔ m ≤ n
+
+/-- Round-trip: a Float satisfying `isNatural` converts to UInt64 and
+    back to Float losslessly. Load-bearing for `Natural.toNat`'s
+    soundness. -/
+axiom Float.toUInt64_of_isNatural (x : Float) (h : isNatural x = true) :
+  x.toUInt64.toNat.toFloat = x
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
