@@ -337,22 +337,29 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
     -- Special-case @thales/prelude: inject the in-memory shim bindings.
     -- For all other imports, just continue (no filesystem resolution).
     if source == "@thales/prelude" then
-      -- Type aliases: Integer = Natural = Byte = Bit = number
+      -- Type aliases: Integer/Natural/Byte/Bit are refinement-tagged variants of `number`.
       let aliasOf (ty : TSType) := { typeParams := [], body := ty : TypeAliasDef }
+      let intTy : TSType := .refinement .integer
+      let natTy : TSType := .refinement .natural
+      let byteTy : TSType := .refinement .byte
+      let bitTy : TSType := .refinement .bit
       -- Value types for is-predicates: (x: number) => boolean
       let numToBoolean := TSType.function [TSParamType.mk "x" .number] .boolean
-      -- Value types for as-constructors: (x: number) => number  (alias = number in Parcel 2)
-      let numToNum := TSType.function [TSParamType.mk "x" .number] .number
+      -- Value types for as-constructors: (x: number) => <refinement>
+      let asInt := TSType.function [TSParamType.mk "x" .number] intTy
+      let asNat := TSType.function [TSParamType.mk "x" .number] natTy
+      let asByte := TSType.function [TSParamType.mk "x" .number] byteTy
+      let asBit := TSType.function [TSParamType.mk "x" .number] bitTy
       let preludeValues : List (String × TSType) := [
         ("isInteger", numToBoolean), ("isNatural", numToBoolean),
         ("isByte",    numToBoolean), ("isBit",     numToBoolean),
-        ("asInteger", numToNum),     ("asNatural",  numToNum),
-        ("asByte",    numToNum),     ("asBit",      numToNum)
+        ("asInteger", asInt),        ("asNatural",  asNat),
+        ("asByte",    asByte),       ("asBit",      asBit)
       ]
-      withTypeAlias "Integer" (aliasOf .number)
-        (withTypeAlias "Natural" (aliasOf .number)
-          (withTypeAlias "Byte" (aliasOf .number)
-            (withTypeAlias "Bit" (aliasOf .number)
+      withTypeAlias "Integer" (aliasOf intTy)
+        (withTypeAlias "Natural" (aliasOf natTy)
+          (withTypeAlias "Byte" (aliasOf byteTy)
+            (withTypeAlias "Bit" (aliasOf bitTy)
               (withScope preludeValues (checkStatements rest)))))
     else
       checkStatements rest

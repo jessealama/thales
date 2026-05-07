@@ -517,6 +517,14 @@ partial def isSubtype (a b : TSType) : TypeCheckM Bool := do
   if let .typeVar id _ _ := b then
     if id >= 9000 then return true
   match a, b with
+  -- Refinement lattice: Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number
+  -- (See `RefinementKind.le` in `TSType.lean`.)
+  | .refinement k1, .refinement k2 => return k1.le k2
+  -- Refinements widen to plain `number`.
+  | .refinement _, .number => return true
+  -- A literal numeric value is assignable to a refinement when it satisfies the
+  -- refinement's range/integrality predicate.
+  | .numberLit n, .refinement k => return k.literalInRange n
   -- Same type (identity)
   | .number, .number => return true
   | .string, .string => return true
