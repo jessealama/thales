@@ -804,19 +804,28 @@ partial def evaluateMappedType (keyVar : String) (constraint valueType : TSType)
 end
 
 /-- Check assignability and emit a diagnostic if it fails.
-    Special case: when assigning a numeric literal to a refinement-typed slot
-    that fails the lattice's range check, emit TH0080 (not TS2322) so the user
-    sees a precise out-of-range message. -/
-def checkAssignable (source target : TSType) (loc : Option SourceLocation := none) :
-    TypeCheckM Unit := do
+    Special cases:
+      - numeric literal failing the refinement range check → TH0080
+        (instead of TS2322).
+      - plain `number` source against a refinement target where the lattice
+        rejects (i.e. no narrowing or constructor evidence is in scope) →
+        TH0081. `sourceName` is folded into the message; pass `""` if the
+        source isn't a simple identifier.
+    Both checks suppress the default TS2322 emission. -/
+def checkAssignable (source target : TSType) (loc : Option SourceLocation := none)
+    (sourceName : String := "") : TypeCheckM Unit := do
   let ok ← isSubtype source target
   if !ok then
     -- Resolve target so we can detect a refinement target hidden behind an alias.
     let resolvedTarget ← resolveTypeGeneric target
-    match source, resolvedTarget with
+    let resolvedSource ← resolveTypeGeneric source
+    match resolvedSource, resolvedTarget with
     | .numberLit n, .refinement k =>
       let (lo, hi) := k.bounds
       emitDiagnostic (.thales (.literalOutOfRange n k.name lo hi)) loc
+    | .number, .refinement k =>
+      let nameForMsg := if sourceName.isEmpty then "<expr>" else sourceName
+      emitDiagnostic (.thales (.refinementNeedsEvidence nameForMsg k.name)) loc
     | _, _ =>
       emitDiagnostic (.typeNotAssignable source target) loc
 
