@@ -251,7 +251,13 @@ def jsNumberToString (x : Float) : String :=
 class JSShow (α : Type) where
   jsShow : α → String
 
-instance : JSShow Float  := ⟨jsNumberToString⟩
+instance : JSShow Float   := ⟨jsNumberToString⟩
+/-- Refinement subtypes of Float print the same as their underlying Float value.
+    JS `console.log(42)` prints `42`, so `Integer`/`Natural`/`Byte`/`Bit` do too. -/
+instance : JSShow Integer := ⟨fun x => jsNumberToString x.val⟩
+instance : JSShow Natural := ⟨fun x => jsNumberToString x.val⟩
+instance : JSShow Byte    := ⟨fun x => jsNumberToString x.val⟩
+instance : JSShow Bit     := ⟨fun x => jsNumberToString x.val⟩
 /-- TS `bigint` is emitted as Lean `Int`. JS's `console.log` on a bigint
     renders the decimal followed by an `n` suffix (e.g. `5n`, `-3n`, `0n`),
     matching `BigInt.prototype.toString` with the literal-form marker that
