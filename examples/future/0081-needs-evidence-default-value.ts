@@ -1,0 +1,13 @@
+// PARKED: TH0081 for default parameter value context not yet implemented.
+// Parcel 3 didn't add refinement checking at default-value sites.
+// When implemented, Thales should emit TH0081 for the default.
+import { Integer } from '@thales/prelude';
+
+const someNumber: number = 5;
+
+// @thales-expect-error TH0081
+function withDefault(i: Integer = someNumber): Integer {
+  return i;
+}
+
+console.log(withDefault());
