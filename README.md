@@ -86,6 +86,15 @@ lake build thales
   uncaught call into a `@throws` callee). It is mutually exclusive with
   `@throws`; failures of either kind surface as clean diagnostics
   (TH0066/TH0067/TH0070).
+- **Refinement types via `@thales/prelude` (v0.6).** `Integer`, `Natural`,
+  `Byte`, and `Bit` are branded aliases of `number` in TypeScript and
+  Lean Subtypes of `Float` in the emitted Lean. The lattice is
+  `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`. Numeric literals are
+  checked at compile time (out-of-range → TH0080); assigning a plain
+  `number` without a guard (`isInteger`, `isNatural`, …) or throwing
+  constructor (`asInteger`, `asNatural`, …) is rejected with TH0081.
+  Arithmetic operators always widen to `number`; narrow the result with
+  a guard or constructor if you need the refinement type back.
 
 ## What's in the subset
 
