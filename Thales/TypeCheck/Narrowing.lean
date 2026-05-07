@@ -169,6 +169,24 @@ partial def extractGuard : Expression → Option Guard
       | .identifier _ varName, .identifier _ className =>
         some (.instanceOf varName className)
       | _, _ => none
+    -- Bounds facts: `i < xs.length` (or its mirror `xs.length > i`).
+    -- Combined with `isNatural(i)` in a conjunction guard (Task 3.6),
+    -- this records "i is in-bounds for xs" so the index-bounds analyzer
+    -- can mark `xs[i]` as P2-provable. We also accept `<=` against
+    -- `xs.length - 1` as the same fact (handled by callers through the
+    -- conjunction form; here we keep the strict `<` patterns).
+    | .lt =>
+      match left, right with
+      | .identifier _ idxVar,
+        .memberExpr _ (.identifier _ arrName) (.identifier _ "length") false _ =>
+        some (.indexBounds idxVar arrName)
+      | _, _ => none
+    | .gt =>
+      match left, right with
+      | .memberExpr _ (.identifier _ arrName) (.identifier _ "length") false _,
+        .identifier _ idxVar =>
+        some (.indexBounds idxVar arrName)
+      | _, _ => none
     | _ => none
   | .logicalExpr _ op left right =>
     match op with
