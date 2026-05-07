@@ -20,6 +20,9 @@ structure EmitEnv where
   retTy         : Option TSType := none
   throwTypes    : List String := []
   funcThrowsEnv : Std.HashMap String (List String) := {}
+  -- Map from function name → parameter types (in order). Used at call
+  -- sites to coerce numeric literal arguments into refinement-typed slots.
+  funcParamTypes : Std.HashMap String (List TSType) := {}
   -- Bounds proofs in scope: a list of `(idxVar, arrayName, hypothesisName)`
   -- entries. The hypothesis is the dite-bound proof
   -- `<idxVar>.toNat < <arrayName>.size`. P2 indexing in `xs[i]'h` consults
@@ -433,13 +436,17 @@ private def emitRefinementLiteral
 
 /-- Wrap a return expression in `.some` when the expected return type is `Option T`.
     If the expression is already `.none` (null literal) or refers to the bare
-    `undefined` identifier, leave it as `.none`. Otherwise wrap in `.some`. -/
+    `undefined` identifier, leave it as `.none`. Optional-typed accessors
+    (`arr[k]?`, `Thales.TS.Array.get?`) already produce `Option T` and are
+    passed through. Otherwise wrap in `.some`. -/
 private def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
   match retTy with
   | some (.option _) =>
     match e with
     | .ctor "none" [] => e
     | .var "undefined" => .ctor "none" []
+    | .indexOpt _ _ => e
+    | .app (.var "Thales.TS.Array.get?") _ => e
     | other => .ctor "some" [other]
   | _ => e
 
@@ -655,10 +662,83 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   -- Conditional (ternary)
   | .conditionalExpr _ cond thn els =>
       .ite (emitExprEnv env cond) (emitExprEnv env thn) (emitExprEnv env els)
-  -- Call expression
+  -- Call expression. When the callee is a known function whose parameters
+  -- are refinement-typed, wrap matching numeric-literal args in Subtype
+  -- constructors. Without this the parser-stripped `1 as Natural` would
+  -- emit as a bare `1.0` and Lean would fail to elaborate `Float ≠ Natural`.
+  -- Also dispatches `Math.abs(integer)` → `Math.absI` so the result type
+  -- is `Natural`, matching the TS overload in `Builtins.lean`.
   | .callExpr _ callee args _ =>
-      .app (emitExprEnv env callee) (args.map (emitExprEnv env))
+      -- Math.abs overload dispatch.
+      match callee, args with
+      | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _, [arg] =>
+          let argRendered := emitExprEnv env arg
+          let isInt : Bool := match arg with
+            | .identifier _ n => isRefinementBinding env n
+            | _ => false
+          if isInt then
+            .app (.var "Math.absI") [argRendered]
+          else
+            .app (.var "Math.abs") [argRendered]
+      | _, _ =>
+      let calleeFnName : Option String := match callee with
+        | .identifier _ name => some name
+        | _ => none
+      let paramTys : List (Option TSType) := match calleeFnName with
+        | some n => match env.funcParamTypes.get? n with
+            | some tys => tys.map some ++ List.replicate (args.length - tys.length) none
+            | none => List.replicate args.length none
+        | none => List.replicate args.length none
+      let coerceArg : Expression → Option TSType → LExpr := fun a tyOpt =>
+        let raw := emitExprEnv env a
+        match tyOpt with
+        | some ty =>
+            ((emitRefinementLiteral env.aliasEnv (some ty) a)
+              <|> (emitLiteralAsCtor env.aliasEnv (some ty) a))
+              |>.getD raw
+        | none => raw
+      let coercedArgs : List LExpr := List.zipWith coerceArg args paramTys
+      .app (emitExprEnv env callee) coercedArgs
   -- Member expression
+  -- `Number.isSafeInteger` → Float.isSafeInteger; `Number.isInteger` →
+  -- Float.isInteger (the JS-mathematical sense). These map JS's static
+  -- `Number` namespace methods to Lean's Float helpers.
+  | .memberExpr _ (.identifier _ "Number") (.identifier _ "isSafeInteger") false _ =>
+      .var "Float.isSafeInteger"
+  | .memberExpr _ (.identifier _ "Number") (.identifier _ "isInteger") false _ =>
+      .var "Float.isInteger"
+  | .memberExpr _ (.identifier _ "Number") (.identifier _ "isNaN") false _ =>
+      .var "isNaN"
+  -- `Math.abs` and other Math static methods. The Lean side uses
+  -- `Float.abs`. For refinement-typed args (Integer → Natural), the value
+  -- flows via the Coe lattice.
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _ =>
+      .var "Math.abs"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "floor") false _ =>
+      .var "Math.floor"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "ceil") false _ =>
+      .var "Math.ceil"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "round") false _ =>
+      .var "Math.round"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "sqrt") false _ =>
+      .var "Math.sqrt"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "min") false _ =>
+      .var "Math.min"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "max") false _ =>
+      .var "Math.max"
+  -- `arr.length` lowers to `Array.toNaturalSize arr` (a `Natural`); the Coe
+  -- chain lets it flow into Float slots. `s.length` lowers to
+  -- `String.toNaturalLength s`. Inside `dite`-rewritten conditions, the
+  -- caller (`emitCondForDite`) bypasses this and uses `arr.size` directly.
+  | .memberExpr _ (.identifier _ arrName) (.identifier _ "length") false _ =>
+      match env.bindingEnv.get? arrName with
+      | some (.array _) | some (.tuple _) =>
+          .app (.var "Array.toNaturalSize") [.var arrName]
+      | some (.string) =>
+          .app (.var "String.toNaturalLength") [.var arrName]
+      | _ =>
+          -- Unknown binding: best-effort `s.length.toFloat`.
+          .proj (.proj (.var arrName) "length") "toFloat"
   | .memberExpr _ obj (.identifier _ propName) false _ =>
       .proj (emitExprEnv env obj) propName
   | .memberExpr _ obj idx true _ =>
@@ -666,32 +746,50 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
                     (env.boundsProofs.map fun (idxV, arrN, _) =>
                       { indexVar := idxV, arrayName := arrN : IndexBounds.BoundsFact })
       let arrExpr := emitExprEnv env obj
+      -- Render the index as a Nat-typed expression, so Lean's `Array`
+      -- indexing typeclass elaborates. For literal numerics, use a plain
+      -- `Nat` literal. For refinement-typed identifiers, project `.toNat`.
+      -- For plain Float identifiers (TS `number`), project
+      -- `.toUInt64.toNat` — matches JS's `arr[i]` where `i` is coerced to
+      -- a non-negative integer index.
+      let idxAsNat : LExpr := match idx with
+        | .literal _ (.number n) _ =>
+            if n ≥ 0.0 && n == n.floor then .nat n.toUInt32.toNat
+            else emitExprEnv env idx
+        | .identifier _ name =>
+            if isRefinementBinding env name then .proj (.var name) "toNat"
+            else
+              .proj (.proj (.var name) "toUInt64") "toNat"
+        | _ => .proj (.proj (emitExprEnv env idx) "toUInt64") "toNat"
       match kind with
       | .p1 =>
           -- Literal index k into a literal/tuple array. Emit `arr[k]'(by native_decide)`.
-          let kNat : LExpr := match idx with
-            | .literal _ (.number n) _ => .nat n.toUInt32.toNat
-            | _ => emitExprEnv env idx
-          .indexProof arrExpr kNat "by native_decide"
+          .indexProof arrExpr idxAsNat "by native_decide"
       | .p2 =>
           -- Length-narrowed Natural index. Look up the dite-bound proof
-          -- by `(idxVar, arrayName)` and emit `xs[i.toNat]'h`. The proof
-          -- term is `Natural.toNat_lt` applied to the dite-bound `h`.
+          -- by `(idxVar, arrayName)` and emit `xs[i.toNat]'h`.
           match idx, obj with
           | .identifier _ idxName, .identifier _ arrName =>
               let proofName : Option String := env.boundsProofs.findSome? fun (iv, an, hn) =>
                 if iv == idxName && an == arrName then some hn else none
               match proofName with
-              | some h =>
-                  .indexProof arrExpr (.proj (.var idxName) "toNat") h
-              | none =>
-                  -- Fallback: still optional access.
-                  .indexOpt arrExpr (.proj (.var idxName) "toNat")
-          | _, _ =>
-              .indexOpt arrExpr (emitExprEnv env idx)
+              | some h => .indexProof arrExpr idxAsNat h
+              | none => .indexOpt arrExpr idxAsNat
+          | _, _ => .indexOpt arrExpr idxAsNat
       | .unknown =>
-          -- No bounds proof: optional access.
-          .indexOpt arrExpr (emitExprEnv env idx)
+          -- No bounds proof from the analyzer. Check for the
+          -- length-positive specialization: an `if (xs.length > 0)` dite
+          -- registered `("__zero", xs, h)`, which discharges `xs[0]`.
+          match idx, obj with
+          | .literal _ (.number n) _, .identifier _ arrName =>
+              if n == 0.0 then
+                let proofName : Option String := env.boundsProofs.findSome? fun (iv, an, hn) =>
+                  if iv == "__zero" && an == arrName then some hn else none
+                match proofName with
+                | some h => .indexProof arrExpr idxAsNat h
+                | none => .indexOpt arrExpr idxAsNat
+              else .indexOpt arrExpr idxAsNat
+          | _, _ => .indexOpt arrExpr idxAsNat
   | .memberExpr _ obj _ _ _ =>
       .proj (emitExprEnv env obj) "(unknown)"
   -- Array expression: emit as List.toArray applied to nested cons/nil
@@ -1080,6 +1178,7 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     (params : List (String × TSType)) (retTy : TSType)
     (body : Statement) (throws : List String := [])
     (funcThrowsEnv : Std.HashMap String (List String) := {})
+    (funcParamTypes : Std.HashMap String (List TSType) := {})
     (total : Bool := false) : Option LDecl :=
   let normalizedRetTy := normalizeForEmit retTy
   let normalizedParams := params.map fun (n, t) => (n, normalizeForEmit t)
@@ -1090,7 +1189,7 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
   let bindingEnv : Std.HashMap String TSType :=
     normalizedParams.foldl (fun m (n, t) => m.insert n (normalizeRefinementRef t)) {}
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
-                         throwTypes := throws, funcThrowsEnv }
+                         throwTypes := throws, funcThrowsEnv, funcParamTypes }
   let bodyExpr := match body with
     | .blockStmt _ stmts => emitBodyEnv env stmts
     | other              => emitBodyEnv env [other]
@@ -1155,6 +1254,20 @@ private def buildFuncThrowsEnv (body : List TSStatement) : Std.HashMap String (L
         | .declared [] | .absent => env
     | _ => env) {}
 
+/-- Build a map from function name → declared parameter types. Used at call
+    sites to coerce numeric literal args into refinement-typed slots
+    (e.g. `safeAt(xs, 1 as Natural)` — after the parser strips the cast,
+    the arg is just `1`; here we re-attach the target type so the emit
+    wraps it in a Subtype constructor). -/
+private def buildFuncParamTypesEnv (body : List TSStatement) : Std.HashMap String (List TSType) :=
+  body.foldl (fun env ts =>
+    match ts with
+    | .annotatedFuncDecl _ name _ params _ _ _ _ _ _ =>
+        let paramTys := params.map fun (_, annot, _, _) =>
+          match annot with | some a => a.type | none => TSType.any
+        env.insert name paramTys
+    | _ => env) {}
+
 /-- Build a `TypeContext` for the emit pass: registers each top-level type
     alias and the declared type of each annotated `const`/`let`/`var`. Used
     to resolve type-level constructs like `__typeof X` and `__indexAccess`. -/
@@ -1187,6 +1300,7 @@ private def resolveAliases (body : List TSStatement) : Std.HashMap String TSType
 def emit (prog : TSProgram) (moduleName : String) : String :=
   let resolvedAliases := resolveAliases prog.body
   let funcThrowsEnv := buildFuncThrowsEnv prog.body
+  let funcParamTypes := buildFuncParamTypesEnv prog.body
   let tsImports := collectImports prog.body
   -- Top-level binding env: every `annotatedVarDecl` with a declared type
   -- contributes a binding so that `console.log(a + b)` can detect refinement
@@ -1199,9 +1313,11 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
         acc.insert name (normalizeRefinementRef typeAnn.type)
     | .annotatedVarDecl _ _ name none (some (.arrayExpr _ elems)) =>
         acc.insert name (.tuple (List.replicate elems.length .any))
+    | .annotatedVarDecl _ _ name none (some (.literal _ (.string _) _)) =>
+        acc.insert name .string
     | _ => acc) {}
   let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
-                            funcThrowsEnv }
+                            funcThrowsEnv, funcParamTypes }
   let optToList : Option LDecl → List LDecl := fun
     | some d => [d]
     | none => []
@@ -1220,7 +1336,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
         let throws : List String := match throwsAnn with
           | .declared ts => ts
           | .absent      => []
-        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv total)
+        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total)
     | .annotatedVarDecl _ _kind name typeAnn (some init) =>
         match init with
         | .arrowFunctionExpr _ arrowParams body _isExpr async arrowRetAnn =>
@@ -1231,7 +1347,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
               let (simpleParams, retTy) := arrowFuncParts arrowParams effectiveAnn
               optToList (emitFuncDecl resolvedAliases name [] simpleParams retTy (match body with
                 | .inl e  => .blockStmt {} [.returnStmt {} (some e)]
-                | .inr s  => s) [] funcThrowsEnv)
+                | .inr s  => s) [] funcThrowsEnv funcParamTypes)
         | other =>
             -- Non-arrow const: prefer the user's annotation when present.
             -- Otherwise, attempt to infer a Lean type from the initializer
@@ -1246,19 +1362,48 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
                     |>.getD (emitExprEnv topEnv other)
                 [.def_ name [] [] (emitType ann.type) initExpr]
             | none =>
-                match other with
-                | .arrayExpr _ elems =>
-                    let elemTy : LType :=
-                      match elems with
-                      | [] => .const "Float"  -- empty array: assume Float
-                      | (some (.literal _ (.number _) _)) :: _ => .const "Float"
-                      | (some (.literal _ (.string _) _)) :: _ => .const "String"
-                      | (some (.literal _ (.boolean _) _)) :: _ => .const "Bool"
-                      | _ => .const "Float"
-                    [.def_ name [] [] (.app "Array" [elemTy]) (emitExprEnv topEnv other)]
-                | _ => []
+                -- Unannotated `const x = init`: emit `def x := init` and
+                -- let Lean infer the type. Skip when the initializer is
+                -- something we don't yet know how to lower (a placeholder
+                -- `(unsupported expr)` would not elaborate).
+                let initExpr := emitExprEnv topEnv other
+                [.def_ name [] [] .inferred initExpr]
+    -- Bare top-level call expression like `asBit(2);`. The TS surface
+    -- semantics is "evaluate for its side effect (throw)". Lean has no
+    -- direct top-level statements, so we emit `#eval (...)` so any panic
+    -- surfaces at module elaboration. Skip when the callee is `console.log`
+    -- (handled below) or an identifier we haven't seen.
+    | .js (.exprStmt _ (call@(.callExpr _ (.identifier _ fname) callArgs _))) =>
+        -- Bare `f(args);` at top level is a side-effect statement. For the
+        -- throwing prelude constructors `asInteger`/`asNatural`/`asByte`/
+        -- `asBit`, emit the IO-effect form which `IO.Process.exit 1`s on
+        -- failure (so the harness sees a nonzero exit, matching tsx's
+        -- RangeError). For `@throws` callees, match on the Except. Otherwise
+        -- evaluate the call for any panic side-effect from `as<T>`.
+        let asEffectName : Option String := match fname with
+          | "asInteger" => some "asIntegerEffect"
+          | "asNatural" => some "asNaturalEffect"
+          | "asByte" => some "asByteEffect"
+          | "asBit" => some "asBitEffect"
+          | _ => none
+        match asEffectName with
+        | some effFn =>
+            let leanArgs := callArgs.map (emitExprEnv topEnv)
+            [.eval_ (.app (.var effFn) leanArgs)]
+        | none =>
+        match funcThrowsEnv.get? fname with
+        | some _ =>
+            let callLExpr := emitExprEnv topEnv call
+            let okArm : LPattern × LExpr := (.ctor "ok" [.wildcard], .app (.var "pure") [.var "()"])
+            let errArm : LPattern × LExpr := (.ctor "error" [.wildcard],
+              .app (.var "panic!") [.str s!"throw from {fname}"])
+            [.eval_ (.match_ callLExpr [okArm, errArm])]
+        | none =>
+            [.eval_ (emitExprEnv topEnv call)]
     -- Top-level `console.log(arg)` → `#eval consoleLog arg`. When `arg` is a
     -- call to a `@throws` function, match on the Except to extract the value.
+    -- Multi-arg `console.log(a, b, c)` lowers to `consoleLogN [show a, …]`
+    -- which prints space-separated values, matching JS behavior.
     | .js (.exprStmt _ (.callExpr _
         (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
         args _)) =>
@@ -1275,6 +1420,14 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
                 [.eval_ (.match_ argExpr [okArm, errArm])]
             | none =>
                 [.eval_ (.app (.var "consoleLog") [argExpr])]
+        | _ :: _ =>
+            -- Multi-arg console.log: lower each arg to `JSShow.jsShow` and
+            -- intercalate with spaces, then `IO.println`. We construct this
+            -- via Thales.TS.consoleLogN, defined alongside `consoleLog` in
+            -- Runtime.lean.
+            let argExprs := args.map (emitExprEnv topEnv)
+            let listLit := mkListLit (argExprs.map fun e => .app (.var "JSShow.jsShow") [e])
+            [.eval_ (.app (.var "consoleLogN") [listLit])]
         | _     => []
     -- Top-level `try { console.log(f(args)) } catch (e) { console.log(g) }`,
     -- where `f` is `@throws`, lowers to a `#eval match` over the Except result.

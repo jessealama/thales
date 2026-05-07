@@ -93,6 +93,36 @@ def asBit (x : Float) : Bit :=
   if h : isBit x = true then ⟨x, h⟩
   else panic! s!"not a bit: {x}"
 
+/-- IO-typed mirrors of the throwing constructors. The pure forms above
+    are used inside type-level positions (e.g. when initializing a
+    refinement-typed binding); these IO mirrors are emitted at side-effect
+    positions (a bare `asInteger(x);` statement). They print a RangeError
+    line on stderr and call `IO.Process.exit 1` so the harness's
+    throw-iff equivalence check sees the same nonzero exit as `tsx`. -/
+def asIntegerEffect (x : Float) : IO Unit := do
+  if isInteger x then pure ()
+  else
+    IO.eprintln s!"RangeError: not an integer: {x}"
+    IO.Process.exit 1
+
+def asNaturalEffect (x : Float) : IO Unit := do
+  if isNatural x then pure ()
+  else
+    IO.eprintln s!"RangeError: not a natural: {x}"
+    IO.Process.exit 1
+
+def asByteEffect (x : Float) : IO Unit := do
+  if isByte x then pure ()
+  else
+    IO.eprintln s!"RangeError: not a byte: {x}"
+    IO.Process.exit 1
+
+def asBitEffect (x : Float) : IO Unit := do
+  if isBit x then pure ()
+  else
+    IO.eprintln s!"RangeError: not a bit: {x}"
+    IO.Process.exit 1
+
 /-- Convert a `Natural` to `Nat`. Sound by virtue of `n.property` —
     `n.val` is a non-negative safe integer in Float form, so
     `Float.toUInt64.toNat` recovers the integer value exactly.
@@ -168,6 +198,43 @@ axiom Float.ofInt_le (m n : Int) (hm : m.natAbs ≤ 9007199254740991)
     soundness. -/
 axiom Float.toUInt64_of_isNatural (x : Float) (h : isNatural x = true) :
   x.toUInt64.toNat.toFloat = x
+
+/-- IEEE-754: embedding a `Nat` into `Float` always yields a
+    non-negative value. Postulated alongside the other boundary axioms;
+    no theorem in Lean's stdlib asserts this directly. -/
+axiom Nat.toFloat_nonneg (n : Nat) : n.toFloat ≥ 0.0
+
+/-- Embed a `String`'s `length` as a `Natural`. Same shape as
+    `Array.toNaturalSize`; bounds the length at MAX_SAFE_INTEGER. -/
+def String.toNaturalLength (s : String) : Natural :=
+  if h : s.length ≤ 9007199254740991 then
+    ⟨s.length.toFloat,
+      by
+        show isNatural _ = true
+        unfold isNatural
+        rw [Bool.and_eq_true]
+        refine ⟨Nat.toFloat_isSafeInteger _ h, ?_⟩
+        exact decide_eq_true (Nat.toFloat_nonneg s.length)⟩
+  else
+    panic! "string length exceeds MAX_SAFE_INTEGER"
+
+/-- Embed an `Array`'s `size` as a `Natural`. The proof composes
+    `Nat.toFloat_isSafeInteger` (for the safe-integer-ness) with
+    `Nat.toFloat_nonneg` (for the `≥ 0` half of `isNatural`). The
+    safe-integer cap is in place because our embedding panics on
+    arrays beyond MAX_SAFE_INTEGER — well outside any realistic v0.6
+    program. -/
+def Array.toNaturalSize {α : Type} (xs : Array α) : Natural :=
+  if h : xs.size ≤ 9007199254740991 then
+    ⟨xs.size.toFloat,
+      by
+        show isNatural _ = true
+        unfold isNatural
+        rw [Bool.and_eq_true]
+        refine ⟨Nat.toFloat_isSafeInteger _ h, ?_⟩
+        exact decide_eq_true (Nat.toFloat_nonneg xs.size)⟩
+  else
+    panic! "array size exceeds MAX_SAFE_INTEGER"
 
 /-! ## Reflection theorems
 
@@ -293,6 +360,12 @@ instance : JSShow Bool   := ⟨fun b => if b then "true" else "false"⟩
 def consoleLog {α : Type} [JSShow α] (x : α) : IO Unit :=
   IO.println (JSShow.jsShow x)
 
+/-- Multi-argument `console.log(a, b, c)` prints space-separated values
+    followed by a newline. Callers pre-render each argument via
+    `JSShow.jsShow` so this only sees `String`s. -/
+def consoleLogN (parts : List String) : IO Unit :=
+  IO.println (String.intercalate " " parts)
+
 /-- Built-in JS error types as flat records.
     These are the types TS programmers reference in `@throws` annotations.
     Emitted Lean code opens this namespace (or uses fully-qualified names)
@@ -344,6 +417,39 @@ def parseFloat (s : String) : Float :=
 
 /-- JS `isNaN(x)` — true iff the value is `NaN`. -/
 def isNaN (x : Float) : Bool := x.isNaN
+
+namespace Math
+  def abs (x : Float) : Float := x.abs
+  def floor (x : Float) : Float := x.floor
+  def ceil (x : Float) : Float := x.ceil
+  def round (x : Float) : Float := (x + 0.5).floor
+  def sqrt (x : Float) : Float := x.sqrt
+  def min (x y : Float) : Float := if x ≤ y then x else y
+  def max (x y : Float) : Float := if x ≥ y then x else y
+
+end Math
+
+/-- Float.abs preserves `isSafeInteger` (and therefore `isInteger`). The
+    underlying IEEE-754 abs operation flips the sign bit only, preserving
+    finiteness, integer-valuedness, and the absolute-value bound. -/
+axiom Float.abs_isSafeInteger {x : Float} (h : Thales.TS.isInteger x = true) :
+  Thales.TS.isInteger x.abs = true
+
+/-- Float.abs is non-negative. Postulated alongside the boundary axioms. -/
+axiom Float.abs_nonneg (x : Float) : x.abs ≥ 0.0
+
+namespace Math
+  /-- Overload of `Math.abs` for refinement-typed `Integer` argument: the
+      absolute value of a safe integer is a non-negative safe integer
+      (`Natural`). Both halves of `isNatural` come from postulated boundary
+      axioms (`Float.abs_isInteger`, `Float.abs_nonneg`). -/
+  def absI (x : Integer) : Natural :=
+    ⟨x.val.abs, by
+      show isNatural _ = true
+      unfold isNatural
+      rw [Bool.and_eq_true]
+      exact ⟨Float.abs_isSafeInteger x.property, decide_eq_true (Float.abs_nonneg x.val)⟩⟩
+end Math
 
 end Thales.TS
 
