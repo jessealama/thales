@@ -8,7 +8,7 @@
 // Note: the directory name predates Parcel 5, when this fixture demonstrated
 // genuine asymmetry (Lean did not propagate the throw). Kept to preserve
 // fixture-name stability across the v0.6 history.
-import { asInteger } from "@thales/prelude";
-console.log("before");
+import { asInteger } from '@thales/prelude';
+console.log('before');
 asInteger(3.14);
-console.log("after");
+console.log('after');
