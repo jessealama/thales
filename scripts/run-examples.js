@@ -96,6 +96,21 @@ function hasDirective(inputPath) {
   return hasDirectivePure(fs.readFileSync(inputPath, 'utf8'));
 }
 
+/**
+ * Does input.ts import from `@thales/prelude`? Used to gate the relaxed
+ * throw-iff equivalence rule: when prelude is in use, throwing constructors
+ * (`asInteger`, `asNatural`, etc.) may throw at runtime even though the
+ * program is well-typed. In that case we require only throw-iff equivalence
+ * (both sides exit nonzero), not byte-identity of stdout/stderr/exit.
+ *
+ * Detection is a regex scan of the source text; it may over-match in
+ * string literals but that is harmless (only widens the relaxation).
+ */
+function importsPrelude(inputPath) {
+  const src = fs.readFileSync(inputPath, 'utf8');
+  return /\bfrom\s+["']@thales\/prelude["']/.test(src);
+}
+
 /** Parse input.ts and build a map from appliesToLine (1-based) to the set
  *  of codes declared for that line (null for the code-less form). */
 function collectDeclaredDirectives(inputPath) {
@@ -556,6 +571,38 @@ function evaluateCase(inputPath) {
 
   const tsx = runTsx(inputPath);
   const ours = runThcThenLean(inputPath);
+
+  // Relaxed throw-iff equivalence for programs that use @thales/prelude.
+  //
+  // Prelude throwing constructors (asInteger, asNatural, asByte, asBit) raise
+  // RangeError at runtime. The emitted Lean mirrors this via the Subtype
+  // constructor, which can also panic. The exact error message / exit code may
+  // differ between tsx (Node RangeError) and Lean (kernel panic). We therefore
+  // require only:
+  //   - both exit 0: byte-identity still required (full accepted check below)
+  //   - both exit nonzero: throw-iff equivalence holds — PASS as 'both-throw'
+  //   - one exits 0, the other nonzero: FAIL (throw asymmetry)
+  //
+  // For programs that do NOT import from @thales/prelude, strict byte-identity
+  // is unchanged.
+  if (importsPrelude(inputPath)) {
+    const tsxThrew = tsx.code !== 0;
+    const oursThrew = ours.code !== 0;
+    if (tsxThrew && oursThrew) {
+      // Both threw: throw-iff equivalence holds.
+      return { kind: 'pass', label: 'both-throw' };
+    }
+    if (tsxThrew !== oursThrew) {
+      return {
+        kind: 'fail',
+        label: 'throw-asymmetry',
+        detail:
+          `tsx exited ${tsx.code}, Lean exited ${ours.code} — ` +
+          'exactly one side threw; throw-iff equivalence violated',
+      };
+    }
+    // Both exited 0: fall through to byte-identity check below.
+  }
 
   if (
     tsx.stdout !== ours.stdout ||
