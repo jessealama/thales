@@ -11,7 +11,12 @@
     "skipLibCheck": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
+    "paths": {
+      "@thales/prelude": ["./Thales/Prelude"]
+    }
   },
   "exclude": ["node_modules", "typescript-tests", ".lake"]
 }
