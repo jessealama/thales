@@ -68,6 +68,31 @@ instance : Coe Byte Natural := ⟨fun b => ⟨b.val, isNatural_of_isByte b.prope
 instance : Coe Natural Integer := ⟨fun n => ⟨n.val, isInteger_of_isNatural n.property⟩⟩
 instance : Coe Integer Float := ⟨Subtype.val⟩
 
+/-- `Inhabited` instances for the refinement types so that `panic!` in
+    the throwing constructors typechecks. The default value is `0`,
+    which satisfies all four predicates. -/
+instance : Inhabited Integer := ⟨⟨0.0, by native_decide⟩⟩
+instance : Inhabited Natural := ⟨⟨0.0, by native_decide⟩⟩
+instance : Inhabited Byte := ⟨⟨0.0, by native_decide⟩⟩
+instance : Inhabited Bit := ⟨⟨0.0, by native_decide⟩⟩
+
+/-- Throwing constructor for `Integer`. Panics if `x` is not a safe integer. -/
+def asInteger (x : Float) : Integer :=
+  if h : isInteger x = true then ⟨x, h⟩
+  else panic! s!"not an integer: {x}"
+
+def asNatural (x : Float) : Natural :=
+  if h : isNatural x = true then ⟨x, h⟩
+  else panic! s!"not a natural: {x}"
+
+def asByte (x : Float) : Byte :=
+  if h : isByte x = true then ⟨x, h⟩
+  else panic! s!"not a byte: {x}"
+
+def asBit (x : Float) : Bit :=
+  if h : isBit x = true then ⟨x, h⟩
+  else panic! s!"not a bit: {x}"
+
 /-- Optional value. TS surface `Option<T>` translates to Lean's `Option`. -/
 abbrev Option' := Option
 
