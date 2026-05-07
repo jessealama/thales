@@ -1,6 +1,7 @@
 import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Context
 import Thales.TypeCheck.Generic
+import Thales.TypeCheck.IndexBounds
 import Thales.Emit.LeanSyntax
 import Std.Data.HashMap
 
@@ -627,7 +628,36 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .memberExpr _ obj (.identifier _ propName) false _ =>
       .proj (emitExprEnv env obj) propName
   | .memberExpr _ obj idx true _ =>
-      .app (.var "Thales.TS.Array.get?") [emitExprEnv env obj, emitExprEnv env idx]
+      let kind := IndexBounds.classify obj idx env.bindingEnv
+                    (env.boundsProofs.map fun (idxV, arrN, _) =>
+                      { indexVar := idxV, arrayName := arrN : IndexBounds.BoundsFact })
+      let arrExpr := emitExprEnv env obj
+      match kind with
+      | .p1 =>
+          -- Literal index k into a literal/tuple array. Emit `arr[k]'(by native_decide)`.
+          let kNat : LExpr := match idx with
+            | .literal _ (.number n) _ => .nat n.toUInt32.toNat
+            | _ => emitExprEnv env idx
+          .indexProof arrExpr kNat "by native_decide"
+      | .p2 =>
+          -- Length-narrowed Natural index. Look up the dite-bound proof
+          -- by `(idxVar, arrayName)` and emit `xs[i.toNat]'h`. The proof
+          -- term is `Natural.toNat_lt` applied to the dite-bound `h`.
+          match idx, obj with
+          | .identifier _ idxName, .identifier _ arrName =>
+              let proofName : Option String := env.boundsProofs.findSome? fun (iv, an, hn) =>
+                if iv == idxName && an == arrName then some hn else none
+              match proofName with
+              | some h =>
+                  .indexProof arrExpr (.proj (.var idxName) "toNat") h
+              | none =>
+                  -- Fallback: still optional access.
+                  .indexOpt arrExpr (.proj (.var idxName) "toNat")
+          | _, _ =>
+              .indexOpt arrExpr (emitExprEnv env idx)
+      | .unknown =>
+          -- No bounds proof: optional access.
+          .indexOpt arrExpr (emitExprEnv env idx)
   | .memberExpr _ obj _ _ _ =>
       .proj (emitExprEnv env obj) "(unknown)"
   -- Array expression: emit as List.toArray applied to nested cons/nil
@@ -741,10 +771,21 @@ partial def emitVarDecl (env : EmitEnv)
                   <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
                   |>.getD (emitExprEnv env e)
             | none   => .var "()"
+          -- Synthesize a tuple binding when the initializer is a literal
+          -- array `[a, b, …]`. This lets `IndexBounds.classify` see the
+          -- length and mark literal-index accesses as P1-provable, even
+          -- when the user didn't write a type annotation.
+          let inferredFromInit : Option TSType := match init with
+            | some (.arrayExpr _ elems) =>
+                some (.tuple (List.replicate elems.length .any))
+            | _ => none
           let env' :=
             match typeAnnotation with
             | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
-            | none   => env
+            | none =>
+              match inferredFromInit with
+              | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
+              | none => env
           .letE id.name ty initExpr (emitVarDecl env' rest body)
       | _ => emitVarDecl env rest body  -- destructuring patterns skipped for v1
 
@@ -1087,10 +1128,14 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
   let tsImports := collectImports prog.body
   -- Top-level binding env: every `annotatedVarDecl` with a declared type
   -- contributes a binding so that `console.log(a + b)` can detect refinement
-  -- operands and project `.val` accordingly.
+  -- operands and project `.val` accordingly. Unannotated `const arr =
+  -- [a, b, …]` inits get a synthetic tuple binding (length only) so that
+  -- `IndexBounds.classify` can mark P1 indexing sites.
   let topBindingEnv : Std.HashMap String TSType := prog.body.foldl (fun acc ts =>
     match ts with
     | .annotatedVarDecl _ _ name (some typeAnn) _ => acc.insert name typeAnn.type
+    | .annotatedVarDecl _ _ name none (some (.arrayExpr _ elems)) =>
+        acc.insert name (.tuple (List.replicate elems.length .any))
     | _ => acc) {}
   let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
                             funcThrowsEnv }
@@ -1125,13 +1170,30 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
                 | .inl e  => .blockStmt {} [.returnStmt {} (some e)]
                 | .inr s  => s) [] funcThrowsEnv)
         | other =>
-            -- Non-arrow const requires a type annotation; without it the Lean type is unknown.
-            optToList (typeAnn.map fun ann =>
-              let initExpr :=
-                (emitRefinementLiteral resolvedAliases (some ann.type) other)
-                  <|> (emitLiteralAsCtor resolvedAliases (some ann.type) other)
-                  |>.getD (emitExprEnv topEnv other)
-              .def_ name [] [] (emitType ann.type) initExpr)
+            -- Non-arrow const: prefer the user's annotation when present.
+            -- Otherwise, attempt to infer a Lean type from the initializer
+            -- shape (e.g. `[10, 20, 30]` → `Array Float`). Without a usable
+            -- type, the decl is silently skipped (the type-checker will have
+            -- diagnosed the use-site already).
+            match typeAnn with
+            | some ann =>
+                let initExpr :=
+                  (emitRefinementLiteral resolvedAliases (some ann.type) other)
+                    <|> (emitLiteralAsCtor resolvedAliases (some ann.type) other)
+                    |>.getD (emitExprEnv topEnv other)
+                [.def_ name [] [] (emitType ann.type) initExpr]
+            | none =>
+                match other with
+                | .arrayExpr _ elems =>
+                    let elemTy : LType :=
+                      match elems with
+                      | [] => .const "Float"  -- empty array: assume Float
+                      | (some (.literal _ (.number _) _)) :: _ => .const "Float"
+                      | (some (.literal _ (.string _) _)) :: _ => .const "String"
+                      | (some (.literal _ (.boolean _) _)) :: _ => .const "Bool"
+                      | _ => .const "Float"
+                    [.def_ name [] [] (.app "Array" [elemTy]) (emitExprEnv topEnv other)]
+                | _ => []
     -- Top-level `console.log(arg)` → `#eval consoleLog arg`. When `arg` is a
     -- call to a `@throws` function, match on the Except to extract the value.
     | .js (.exprStmt _ (.callExpr _
