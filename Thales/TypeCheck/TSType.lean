@@ -14,12 +14,36 @@ inductive RefinementKind where
   | bit
   deriving Repr, BEq, Inhabited
 
+/-- All refinement kinds, in lattice order (most general first). -/
+def RefinementKind.all : List RefinementKind :=
+  [.integer, .natural, .byte, .bit]
+
 /-- The display name used in error messages and emit. -/
 def RefinementKind.name : RefinementKind → String
   | .integer => "Integer"
   | .natural => "Natural"
   | .byte => "Byte"
   | .bit => "Bit"
+
+/-- The prelude predicate name (`is{name}`). -/
+def RefinementKind.predicate (k : RefinementKind) : String :=
+  s!"is{k.name}"
+
+/-- Inverse of `name`: recognize a TS-side refinement type alias. -/
+def RefinementKind.ofTypeName? : String → Option RefinementKind
+  | "Integer" => some .integer
+  | "Natural" => some .natural
+  | "Byte" => some .byte
+  | "Bit" => some .bit
+  | _ => none
+
+/-- Inverse of `predicate`: recognize a prelude predicate name. -/
+def RefinementKind.ofPredicate? : String → Option RefinementKind
+  | "isInteger" => some .integer
+  | "isNatural" => some .natural
+  | "isByte" => some .byte
+  | "isBit" => some .bit
+  | _ => none
 
 /-- Lattice rank: smaller is more specific. `Bit` (3) ⊆ `Byte` (2) ⊆ `Natural` (1) ⊆ `Integer` (0). -/
 def RefinementKind.rank : RefinementKind → Nat

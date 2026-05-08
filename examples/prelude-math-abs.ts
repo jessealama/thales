@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (Subtype-construction and narrowing-branch emit).
 // Demonstrates Math.abs overloaded to return Natural when given an Integer.
 import { Integer, Natural, isInteger } from '@thales/prelude';
 

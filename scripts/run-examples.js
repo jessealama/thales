@@ -97,14 +97,10 @@ function hasDirective(inputPath) {
 }
 
 /**
- * Does input.ts import from `@thales/prelude`? Used to gate the relaxed
- * throw-iff equivalence rule: when prelude is in use, throwing constructors
- * (`asInteger`, `asNatural`, etc.) may throw at runtime even though the
- * program is well-typed. In that case we require only throw-iff equivalence
- * (both sides exit nonzero), not byte-identity of stdout/stderr/exit.
- *
- * Detection is a regex scan of the source text; it may over-match in
- * string literals but that is harmless (only widens the relaxation).
+ * Does input.ts import from `@thales/prelude`? Gates the relaxed throw-iff
+ * equivalence rule for prelude programs (where throwing constructors may
+ * raise at runtime). The regex may over-match in string literals — harmless,
+ * since it only widens the relaxation.
  */
 function importsPrelude(inputPath) {
   const src = fs.readFileSync(inputPath, 'utf8');
@@ -405,22 +401,21 @@ function preflight() {
  * The temporary directory is cleaned up synchronously before the function
  * returns.
  */
+const baseCompilerOptions = (() => {
+  const base = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, 'tsconfig.json'), 'utf8'),
+  );
+  // Rewrite baseUrl to absolute so paths resolve from a temp-dir tsconfig.
+  return { ...base.compilerOptions, baseUrl: repoRoot };
+})();
+
 function runTsc(inputPath) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'thales-tsc-'));
   try {
-    const baseRaw = fs.readFileSync(
-      path.join(repoRoot, 'tsconfig.json'),
-      'utf8',
-    );
-    const base = JSON.parse(baseRaw);
-    // Override baseUrl to point at the repo root (tsconfig.json's compilerOptions
-    // may have a relative "." which is fine when tsconfig lives at the root, but
-    // our temp tsconfig lives in os.tmpdir(), so use an absolute path).
-    const compilerOptions = {
-      ...base.compilerOptions,
-      baseUrl: repoRoot,
+    const tempConfig = {
+      compilerOptions: baseCompilerOptions,
+      files: [inputPath],
     };
-    const tempConfig = { compilerOptions, files: [inputPath] };
     const tempCfgPath = path.join(tmp, 'tsconfig.json');
     fs.writeFileSync(tempCfgPath, JSON.stringify(tempConfig));
     const r = runCapture('npx', [
@@ -460,12 +455,8 @@ function runTsx(inputPath) {
 
 /**
  * Check an emitted Lean file for `sorry` or `sorryAx`. Returns a TH9004
- * diagnostic string if found, else null.
- *
- * This check catches emit-pipeline regressions where a soundness bug causes
- * the emitter to produce `sorry`-bearing proof terms. TH9004 is not a user
- * error; it signals a Thales bug. The grep is applied ONLY to files emitted
- * by thales (not to Test/ WIP proofs or Thales/ sources).
+ * diagnostic if found, else null. TH9004 signals a Thales emit-pipeline
+ * bug, not a user error.
  */
 function checkNoSorry(leanPath) {
   let src;
@@ -616,19 +607,11 @@ function evaluateCase(inputPath) {
   const tsx = runTsx(inputPath);
   const ours = runThcThenLean(inputPath);
 
-  // Relaxed throw-iff equivalence for programs that use @thales/prelude.
-  //
-  // Prelude throwing constructors (asInteger, asNatural, asByte, asBit) raise
-  // RangeError at runtime. The emitted Lean mirrors this via the Subtype
-  // constructor, which can also panic. The exact error message / exit code may
-  // differ between tsx (Node RangeError) and Lean (kernel panic). We therefore
-  // require only:
-  //   - both exit 0: byte-identity still required (full accepted check below)
-  //   - both exit nonzero: throw-iff equivalence holds — PASS as 'both-throw'
-  //   - one exits 0, the other nonzero: FAIL (throw asymmetry)
-  //
-  // For programs that do NOT import from @thales/prelude, strict byte-identity
-  // is unchanged.
+  // Relaxed throw-iff equivalence for @thales/prelude programs: the
+  // throwing constructors raise on either side, but messages/exit codes
+  // differ. Both throw → pass; exactly one throws → fail; both exit 0 →
+  // fall through to strict byte-identity. Non-prelude programs always
+  // require byte-identity.
   if (importsPrelude(inputPath)) {
     const tsxThrew = tsx.code !== 0;
     const oursThrew = ours.code !== 0;

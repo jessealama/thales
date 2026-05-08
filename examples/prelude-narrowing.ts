@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (Subtype-construction and narrowing-branch emit).
 // Demonstrates narrowing with isInteger: after the guard, the value
 // flows at type Integer inside the branch.
 import { Integer, isInteger } from '@thales/prelude';

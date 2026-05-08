@@ -93,41 +93,22 @@ def asBit (x : Float) : Bit :=
   if h : isBit x = true then ⟨x, h⟩
   else panic! s!"not a bit: {x}"
 
-/-- IO-typed mirrors of the throwing constructors. The pure forms above
-    are used inside type-level positions (e.g. when initializing a
-    refinement-typed binding); these IO mirrors are emitted at side-effect
-    positions (a bare `asInteger(x);` statement). They print a RangeError
-    line on stderr and call `IO.Process.exit 1` so the harness's
-    throw-iff equivalence check sees the same nonzero exit as `tsx`. -/
-def asIntegerEffect (x : Float) : IO Unit := do
-  if isInteger x then pure ()
+/-- IO-typed mirrors used at side-effect positions (`asInteger(x);` as a
+    statement). On failure they print a `RangeError` line and exit 1,
+    matching tsx's behaviour. -/
+private def rangeCheckEffect (label : String) (ok : Bool) (x : Float) : IO Unit := do
+  if ok then pure ()
   else
-    IO.eprintln s!"RangeError: not an integer: {x}"
+    IO.eprintln s!"RangeError: not {label}: {x}"
     IO.Process.exit 1
 
-def asNaturalEffect (x : Float) : IO Unit := do
-  if isNatural x then pure ()
-  else
-    IO.eprintln s!"RangeError: not a natural: {x}"
-    IO.Process.exit 1
+def asIntegerEffect (x : Float) : IO Unit := rangeCheckEffect "an integer" (isInteger x) x
+def asNaturalEffect (x : Float) : IO Unit := rangeCheckEffect "a natural" (isNatural x) x
+def asByteEffect    (x : Float) : IO Unit := rangeCheckEffect "a byte"    (isByte x)    x
+def asBitEffect     (x : Float) : IO Unit := rangeCheckEffect "a bit"     (isBit x)     x
 
-def asByteEffect (x : Float) : IO Unit := do
-  if isByte x then pure ()
-  else
-    IO.eprintln s!"RangeError: not a byte: {x}"
-    IO.Process.exit 1
-
-def asBitEffect (x : Float) : IO Unit := do
-  if isBit x then pure ()
-  else
-    IO.eprintln s!"RangeError: not a bit: {x}"
-    IO.Process.exit 1
-
-/-- Convert a `Natural` to `Nat`. Sound by virtue of `n.property` —
-    `n.val` is a non-negative safe integer in Float form, so
-    `Float.toUInt64.toNat` recovers the integer value exactly.
-    The semantic is established by `Float.toUInt64_of_isNatural`
-    (boundary axiom, Task 1.9). -/
+/-- Convert a `Natural` to `Nat`. The round-trip is exact for non-negative
+    safe-integer Floats (see `Float.toUInt64_of_isNatural`). -/
 def Natural.toNat (n : Natural) : Nat := n.val.toUInt64.toNat
 
 /-- Reflect a safe-integer-valued `Integer` into Lean `Int`.
@@ -138,49 +119,27 @@ def Integer.toInt (x : Integer) : Int :=
 
 /-! ## Float↔Int boundary axioms
 
-These axioms are the irreducible Float-Int IEEE-754 boundary
-relationships that Lean's standard `Float` library does not give us.
-Three of them (`ofInt_neg`, `ofInt_lt`, `ofInt_le`) were validated
-by the `feat/thales-grind-poc` branch. Two more
-(`toUInt64_of_isNatural`, `Nat.toFloat_isSafeInteger`,
-`Float.neg_isSafeInteger`) are added for v0.6 and are load-bearing
-for `Natural.toNat` and `Integer.ofInt`. They are reasoned from
-IEEE 754 first principles.
+These postulate the IEEE-754 facts about `Float.toUInt64`, `Nat.toFloat`,
+and float negation that Lean's stdlib does not state directly. They are
+reasoned from IEEE-754 first principles: negation flips the sign bit
+exactly, and `Nat.toFloat` is exact for any `n ≤ MAX_SAFE_INTEGER`. -/
 
-`Nat.toFloat_isSafeInteger` and `Float.neg_isSafeInteger` are
-declared first because `Integer.ofInt` depends on them in its
-proof obligation. The `ofInt_*` axioms (which mention
-`Integer.ofInt`) follow the definition. -/
-
-/-- Any `Nat` bounded by `MAX_SAFE_INTEGER` converts to a Float that
-    is a safe integer. The standard library's `Nat.toFloat` is
-    surjective onto integer-valued safe-range Floats and is exact in
-    this range, but Lean's stdlib does not state this; we postulate
-    it as an IEEE-754 boundary axiom. -/
 axiom Nat.toFloat_isSafeInteger (n : Nat) (h : n ≤ 9007199254740991) :
   Float.isSafeInteger n.toFloat = true
 
-/-- Negating a safe-integer-valued Float preserves `isSafeInteger`.
-    IEEE-754 negation flips the sign bit and is exact, so finiteness,
-    integer-valuedness, and the absolute-value bound are preserved. -/
 axiom Float.neg_isSafeInteger (x : Float) (h : Float.isSafeInteger x = true) :
   Float.isSafeInteger (-x) = true
 
-/-- Lift an in-range `Int` into `Integer`. The witness is built from a
-    Nat-to-Float conversion. The proof goes through
-    `Nat.toFloat_isSafeInteger` and `Float.neg_isSafeInteger`:
-    `n.toFloat` is a safe integer for any `n ≤ MAX_SAFE_INTEGER`,
-    and negating a safe integer preserves `isSafeInteger`. -/
+/-- Lift an in-range `Int` into `Integer`, going through `Nat.toFloat`
+    (and a sign flip for negatives). -/
 def Integer.ofInt (n : Int) (h : n.natAbs ≤ 9007199254740991) : Integer :=
   ⟨if n < 0 then -((n.natAbs).toFloat) else (n.natAbs).toFloat,
     by
       show isInteger _ = true
       unfold isInteger
       split
-      · -- n < 0 branch: value is -(n.natAbs.toFloat).
-        exact Float.neg_isSafeInteger _ (Nat.toFloat_isSafeInteger _ h)
-      · -- n ≥ 0 branch: value is n.natAbs.toFloat.
-        exact Nat.toFloat_isSafeInteger _ h⟩
+      · exact Float.neg_isSafeInteger _ (Nat.toFloat_isSafeInteger _ h)
+      · exact Nat.toFloat_isSafeInteger _ h⟩
 
 axiom Float.ofInt_neg (n : Int) (h : n.natAbs ≤ 9007199254740991) :
   (Integer.ofInt (-n) (by simpa using h)).val = -((Integer.ofInt n h).val)
@@ -199,13 +158,10 @@ axiom Float.ofInt_le (m n : Int) (hm : m.natAbs ≤ 9007199254740991)
 axiom Float.toUInt64_of_isNatural (x : Float) (h : isNatural x = true) :
   x.toUInt64.toNat.toFloat = x
 
-/-- IEEE-754: embedding a `Nat` into `Float` always yields a
-    non-negative value. Postulated alongside the other boundary axioms;
-    no theorem in Lean's stdlib asserts this directly. -/
+/-- `Nat.toFloat` is non-negative. -/
 axiom Nat.toFloat_nonneg (n : Nat) : n.toFloat ≥ 0.0
 
-/-- Embed a `String`'s `length` as a `Natural`. Same shape as
-    `Array.toNaturalSize`; bounds the length at MAX_SAFE_INTEGER. -/
+/-- Embed a `String`'s `length` as a `Natural`. -/
 def String.toNaturalLength (s : String) : Natural :=
   if h : s.length ≤ 9007199254740991 then
     ⟨s.length.toFloat,
@@ -218,12 +174,8 @@ def String.toNaturalLength (s : String) : Natural :=
   else
     panic! "string length exceeds MAX_SAFE_INTEGER"
 
-/-- Embed an `Array`'s `size` as a `Natural`. The proof composes
-    `Nat.toFloat_isSafeInteger` (for the safe-integer-ness) with
-    `Nat.toFloat_nonneg` (for the `≥ 0` half of `isNatural`). The
-    safe-integer cap is in place because our embedding panics on
-    arrays beyond MAX_SAFE_INTEGER — well outside any realistic v0.6
-    program. -/
+/-- Embed an `Array`'s `size` as a `Natural`. Panics on arrays larger than
+    `MAX_SAFE_INTEGER`. -/
 def Array.toNaturalSize {α : Type} (xs : Array α) : Natural :=
   if h : xs.size ≤ 9007199254740991 then
     ⟨xs.size.toFloat,
@@ -238,18 +190,9 @@ def Array.toNaturalSize {α : Type} (xs : Array α) : Natural :=
 
 /-! ## Reflection theorems
 
-Round-trip identity for `toInt`/`ofInt`, plus add/sub/mul
-homomorphisms. These are the user-facing reflection lemmas that
-Thales-emitted Lean code uses to reason about safe-integer
-arithmetic. Per the spec V2 §9, the boundary-axiom set is
-permitted to expand when proofs from existing axioms are not
-constructible in the pinned toolchain. The four statements below
-are postulated as axioms because reasoning about
-`Float.toUInt64.toNat` round-trips and IEEE 754 add/sub/mul
-exactness on safe-integer inputs requires Float-Int internals
-that Lean's stdlib does not expose. They are reasoned from
-IEEE 754 first principles, same justification as the four
-axioms above. -/
+Round-trip identity for `toInt`/`ofInt` plus add/sub/mul homomorphisms.
+Postulated as axioms: the underlying Float-Int round-trip and IEEE-754
+exactness on safe-integer inputs are not provable in the stdlib. -/
 
 axiom Integer.toInt_ofInt (n : Int) (h : n.natAbs ≤ 9007199254740991) :
   (Integer.ofInt n h).toInt = n
@@ -326,22 +269,16 @@ def jsNumberToString (x : Float) : String :=
   else if x == 0.0 then "0"
   else stripTrailingZerosAfterDot (toString x)
 
-/-- Typeclass for values printable by `console.log`. Instances implement the
-    small subset of JS ToString semantics v1 actually exercises. -/
+/-- Typeclass for values printable by `console.log`. Instances cover the
+    JS ToString cases the conformance suite exercises. -/
 class JSShow (α : Type) where
   jsShow : α → String
 
-instance : JSShow Float   := ⟨jsNumberToString⟩
-/-- Refinement subtypes of Float print the same as their underlying Float value.
-    JS `console.log(42)` prints `42`, so `Integer`/`Natural`/`Byte`/`Bit` do too. -/
-instance : JSShow Integer := ⟨fun x => jsNumberToString x.val⟩
-instance : JSShow Natural := ⟨fun x => jsNumberToString x.val⟩
-instance : JSShow Byte    := ⟨fun x => jsNumberToString x.val⟩
-instance : JSShow Bit     := ⟨fun x => jsNumberToString x.val⟩
-/-- JS `console.log(undefined)` prints `undefined`. JS `console.log(null)`
-    prints `null`. Our `Option α` is the lowering of TS `T | undefined` —
-    the `none` branch always prints `undefined`. (`null` is currently
-    indistinguishable from `undefined` in our lowering.) -/
+instance : JSShow Float := ⟨jsNumberToString⟩
+/-- Refinement subtypes of Float print like their underlying value. -/
+instance {p : Float → Bool} : JSShow {x : Float // p x = true} :=
+  ⟨fun x => jsNumberToString x.val⟩
+-- `Option α` is the lowering of TS `T | undefined`; `none` prints as `undefined`.
 instance {α : Type} [JSShow α] : JSShow (Option α) := ⟨fun
   | .none => "undefined"
   | .some v => JSShow.jsShow v⟩
@@ -418,6 +355,13 @@ def parseFloat (s : String) : Float :=
 /-- JS `isNaN(x)` — true iff the value is `NaN`. -/
 def isNaN (x : Float) : Bool := x.isNaN
 
+/-- IEEE-754: `Float.abs` flips the sign bit only, preserving safe-integer-ness. -/
+axiom Float.abs_isSafeInteger {x : Float} (h : Thales.TS.isInteger x = true) :
+  Thales.TS.isInteger x.abs = true
+
+/-- `Float.abs` is non-negative. -/
+axiom Float.abs_nonneg (x : Float) : x.abs ≥ 0.0
+
 namespace Math
   def abs (x : Float) : Float := x.abs
   def floor (x : Float) : Float := x.floor
@@ -427,22 +371,7 @@ namespace Math
   def min (x y : Float) : Float := if x ≤ y then x else y
   def max (x y : Float) : Float := if x ≥ y then x else y
 
-end Math
-
-/-- Float.abs preserves `isSafeInteger` (and therefore `isInteger`). The
-    underlying IEEE-754 abs operation flips the sign bit only, preserving
-    finiteness, integer-valuedness, and the absolute-value bound. -/
-axiom Float.abs_isSafeInteger {x : Float} (h : Thales.TS.isInteger x = true) :
-  Thales.TS.isInteger x.abs = true
-
-/-- Float.abs is non-negative. Postulated alongside the boundary axioms. -/
-axiom Float.abs_nonneg (x : Float) : x.abs ≥ 0.0
-
-namespace Math
-  /-- Overload of `Math.abs` for refinement-typed `Integer` argument: the
-      absolute value of a safe integer is a non-negative safe integer
-      (`Natural`). Both halves of `isNatural` come from postulated boundary
-      axioms (`Float.abs_isInteger`, `Float.abs_nonneg`). -/
+  /-- `Math.abs` overload: absolute value of an `Integer` is a `Natural`. -/
   def absI (x : Integer) : Natural :=
     ⟨x.val.abs, by
       show isNatural _ = true

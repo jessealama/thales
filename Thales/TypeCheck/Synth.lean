@@ -11,7 +11,6 @@ import Thales.TypeCheck.Generic
 import Thales.TypeCheck.TypedExpression
 import Thales.TypeCheck.Narrowing
 import Thales.TypeCheck.Builtins
-import Thales.TypeCheck.IndexBounds
 
 namespace Thales.TypeCheck
 
@@ -209,10 +208,8 @@ partial def synthExpr (expr : TSExpression) (expected : Option TSType := none) :
 partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) : TypeCheckM TypedExpression := do
   let mk ty children := { expr := .js expr, type := ty, children := children : TypedExpression }
   match expr with
-  -- Literals
-  -- We keep numeric literals as `.numberLit n` (rather than widening to `.number`)
-  -- so that the assignability checker can detect out-of-range literals being
-  -- assigned to refinement-typed slots and emit TH0080 instead of TS2322.
+  -- Literals. Numeric literals stay `.numberLit` so refinement-target
+  -- assignability can detect out-of-range values and emit TH0080.
   | .literal _ (.number n) _ => return mk (.numberLit n) #[]
   | .literal _ (.string s) _ => return mk (.stringLit s) #[]
   | .literal _ (.boolean b) _ => return mk (.booleanLit b) #[]
@@ -244,21 +241,11 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
         emitDiagnostic (.propertyNotFound propName resolved) base.loc
         return mk .any #[objTyped]
 
-  -- Computed indexing: obj[idx]
-  -- We synth both halves and run the index-bounds analyzer (Tasks 3.9 / 3.10).
-  -- The classification (P1 / P2 / unknown) is currently discarded — emission
-  -- (Parcel 5) re-derives the mark from the AST. We keep the result type
-  -- behaviour conservative for now (`any`) so the existing corpus's accept
-  -- semantics are unchanged; the upgraded result type ships in Parcel 5.
+  -- Computed indexing: obj[idx]. Result type is `any`; the index-bounds
+  -- analyzer runs at emit time to decide between `arr[k]'h` and `arr[k]?`.
   | .memberExpr _ obj idx true _ =>
     let objTyped ← synthJSExpr obj
     let idxTyped ← synthJSExpr idx
-    let ctx ← read
-    let scopedFacts := ctx.boundsFacts.map fun bf =>
-      ({ indexVar := bf.indexVar, arrayName := bf.arrayName } : IndexBounds.BoundsFact)
-    let _kind := IndexBounds.classify obj idx ctx.bindings scopedFacts
-    -- (mark not stored; analyzer is exercised here so a future Parcel 5
-    -- consumer can re-derive without surprising regressions in 3)
     return mk .any #[objTyped, idxTyped]
 
   -- Function call: callee(args)
@@ -292,10 +279,7 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
         emitDiagnostic (.argumentCountMismatch requiredCount args.length) base.loc
       else if !hasRest && args.length > params.length then
         emitDiagnostic (.argumentCountMismatch params.length args.length) base.loc
-      -- Helper: emit the right diagnostic when an argument's type is not
-      -- assignable to its parameter. Refinement targets get TH0080/TH0081
-      -- instead of TS2345 so users get a precise out-of-range / needs-evidence
-      -- message; everything else falls back to argumentTypeMismatch.
+      -- Refinement targets get TH0080/TH0081; otherwise TS2345.
       let emitArgMismatch (argIdx : Nat) (srcTy tgtTy : TSType)
           (argExpr : Expression) : TypeCheckM Unit := do
         let resolvedTgt ← resolveTypeGeneric tgtTy
@@ -336,11 +320,7 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
           | _ =>
             let argTyped ← synthJSExpr args[i]!
             argChildren := argChildren.push argTyped
-      -- Refinement-aware overloads: a small fixed table of stdlib calls whose
-      -- return type narrows when the argument is a refinement subtype.
-      -- Currently: `Math.abs(x)` returns `Natural` when `x : Integer` (and
-      -- therefore also when `x : Natural | Byte | Bit` by lattice widening),
-      -- and `number` otherwise.
+      -- Refinement-aware overload: `Math.abs(x : refinement)` returns `Natural`.
       let refinedRetTy : TSType ← (do
         match callee, argChildren.toList with
         | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _,

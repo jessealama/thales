@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (Subtype-construction and narrowing-branch emit).
 // Naming note: isInteger (prelude) means isSafeInteger, NOT Number.isInteger.
 // Large powers of 2 exceed the safe integer range.
 //

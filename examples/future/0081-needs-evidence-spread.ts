@@ -1,6 +1,6 @@
-// PARKED: TH0081 for spread argument context not yet implemented.
-// Currently the spread gives TS2554 (wrong argument count); Parcel 3
-// didn't implement refinement checking at spread sites.
+// PARKED: TH0081 in spread-argument context. Currently fires TS2554
+// (wrong argument count); once implemented, refinement checking should
+// fire here.
 import { Integer } from '@thales/prelude';
 
 function add(a: Integer, b: Integer): number {

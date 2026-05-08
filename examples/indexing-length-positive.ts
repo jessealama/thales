@@ -1,8 +1,8 @@
-// P2: length-positive narrowing. If xs.length > 0, then xs[0] is in bounds.
-// Thales lifts xs[0] from T | undefined to T inside the branch.
+// Length-positive narrowing: inside `if (xs.length > 0)`, Thales lifts
+// `xs[0]` from `T | undefined` to `T`.
 function head(xs: number[]): number | undefined {
   if (xs.length > 0) {
-    return xs[0]; // Thales (post-Parcel-5): T, not T | undefined
+    return xs[0]; // Thales: T, not T | undefined
   }
   return undefined;
 }

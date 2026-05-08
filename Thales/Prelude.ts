@@ -1,5 +1,5 @@
 /**
- * @thales/prelude — refinement types for Thales v0.6.
+ * @thales/prelude — refinement types for Thales.
  *
  * Four refinement types as TS aliases of `number`. tsc treats them
  * as `number`; the Thales compiler enforces the refinements via

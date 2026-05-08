@@ -23,11 +23,6 @@ inductive Guard where
   -- isBit(x), and Number.isSafeInteger(x) (treated as isInteger). True branch
   -- narrows the variable's type to the corresponding refinement.
   | refinementTest (varName : String) (kind : RefinementKind)
-  -- Bounds fact: `i < xs.length` (or `xs.length > i`) — `arrayName` is the
-  -- name of `xs`. Records "i is in-bounds for xs" so the index-bounds
-  -- analyzer (Tasks 3.9 / 3.10) can mark `xs[i]` accesses as P2-provable.
-  -- Does not narrow types.
-  | indexBounds (indexVar : String) (arrayName : String)
   | not (guard : Guard)
   | and (left : Guard) (right : Guard)
   | or (left : Guard) (right : Guard)
@@ -84,24 +79,12 @@ def hasLiteralProperty (ty : TSType) (propName : String) (value : String) : Bool
 
 /-! ## Guard extraction -/
 
-/-- Recognize the prelude refinement-type predicate names. -/
-private def preludePredicateKind (name : String) : Option RefinementKind :=
-  match name with
-  | "isInteger" => some .integer
-  | "isNatural" => some .natural
-  | "isByte" => some .byte
-  | "isBit" => some .bit
-  | _ => none
-
 partial def extractGuard : Expression → Option Guard
-  -- Refinement-type predicate calls:
-  --   isInteger(x), isNatural(x), isByte(x), isBit(x)
-  --   Number.isSafeInteger(x)  ← equivalent to isInteger
-  -- We recognize these only when the argument is a bare identifier; more
-  -- general patterns (member access, etc.) would require name-tracking the
-  -- index-bounds analyzer doesn't yet do.
+  -- Prelude refinement predicates `isInteger(x)`/`isNatural(x)`/`isByte(x)`/
+  -- `isBit(x)` and `Number.isSafeInteger(x)` (treated as `isInteger`).
+  -- Only bare-identifier arguments are recognized.
   | .callExpr _ (.identifier _ name) [.identifier _ varName] _ =>
-    match preludePredicateKind name with
+    match RefinementKind.ofPredicate? name with
     | some kind => some (.refinementTest varName kind)
     | none => none
   | .callExpr _ (.memberExpr _ (.identifier _ "Number") (.identifier _ "isSafeInteger") false _)
@@ -169,24 +152,6 @@ partial def extractGuard : Expression → Option Guard
       | .identifier _ varName, .identifier _ className =>
         some (.instanceOf varName className)
       | _, _ => none
-    -- Bounds facts: `i < xs.length` (or its mirror `xs.length > i`).
-    -- Combined with `isNatural(i)` in a conjunction guard (Task 3.6),
-    -- this records "i is in-bounds for xs" so the index-bounds analyzer
-    -- can mark `xs[i]` as P2-provable. We also accept `<=` against
-    -- `xs.length - 1` as the same fact (handled by callers through the
-    -- conjunction form; here we keep the strict `<` patterns).
-    | .lt =>
-      match left, right with
-      | .identifier _ idxVar,
-        .memberExpr _ (.identifier _ arrName) (.identifier _ "length") false _ =>
-        some (.indexBounds idxVar arrName)
-      | _, _ => none
-    | .gt =>
-      match left, right with
-      | .memberExpr _ (.identifier _ arrName) (.identifier _ "length") false _,
-        .identifier _ idxVar =>
-        some (.indexBounds idxVar arrName)
-      | _, _ => none
     | _ => none
   | .logicalExpr _ op left right =>
     match op with
@@ -233,8 +198,6 @@ partial def narrowType (ty : TSType) (guard : Guard) : TSType :=
         | .number | .refinement _ | .any | .unknown => true
         | _ => false
     | other => other  -- Don't change non-numeric types; predicate is vacuous.
-  -- Bounds facts don't change types; they're tracked separately.
-  | .indexBounds _ _ => ty
   | .typeofEquals _ typeStr =>
     match ty with
     | .union types => filterUnion types (matchesTypeof · typeStr)
@@ -293,7 +256,6 @@ partial def narrowTypeNeg (ty : TSType) (guard : Guard) : TSType :=
   -- Negated refinement predicate: nothing useful to conclude — the value
   -- could still be `number` or a different refinement, so leave it alone.
   | .refinementTest _ _ => ty
-  | .indexBounds _ _ => ty
   | .typeofEquals _ typeStr =>
     match ty with
     | .union types => filterUnion types (!matchesTypeof · typeStr)
@@ -345,7 +307,6 @@ end
 def guardVarNames : Guard → List String
   | .typeofEquals v _ | .instanceOf v _ | .equalsNull v | .equalsUndefined v | .truthy v | .discriminant v _ _ => [v]
   | .refinementTest v _ => [v]
-  | .indexBounds v _ => [v]
   | .not g => guardVarNames g
   | .and g1 g2 | .or g1 g2 => guardVarNames g1 ++ guardVarNames g2
 

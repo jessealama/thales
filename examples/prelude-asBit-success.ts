@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (Subtype-construction and narrowing-branch emit).
 // Demonstrates asBit succeeding: argument is 0 or 1.
 import { asBit } from '@thales/prelude';
 

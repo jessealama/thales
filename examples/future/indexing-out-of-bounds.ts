@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (P1/P2 indexing + proof generation).
 // Out-of-bounds literal index stays optional — Thales does not lift arr[5]
 // when the array only has 3 elements.
 const arr = [10, 20, 30];

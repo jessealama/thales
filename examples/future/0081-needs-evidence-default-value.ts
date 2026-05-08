@@ -1,6 +1,5 @@
-// PARKED: TH0081 for default parameter value context not yet implemented.
-// Parcel 3 didn't add refinement checking at default-value sites.
-// When implemented, Thales should emit TH0081 for the default.
+// PARKED: TH0081 at default-parameter-value sites. Once implemented,
+// Thales should emit TH0081 for the default expression.
 import { Integer } from '@thales/prelude';
 
 const someNumber: number = 5;

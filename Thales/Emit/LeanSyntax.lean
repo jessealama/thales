@@ -43,22 +43,18 @@ inductive LExpr where
   | ctor (name : String) (args : List LExpr)    -- .circle 1.0
   | proj (obj : LExpr) (field : String)         -- p.x
   | structLit (typeName : String) (fields : List (String × LExpr)) -- { x := 1, y := 2 }
-  -- Anonymous constructor `⟨e₁, …, eₙ⟩` plus a trailing tactic-script proof.
-  -- Used to build refinement-typed Subtype values: `⟨42.0, by native_decide⟩`,
-  -- `⟨x, h⟩`, etc. `proofTactic` is rendered verbatim after the comma —
-  -- callers supply complete tactic syntax (e.g. `"by native_decide"`,
-  -- `"h"`).
+  -- Anonymous constructor `⟨e₁, …, eₙ, <proofTactic>⟩`. Used to build
+  -- refinement-typed Subtype values; `proofTactic` is rendered verbatim
+  -- after the values (e.g. `"by native_decide"` or a hypothesis name).
   | anonCtor (args : List LExpr) (proofTactic : String)
-  -- Index access with an explicit proof: `arr[k]'h`. Used by P1/P2 emit.
-  -- `proofTactic` is rendered as `'(<tactic>)`. For P1 it is
-  -- `"by native_decide"`; for P2 it is a constructed proof term.
+  -- Index access with an explicit proof: `arr[k]'(<proofTactic>)`.
+  -- `proofTactic` is rendered verbatim.
   | indexProof (arr : LExpr) (idx : LExpr) (proofTactic : String)
-  -- Optional indexing: `arr[k]?` returning `Option α`. Used as the P0
-  -- fallback when no bounds proof is available.
+  -- Optional indexing: `arr[k]?` returning `Option α`. Fallback when no
+  -- bounds proof is available.
   | indexOpt (arr : LExpr) (idx : LExpr)
-  -- Dependent if-then-else: `if h : c then t else e`. Used to bind a
-  -- proof of the condition into the then-branch so refinement-typed
-  -- accessors can discharge their bounds proofs.
+  -- Dependent if-then-else: `if h : c then t else e`. Binds a proof of
+  -- the condition into the then-branch.
   | dite_ (binderName : String) (cond thn els : LExpr)
   deriving Inhabited
 

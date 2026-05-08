@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (Subtype-construction and narrowing-branch emit).
 // Demonstrates arithmetic widening: Integer + number → number in v0.6.
 // Recovery requires a guard or constructor call.
 import { Integer, isInteger } from '@thales/prelude';

@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (Subtype-construction and narrowing-branch emit).
 // Demonstrates narrowing with isNatural: after the guard, the value
 // flows at type Natural inside the branch.
 import { Natural, isNatural } from '@thales/prelude';

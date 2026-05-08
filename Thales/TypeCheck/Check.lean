@@ -7,7 +7,6 @@ import Thales.TypeCheck.Diagnostic
 import Thales.TypeCheck.Builtins
 import Thales.TypeCheck.Generic
 import Thales.TypeCheck.Narrowing
-import Thales.TypeCheck.IndexBounds
 
 namespace Thales.TypeCheck
 
@@ -339,30 +338,17 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
     -- Special-case @thales/prelude: inject the in-memory shim bindings.
     -- For all other imports, just continue (no filesystem resolution).
     if source == "@thales/prelude" then
-      -- Type aliases: Integer/Natural/Byte/Bit are refinement-tagged variants of `number`.
       let aliasOf (ty : TSType) := { typeParams := [], body := ty : TypeAliasDef }
-      let intTy : TSType := .refinement .integer
-      let natTy : TSType := .refinement .natural
-      let byteTy : TSType := .refinement .byte
-      let bitTy : TSType := .refinement .bit
-      -- Value types for is-predicates: (x: number) => boolean
-      let numToBoolean := TSType.function [TSParamType.mk "x" .number] .boolean
-      -- Value types for as-constructors: (x: number) => <refinement>
-      let asInt := TSType.function [TSParamType.mk "x" .number] intTy
-      let asNat := TSType.function [TSParamType.mk "x" .number] natTy
-      let asByte := TSType.function [TSParamType.mk "x" .number] byteTy
-      let asBit := TSType.function [TSParamType.mk "x" .number] bitTy
-      let preludeValues : List (String × TSType) := [
-        ("isInteger", numToBoolean), ("isNatural", numToBoolean),
-        ("isByte",    numToBoolean), ("isBit",     numToBoolean),
-        ("asInteger", asInt),        ("asNatural",  asNat),
-        ("asByte",    asByte),       ("asBit",      asBit)
-      ]
-      withTypeAlias "Integer" (aliasOf intTy)
-        (withTypeAlias "Natural" (aliasOf natTy)
-          (withTypeAlias "Byte" (aliasOf byteTy)
-            (withTypeAlias "Bit" (aliasOf bitTy)
-              (withScope preludeValues (checkStatements rest)))))
+      let numParam := [TSParamType.mk "x" .number]
+      let numToBool : TSType := .function numParam .boolean
+      let preludeValues : List (String × TSType) :=
+        RefinementKind.all.flatMap fun k =>
+          let refTy : TSType := .refinement k
+          [(k.predicate, numToBool), (s!"as{k.name}", .function numParam refTy)]
+      let aliases : List (String × TSType) :=
+        RefinementKind.all.map fun k => (k.name, .refinement k)
+      aliases.foldr (fun (n, t) m => withTypeAlias n (aliasOf t) m)
+        (withScope preludeValues (checkStatements rest))
     else
       checkStatements rest
 
@@ -394,13 +380,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
       let resolvedBindings ← resolveBindingsForNarrowing guard ctx.bindings
       let thenBindings := Narrowing.applyGuard guard resolvedBindings
       let elseBindings := Narrowing.applyNegatedGuard guard resolvedBindings
-      -- Collect bounds-facts (from `i < xs.length` style conjuncts) for the
-      -- true branch so the index-bounds analyzer can see them when it visits
-      -- `xs[i]` accesses inside `consequent`.
-      let scopedFacts := (IndexBounds.collectBoundsFacts guard).map fun bf =>
-        ({ indexVar := bf.indexVar, arrayName := bf.arrayName } : ScopedBoundsFact)
       withScope (Narrowing.bindingsDiff thenBindings ctx.bindings)
-        (withBoundsFacts scopedFacts (checkJSStatementRaw consequent))
+        (checkJSStatementRaw consequent)
       let thenDA ← saveAssignmentState
       restoreAssignmentState preBranchDA
       match alternate with
@@ -432,10 +413,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     | some guard =>
       let resolvedBindings ← resolveBindingsForNarrowing guard ctx.bindings
       let narrowed := Narrowing.applyGuard guard resolvedBindings
-      let scopedFacts := (IndexBounds.collectBoundsFacts guard).map fun bf =>
-        ({ indexVar := bf.indexVar, arrayName := bf.arrayName } : ScopedBoundsFact)
       withScope (widened ++ Narrowing.bindingsDiff narrowed ctx.bindings)
-        (withBoundsFacts scopedFacts (checkJSStatementRaw body))
+        (checkJSStatementRaw body)
     | none =>
       withScope widened (checkJSStatementRaw body)
     restoreAssignmentState preLoopDA

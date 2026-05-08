@@ -1,4 +1,3 @@
-// PARKED: needs Parcel 5 emit (Subtype-construction and narrowing-branch emit).
 // Demonstrates narrowing with isBit: after the guard, the value
 // flows at type Bit inside the branch.
 import { Bit, isBit } from '@thales/prelude';
