@@ -5,8 +5,8 @@
 
 namespace Thales.TypeCheck
 
-/-- Numeric refinement-type kinds, ordered as a sub-lattice of `number`:
-    `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`. Introduced via `@thales/prelude`. -/
+/-- Numeric refinement-type kinds, forming an inclusion chain in `number`:
+    `Bit ⊂ Byte ⊂ Natural ⊂ Integer ⊂ number`. Introduced via `@thales/prelude`. -/
 inductive RefinementKind where
   | integer
   | natural
@@ -21,14 +21,14 @@ def RefinementKind.name : RefinementKind → String
   | .byte => "Byte"
   | .bit => "Bit"
 
-/-- Lattice rank: smaller is more specific. `Bit` (3) ⊆ `Byte` (2) ⊆ `Natural` (1) ⊆ `Integer` (0). -/
+/-- Chain rank: smaller is more specific. `Bit` (3) ⊆ `Byte` (2) ⊆ `Natural` (1) ⊆ `Integer` (0). -/
 def RefinementKind.rank : RefinementKind → Nat
   | .integer => 0
   | .natural => 1
   | .byte => 2
   | .bit => 3
 
-/-- `a ⊆ b` in the refinement lattice (lower-or-equal-rank ⊆ higher-rank, i.e. more specific ⊆ less specific). -/
+/-- `a ⊆ b` in the refinement chain (lower-or-equal-rank ⊆ higher-rank, i.e. more specific ⊆ less specific). -/
 def RefinementKind.le (a b : RefinementKind) : Bool :=
   b.rank ≤ a.rank
 
@@ -67,7 +67,7 @@ inductive TSType where
   | never
   | unknown
   | any
-  -- Refinement types: structurally `number`, tagged with a lattice kind.
+  -- Refinement types: structurally `number`, tagged with a chain kind.
   -- See `RefinementKind` above and `Thales.TS.Runtime` for the runtime story.
   | refinement (kind : RefinementKind)
   -- Literal types
