@@ -86,7 +86,7 @@ lake build thales
   uncaught call into a `@throws` callee). It is mutually exclusive with
   `@throws`; failures of either kind surface as clean diagnostics
   (TH0066/TH0067/TH0070).
-- **Built-in bounded number types via `@thales/prelude` (v0.6).**
+- **Built-in bounded number types via `@thales/prelude`.**
   `Integer`, `Natural`, `Byte`, and `Bit` are branded aliases of
   `number` in TypeScript and Lean Subtypes of `Float` in the emitted
   Lean. The chain is `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`.
@@ -95,14 +95,18 @@ lake build thales
   `isNatural`, …) or throwing constructor (`asInteger`, `asNatural`,
   …) is rejected with TH0081. Arithmetic operators always widen to
   `number`; narrow the result with a guard or constructor if you
-  need the refinement type back.
+  need the refinement type back. The bounded number types reflect
+  into Lean's `Int`/`Nat` so downstream proofs can reason about
+  safe-integer arithmetic — see
+  [`docs/beyond-typescript.md`](docs/beyond-typescript.md) for the
+  picture of what Thales gives you that TypeScript alone cannot.
 
 ## What's in the subset
 
 Thales accepts a proper subset of what `tsc --strict` accepts. See
 [`docs/subset.md`](docs/subset.md) for the full contract and
 [`docs/errors.md`](docs/errors.md) for every `TH####` diagnostic code.
-Out for v1.0: classes, mutation, async, `any`/`unknown`/intersection
+Currently out: classes, mutation, async, `any`/`unknown`/intersection
 types. See [`docs/future.md`](docs/future.md) for the roadmap.
 
 ## Generated Lean modules
@@ -110,8 +114,8 @@ types. See [`docs/future.md`](docs/future.md) for the roadmap.
 Every emitted file opens with `import Thales.TS.Runtime`. The runtime
 is a small Lean module (`Option'`, `Result`, error records,
 `consoleLog` with JS-compatible number printing, array combinators,
-`parseFloat`/`isNaN`) sized to v1 and designed so that the Lean path's
-stdout matches the VM path byte-for-byte. See
+`parseFloat`/`isNaN`) sized to the accepted subset and designed so
+that the Lean path's stdout matches the VM path byte-for-byte. See
 [`docs/runtime.md`](docs/runtime.md) for the full surface.
 
 The runtime's bounded-number-type machinery postulates twelve
