@@ -113,6 +113,13 @@ is a small Lean module (`Option'`, `Result`, error records,
 stdout matches the VM path byte-for-byte. See
 [`docs/runtime.md`](docs/runtime.md) for the full surface.
 
+The runtime's refinement-type and provably-safe-indexing machinery
+postulates thirteen IEEE-754 axioms (covering Float ↔ Int boundary
+behavior, `Float.abs`, and `Integer` reflection) that Lean's stdlib
+does not provide. Emitted code that reasons about safe-integer
+arithmetic ultimately rests on these. See
+[`docs/axioms.md`](docs/axioms.md) for the full list and rationale.
+
 ## Testing
 
 ```bash
