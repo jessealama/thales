@@ -1,12 +1,13 @@
 // Length-positive narrowing: inside `if (xs.length > 0)`, Thales lifts
-// `xs[0]` from `T | undefined` to `T`.
-function head(xs: number[]): number | undefined {
+// `xs[0]` from `T | undefined` to `T` in the emitted Lean (the access
+// becomes `xs[0]'h`, with a non-emptiness witness from the guard).
+function headPlusOne(xs: number[]): number {
   if (xs.length > 0) {
-    return xs[0]; // Thales: T, not T | undefined
+    // @ts-expect-error noUncheckedIndexedAccess: Thales lifts xs[0] to number
+    return xs[0] + 1;
   }
-  return undefined;
+  return 0;
 }
 
-const empty: number[] = [];
-console.log(head([1, 2, 3]));
-console.log(head(empty));
+console.log(headPlusOne([10, 20, 30]));
+console.log(headPlusOne([]));

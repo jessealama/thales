@@ -1,14 +1,22 @@
-// Manual narrowing via isNatural conjunction. `isNatural(i) && i < xs.length`
-// establishes both the Natural typing and the in-bounds fact in one condition.
+// Stepwise narrowing: an outer `if (isNatural(i))` narrows `i` to
+// `Natural`, then an inner `if (i < xs.length)` adds the in-bounds
+// fact, lifting `xs[i]` to `T` in the emitted Lean. Bind the lifted
+// value and use it twice — under tsc + `noUncheckedIndexedAccess`,
+// `v` is `number | undefined` and the multiplication errors; Thales
+// emits the access via the bounds proof so `v` flows as `number`.
 import { isNatural } from '@thales/prelude';
 
-function maybeAt<T>(xs: T[], i: number): T | undefined {
-  if (isNatural(i) && i < xs.length) {
-    return xs[i]; // Thales: T (both Natural and in-bounds)
+function squaredAt(xs: number[], i: number): number {
+  if (isNatural(i)) {
+    if (i < xs.length) {
+      // @ts-expect-error noUncheckedIndexedAccess: Thales lifts xs[i] to number
+      const v: number = xs[i];
+      return v * v;
+    }
   }
-  return undefined;
+  return -1;
 }
 
-console.log(maybeAt(['a', 'b', 'c'], 1));
-console.log(maybeAt(['a', 'b', 'c'], -1));
-console.log(maybeAt(['a', 'b', 'c'], 5));
+console.log(squaredAt([10, 20, 30], 1));
+console.log(squaredAt([10, 20, 30], -1));
+console.log(squaredAt([10, 20, 30], 5));

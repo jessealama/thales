@@ -450,7 +450,12 @@ function runThcIgnoringDirectives(inputPath) {
 
 /** Run tsx input.ts. */
 function runTsx(inputPath) {
-  return runCapture('npx', ['--no-install', 'tsx', inputPath]);
+  // Silence DEP0205: tsx invokes Node's deprecated `module.register()` API.
+  // The warning fires once per process and pollutes stderr, defeating the
+  // byte-identity output check.
+  return runCapture('npx', ['--no-install', 'tsx', inputPath], {
+    env: { ...process.env, NODE_OPTIONS: '--disable-warning=DEP0205' },
+  });
 }
 
 /**
