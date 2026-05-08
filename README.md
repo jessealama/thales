@@ -88,8 +88,8 @@ lake build thales
   (TH0066/TH0067/TH0070).
 - **Refinement types via `@thales/prelude`.** `Integer`, `Natural`,
   `Byte`, and `Bit` are branded aliases of `number` in TypeScript and
-  Lean Subtypes of `Float` in the emitted Lean. The lattice is
-  `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`. Numeric literals are
+  Lean Subtypes of `Float` in the emitted Lean. The inclusion chain is
+  `Bit ⊂ Byte ⊂ Natural ⊂ Integer ⊂ number`. Numeric literals are
   checked at compile time (out-of-range → TH0080); assigning a plain
   `number` without a guard (`isInteger`, `isNatural`, …) or throwing
   constructor (`asInteger`, `asNatural`, …) is rejected with TH0081.

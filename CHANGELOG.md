@@ -31,8 +31,8 @@ Rough plans for 0.8.
 
 - `@thales/prelude` module exporting four refinement types of `number`:
   `Integer` (safe integer), `Natural` (non-negative safe integer),
-  `Byte` (`0..255`), and `Bit` (`0` or `1`). The lattice
-  `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number` is enforced at compile
+  `Byte` (`0..255`), and `Bit` (`0` or `1`). The inclusion chain
+  `Bit ⊂ Byte ⊂ Natural ⊂ Integer ⊂ number` is enforced at compile
   time.
 - Eight prelude functions per refinement type:
   `isInteger`/`isNatural`/`isByte`/`isBit` (TypeScript type-guard
@@ -62,7 +62,7 @@ Rough plans for 0.8.
   `Integer`-typed (still `number → number` otherwise).
 - `Array<T>.length` and `string.length` are typed `Natural` (was
   `number`). Existing code that assigned them to `number` continues to
-  work via the lattice's coercions.
+  work via the chain's coercions.
 - `Array<T>` callback types for `forEach`, `map`, `filter`, and
   `reduce` give the `index` parameter type `Natural` (was `number`).
 

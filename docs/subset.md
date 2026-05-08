@@ -74,7 +74,7 @@ under `examples/` for one canonical demonstration per `TH####` code.
 | Control flow  | `if`/`else`, ternary, `switch` (exhaustive on a discriminated union)                                                                             |
 | Modules       | `import`/`export` of values and types                                                                                                            |
 | Stdlib        | `Option<T>`, `Result<T, E>`, array `.map`/`.filter`/`.reduce`/`.concat`/`.length`/`.slice`                                                       |
-| Refinements   | `Integer`, `Natural`, `Byte`, `Bit` from `@thales/prelude` — Lean Subtypes of `Float`; lattice `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`         |
+| Refinements   | `Integer`, `Natural`, `Byte`, `Bit` from `@thales/prelude` — Lean Subtypes of `Float`; chain `Bit ⊂ Byte ⊂ Natural ⊂ Integer ⊂ number`           |
 | Safe indexing | `arr[i]` lifted from `T \| undefined` to `T` at P1 (literal) and P2 (length-narrowed with `Natural` index) sites                                 |
 
 ## Out-of-scope features
@@ -872,10 +872,10 @@ The example corpus verifies that the VM execution and the compiled Lean both pro
 
 ## Prelude refinement types (0.6)
 
-`@thales/prelude` exports four numeric refinement types: `Integer`, `Natural`, `Byte`, and `Bit`. On the TypeScript side each is a branded alias of `number`; on the Lean side each is a `Subtype` of `Float` (Lean's IEEE 754 double). The lattice is:
+`@thales/prelude` exports four numeric refinement types: `Integer`, `Natural`, `Byte`, and `Bit`. On the TypeScript side each is a branded alias of `number`; on the Lean side each is a `Subtype` of `Float` (Lean's IEEE 754 double). The inclusion chain is:
 
 ```
-Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number
+Bit ⊂ Byte ⊂ Natural ⊂ Integer ⊂ number
 ```
 
 - **`Integer`** — whole numbers in the range `[-(2^53 - 1), 2^53 - 1]` (JavaScript's safe-integer range).
