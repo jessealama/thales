@@ -55,8 +55,8 @@ Semantics at a glance:
   Lean; `TH9002` is raised and no `.lean` sidecar is written. The
   directive is a documentation primitive, not a partial-build mechanism.
 
-See `docs/errors.md` for TH9000–TH9003 details, and the example corpus
-under `examples/` for one canonical demonstration per `TH####` code.
+See `docs/errors.md` for TH9000–TH9003 details, and the conformance corpus
+under `tests/conformance/reject/` for one canonical demonstration per `TH####` code.
 
 ## In-scope features
 

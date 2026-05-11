@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const examplesDir = path.join(repoRoot, 'examples');
+const conformanceDir = path.join(repoRoot, 'tests', 'conformance');
 const fixturesDir = path.join(repoRoot, 'Test', 'Examples', 'fixtures');
 const thalesBin = path.join(repoRoot, '.lake', 'build', 'bin', 'thales');
 
@@ -679,20 +679,31 @@ function evaluateCase(inputPath) {
 
 // ---- driver ----
 
-/** Enumerate corpus cases. For `examples/`, each `.ts` file is a case. For
+/** Enumerate corpus cases. For `tests/conformance/`, the immediate
+ *  subdirectories `accept/`, `reject/`, and `throws/` are each scanned for
+ *  `.ts` files; `future/` is skipped (parked fixtures). For
  *  `Test/Examples/fixtures/`, each subdirectory containing `input.ts` is a
  *  case (paired with `expected-outcome.txt`). Returns an array of
  *  {label, inputPath, expectedPath?} ordered by label.
  */
 function collectCases(rootDir, mode) {
-  const entries = fs.readdirSync(rootDir).sort();
   const cases = [];
   if (mode === 'flat') {
-    for (const name of entries) {
-      if (!name.endsWith('.ts')) continue;
-      cases.push({ label: name, inputPath: path.join(rootDir, name) });
+    const buckets = ['accept', 'reject', 'throws'];
+    for (const bucket of buckets) {
+      const bucketDir = path.join(rootDir, bucket);
+      if (!fs.existsSync(bucketDir)) continue;
+      const files = fs.readdirSync(bucketDir).sort();
+      for (const name of files) {
+        if (!name.endsWith('.ts')) continue;
+        cases.push({
+          label: `${bucket}/${name}`,
+          inputPath: path.join(bucketDir, name),
+        });
+      }
     }
   } else {
+    const entries = fs.readdirSync(rootDir).sort();
     for (const name of entries) {
       const dir = path.join(rootDir, name);
       if (!fs.statSync(dir).isDirectory()) continue;
@@ -811,7 +822,7 @@ if (directFail) {
   process.exit(1);
 }
 
-console.log('Running examples...\n');
-const { passes, fails } = runCorpus(examplesDir, { selfTest: false });
+console.log('Running conformance corpus...\n');
+const { passes, fails } = runCorpus(conformanceDir, { selfTest: false });
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails > 0 ? 1 : 0);

@@ -338,7 +338,7 @@ instance : JSShow Bool   := ⟨fun b => if b then "true" else "false"⟩
 
 /-- Emitted counterpart of JS `console.log(x)`. Prints `x` using
     `JSShow.jsShow` so the Lean path's stdout matches the VM's without any
-    post-processing by the examples runner. -/
+    post-processing by the conformance harness. -/
 def consoleLog {α : Type} [JSShow α] (x : α) : IO Unit :=
   IO.println (JSShow.jsShow x)
 

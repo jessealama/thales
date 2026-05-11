@@ -1,7 +1,7 @@
 // PARKED: TH0081 for rest-parameter call context.
 // Currently fires TH0081 correctly but the function body (using .reduce)
 // triggers TS2339 because Array methods aren't fully in Thales's subset.
-// When Array methods are supported, this fixture can move to examples/.
+// When Array methods are supported, this fixture can move to tests/conformance/reject/.
 import { Integer } from '@thales/prelude';
 
 function sumInts(...xs: Integer[]): number {
