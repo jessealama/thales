@@ -1,4 +1,4 @@
-# Parked examples
+# Parked fixtures
 
 The `.ts` files in this directory are valid programs against the
 intended Thales subset, but the current compiler cannot fully check or
@@ -6,20 +6,21 @@ emit them. They live here so the design intent is captured in source
 form, and so that work that unparks them has a concrete target.
 
 The conformance harness (`scripts/run-examples.js`) does not visit this
-directory: every fixture in `examples/` proper is run, every fixture
-here is skipped. Once a fixture works end-to-end, it gets moved up one
-level into `examples/`.
+directory: every fixture under `tests/conformance/{accept,reject,throws}/`
+is run, every fixture here is skipped. Once a fixture works end-to-end,
+move it into the appropriate bucket.
 
 If you are adding a feature that should make a parked fixture pass, the
 workflow is:
 
 1. Get the fixture passing by hand:
-   `timeout 60 .lake/build/bin/thales examples/future/<name>.ts`
+   `timeout 60 .lake/build/bin/thales tests/conformance/future/<name>.ts`
    followed by
    `timeout 60 lake env lean <Name>.lean`.
-2. `git mv examples/future/<name>.ts examples/<name>.ts`.
-3. Run the harness: `timeout 1200 node scripts/run-examples.js`.
-4. Make sure prettier is happy: `timeout 60 npm run format -- examples/`.
+2. `git mv tests/conformance/future/<name>.ts tests/conformance/accept/<name>.ts`
+   (or `reject/` / `throws/`, depending on the contract the fixture is meant to satisfy).
+3. Run the harness: `timeout 1200 npm run conformance`.
+4. Make sure prettier is happy: `timeout 60 npm run format -- tests/conformance/`.
 
 ## What's currently parked (v0.6)
 

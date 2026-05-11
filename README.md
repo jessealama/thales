@@ -127,7 +127,8 @@ arithmetic ultimately rests on these. See
 ## Testing
 
 ```bash
-node scripts/run-examples.js --self-test     # harness regression
+npm run conformance:self-test                # harness regression
+npm run conformance                          # full conformance corpus
 lake build ThalesTest                        # Lean unit tests
 ```
 

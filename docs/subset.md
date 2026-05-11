@@ -55,8 +55,8 @@ Semantics at a glance:
   Lean; `TH9002` is raised and no `.lean` sidecar is written. The
   directive is a documentation primitive, not a partial-build mechanism.
 
-See `docs/errors.md` for TH9000–TH9003 details, and the example corpus
-under `examples/` for one canonical demonstration per `TH####` code.
+See `docs/errors.md` for TH9000–TH9003 details, and the conformance corpus
+under `tests/conformance/reject/` for one canonical demonstration per `TH####` code.
 
 ## In-scope features
 
@@ -1007,4 +1007,4 @@ What v0.6 ships (the cheap surface piece): `Array<T>.prototype.forEach`, `map`, 
 3. Lower `arr.forEach(callback)` to a Lean fold/iteration that supplies the proof witness, and
 4. Discharge `arr[i]` inside the callback via that witness in `Thales.Emit.Lean`.
 
-What v0.6 does **not** ship: the per-array bound threading, the arrow-body type-check, and the emit lowering. The fixture `examples/future/indexing-foreach.ts` is parked (lives under `examples/future/`, not in the harness corpus) until v0.7 lands all four pieces.
+What v0.6 does **not** ship: the per-array bound threading, the arrow-body type-check, and the emit lowering. The fixture `tests/conformance/future/indexing-foreach.ts` is parked (lives under `tests/conformance/future/`, not in the harness corpus) until v0.7 lands all four pieces.
