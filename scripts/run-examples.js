@@ -458,6 +458,8 @@ function runTsx(inputPath) {
   // Silence DEP0205: tsx invokes Node's deprecated `module.register()` API.
   // The warning fires once per process and pollutes stderr, defeating the
   // byte-identity output check.
+  // TODO: remove this once tsx upgrades to `module.registerHooks()`. As of
+  // tsx 4.21.0 (latest on npm), it still uses the deprecated entry point.
   return runCapture('npx', ['--no-install', 'tsx', inputPath], {
     env: { ...process.env, NODE_OPTIONS: '--disable-warning=DEP0205' },
   });
