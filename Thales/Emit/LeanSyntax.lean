@@ -13,6 +13,10 @@ inductive LType where
   | arrow (from_ : LType) (to_ : LType)        -- α → β
   | prod (left : LType) (right : LType)        -- α × β
   | sum (left : LType) (right : LType)         -- α ⊕ β (right-associative for union chains)
+  -- A placeholder that renders to nothing and tells the printer to omit
+  -- the `: T` annotation entirely. Used at top-level `def` sites where the
+  -- type is fully inferable from the body (e.g. `const bit = asBit(1)`).
+  | inferred
   deriving Inhabited
 
 /-- Lean pattern (for match arms). -/
@@ -39,6 +43,19 @@ inductive LExpr where
   | ctor (name : String) (args : List LExpr)    -- .circle 1.0
   | proj (obj : LExpr) (field : String)         -- p.x
   | structLit (typeName : String) (fields : List (String × LExpr)) -- { x := 1, y := 2 }
+  -- Anonymous constructor `⟨e₁, …, eₙ, <proofTactic>⟩`. Used to build
+  -- refinement-typed Subtype values; `proofTactic` is rendered verbatim
+  -- after the values (e.g. `"by native_decide"` or a hypothesis name).
+  | anonCtor (args : List LExpr) (proofTactic : String)
+  -- Index access with an explicit proof: `arr[k]'(<proofTactic>)`.
+  -- `proofTactic` is rendered verbatim.
+  | indexProof (arr : LExpr) (idx : LExpr) (proofTactic : String)
+  -- Optional indexing: `arr[k]?` returning `Option α`. Fallback when no
+  -- bounds proof is available.
+  | indexOpt (arr : LExpr) (idx : LExpr)
+  -- Dependent if-then-else: `if h : c then t else e`. Binds a proof of
+  -- the condition into the then-branch.
+  | dite_ (binderName : String) (cond thn els : LExpr)
   deriving Inhabited
 
 /-- Top-level declaration. -/
@@ -112,6 +129,7 @@ mutual
     | .arrow f t => s!"({renderType f} → {renderType t})"
     | .prod l r  => s!"({renderType l} × {renderType r})"
     | .sum l r   => s!"{renderTypeAtom l} ⊕ {renderType r}"
+    | .inferred  => "_"
 
   partial def renderTypeAtom : LType → String
     | .var n   => n
@@ -178,6 +196,16 @@ mutual
     | .structLit typeName fields =>
         let fieldS := fields.map fun (n, e) => s!"{n} := {renderExpr e}"
         s!"(\{ {String.intercalate ", " fieldS} : {typeName} })"
+    | .anonCtor args proofTactic =>
+        let argsS := args.map renderExpr
+        let parts := argsS ++ [proofTactic]
+        s!"⟨{String.intercalate ", " parts}⟩"
+    | .indexProof arr idx proofTactic =>
+        s!"{renderExprAtom arr}[{renderExpr idx}]'({proofTactic})"
+    | .indexOpt arr idx =>
+        s!"{renderExprAtom arr}[{renderExpr idx}]?"
+    | .dite_ binderName cond thn els =>
+        s!"if {binderName} : {renderExpr cond} then {renderExpr thn} else {renderExpr els}"
 
   partial def renderExprAtom : LExpr → String
     | .var n      => n
@@ -200,7 +228,10 @@ partial def renderDecl : LDecl → String
       let paramsLine :=
         if paramsS.isEmpty then "" else " " ++ String.intercalate " " paramsS
       let keyword := if isPartial then "partial def" else "def"
-      s!"{keyword} {name}{tpsS}{paramsLine} : {renderType retTy} :=\n{indent (renderExpr body)}"
+      let retAnnot := match retTy with
+        | .inferred => ""
+        | other => s!" : {renderType other}"
+      s!"{keyword} {name}{tpsS}{paramsLine}{retAnnot} :=\n{indent (renderExpr body)}"
   | .struct name tps fields =>
       let tpsS       := renderTypeParams tps
       let fieldLines := fields.map fun (n, t) => s!"{n} : {renderType t}"

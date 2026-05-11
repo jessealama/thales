@@ -1,6 +1,7 @@
 import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Context
 import Thales.TypeCheck.Generic
+import Thales.TypeCheck.IndexBounds
 import Thales.Emit.LeanSyntax
 import Std.Data.HashMap
 
@@ -19,6 +20,14 @@ structure EmitEnv where
   retTy         : Option TSType := none
   throwTypes    : List String := []
   funcThrowsEnv : Std.HashMap String (List String) := {}
+  -- Function name → declared parameter types. Used at call sites to coerce
+  -- numeric literal arguments into refinement-typed slots.
+  funcParamTypes : Std.HashMap String (List TSType) := {}
+  -- In-scope `(idxVar, arrayName, hypothesisName)` triples carrying the
+  -- `i.toNat < arr.size` proof bound by an enclosing `dite`.
+  boundsProofs  : List (String × String × String) := []
+  -- Counter for fresh `dite` binder names (`h0`, `h1`, …).
+  diteBinderCounter : Nat := 0
 
 /-- Resolve a TSType through one level of type-alias references. -/
 private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
@@ -29,15 +38,17 @@ private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
   | .paren inner => resolveTypeAlias env inner
   | other => other
 
+/-- Strip nested `paren` wrappers. -/
+private partial def stripParen : TSType → TSType
+  | .paren inner => stripParen inner
+  | other => other
+
 /-- If every branch of a union shares one underlying primitive (all string
     literals, or all numeric literals, or all boolean literals), return that
     primitive. Used to lower `1 | 2 | 3` to `Float`, `"a" | "b"` to `String`,
     etc. — the constraint is lost on the Lean side, but the resulting type
     is what value-level returns can elaborate against. -/
 private def commonLiteralPrimitive (branches : List TSType) : Option LType :=
-  let rec stripParen : TSType → TSType
-    | .paren t => stripParen t
-    | t => t
   -- Use a tag string to compare branch primitives without needing BEq LType.
   let tag : TSType → Option String := fun t => match stripParen t with
     | .stringLit _ => some "String"
@@ -61,6 +72,8 @@ partial def emitType : TSType → LType
   | .stringLit _ => .const "String"
   | .numberLit _ => .const "Float"
   | .booleanLit _ => .const "Bool"
+  -- Refinement subtypes of number map to their Lean Subtype abbreviations.
+  | .refinement k => .const k.name
   | .array elem => .app "Array" [emitType elem]
   | .tuple elems =>
     match elems with
@@ -322,22 +335,18 @@ private def nullCheckVar : Expression → Option String
 /-- If `targetTy` resolves through `aliasEnv` to a same-primitive literal
     union and `expr` is a literal whose value matches one of the union's
     branches, return the LExpr that elaborates against the inductive
-    (i.e. `.matched-ctor`). Returns `none` to mean "fall through to the
-    normal `emitExpr` path". -/
+    (i.e. `.matched-ctor`). Returns `none` to fall through to the normal
+    expression path. -/
 private def emitLiteralAsCtor
     (aliasEnv : Std.HashMap String TSType) (targetTy : Option TSType)
     (expr : Expression) : Option LExpr := do
   let ty ← targetTy
-  -- Strip parens, then expect a bare alias reference.
-  let stripParenTy : TSType → TSType := fun
-    | .paren inner => inner
-    | other => other
-  let aliasName ← match stripParenTy ty with
+  let aliasName ← match stripParen ty with
     | .ref n [] => some n
     | _ => none
   -- Expect the alias body to be a same-primitive literal union.
   let aliasBody ← aliasEnv[aliasName]?
-  let branches ← match stripParenTy aliasBody with
+  let branches ← match stripParen aliasBody with
     | .union bs => some bs
     | _ => none
   guard ((commonLiteralPrimitive branches).isSome)
@@ -355,15 +364,64 @@ private def emitLiteralAsCtor
     if b == lit then literalCtorText b else none
   some (.ctor s!"«{matchedText}»" [])
 
+/-- Rewrite `.ref "Integer" []` / `"Natural"` / etc. to the `.refinement`
+    form. The emit only sees `typeAliasDecl` for in-file aliases, so prelude
+    refinement names are matched directly. -/
+private def normalizeRefinementRef (ty : TSType) : TSType :=
+  match ty with
+  | .ref name [] =>
+      match RefinementKind.ofTypeName? name with
+      | some k => .refinement k
+      | none => ty
+  | _ => ty
+
+/-- Resolve a target type to a refinement kind, following one level of
+    type-alias indirection through `aliasEnv`. Used to detect refinement
+    targets like `Byte` (a TS alias tagged `.refinement` by the type-checker
+    via the prelude shim). -/
+private partial def resolveRefinementTarget
+    (aliasEnv : Std.HashMap String TSType) : TSType → Option RefinementKind
+  | .refinement k => some k
+  | .paren inner => resolveRefinementTarget aliasEnv inner
+  | .ref name [] =>
+      match RefinementKind.ofTypeName? name with
+      | some k => some k
+      | none =>
+          match aliasEnv[name]? with
+          | some inner => resolveRefinementTarget aliasEnv (stripParen inner)
+          | none => none
+  | _ => none
+
+/-- If the target type resolves to a refinement and the expression is a
+    numeric literal, emit `⟨lit, by native_decide⟩`. Out-of-range literals
+    are rejected upstream by TH0080. -/
+private def emitRefinementLiteral
+    (aliasEnv : Std.HashMap String TSType) (targetTy : Option TSType)
+    (expr : Expression) : Option LExpr := do
+  let ty ← targetTy
+  let _ ← resolveRefinementTarget aliasEnv ty
+  -- Recognize a numeric literal (or its negation).
+  let litExpr : Option LExpr := match expr with
+    | .literal _ (.number n) _ => some (.float n)
+    | .unaryExpr _ .neg _ (.literal _ (.number n) _) => some (.float (-n))
+    | _ => none
+  let v ← litExpr
+  some (.anonCtor [v] "by native_decide")
+
 /-- Wrap a return expression in `.some` when the expected return type is `Option T`.
-    If the expression is already `.none` (null literal), leave it as-is.
-    If the expression is a value, wrap in `.some`. -/
+    If the expression is already `.none` (null literal) or refers to the bare
+    `undefined` identifier, leave it as `.none`. Optional-typed accessors
+    (`arr[k]?`, `Thales.TS.Array.get?`) already produce `Option T` and are
+    passed through. Otherwise wrap in `.some`. -/
 private def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
   match retTy with
   | some (.option _) =>
     match e with
-    | .ctor "none" [] => e  -- null → keep as .none
-    | other => .ctor "some" [other]  -- value → wrap in .some
+    | .ctor "none" [] => e
+    | .var "undefined" => .ctor "none" []
+    | .indexOpt _ _ => e
+    | .app (.var "Thales.TS.Array.get?") _ => e
+    | other => .ctor "some" [other]
   | _ => e
 
 /-- Right-associative `LType.sum` chain over the throws list:
@@ -395,11 +453,98 @@ private def buildExceptRetTy (throwTypes : List String) (retTy : LType) : LType 
   | none => retTy
   | some errTy => .app "Except" [errTy, retTy]
 
+/-- True when an arithmetic binary operator wants its operands as plain `Float`
+    (so refinement-typed identifiers need an explicit `.val` projection). The
+    relational operators are listed too — `i < xs.length` after `xs.length`
+    became `Natural` would otherwise hit a missing `LT Float Natural`. -/
+private def arithBinaryOp : BinaryOperator → Bool
+  | .add | .sub | .mul | .div | .mod | .exp
+  | .lt | .leq | .gt | .geq
+  | .bitor | .bitxor | .bitand | .shl | .shr | .ushr => true
+  | _ => false
+
+/-- True when the named binding holds a refinement-typed value, so an
+    `.identifier` expression referring to it should be projected via
+    `.val` in arithmetic contexts. -/
+private def isRefinementBinding (env : EmitEnv) (name : String) : Bool :=
+  match env.bindingEnv.get? name with
+  | some (.refinement _) => true
+  | some (.ref tyName []) =>
+      (RefinementKind.ofTypeName? tyName).isSome ||
+      (match env.aliasEnv[tyName]? with
+       | some inner => match stripParen inner with
+           | .refinement _ => true
+           | _ => false
+       | none => false)
+  | _ => false
+
+/-- Project `.val` off an identifier if it refers to a refinement-typed
+    binding; otherwise return the expression unchanged. Used to lower
+    arithmetic on refinement operands to the underlying `Float`. -/
+private def coerceToFloat (env : EmitEnv) (e : Expression) (rendered : LExpr) : LExpr :=
+  match e with
+  | .identifier _ name =>
+      if isRefinementBinding env name then .proj rendered "val" else rendered
+  | _ => rendered
+
+/-- Recognize an `arr.length` expression. -/
+private def isLengthMember : Expression → Option String
+  | .memberExpr _ (.identifier _ arr) (.identifier _ "length") false _ => some arr
+  | _ => none
+
+/-- Bounds-condition shape recognized for `dite` rewriting and for collecting
+    in-scope bounds facts: `i < xs.length` (or its mirror), `xs.length > 0`
+    (or its mirror), or anything else. -/
+inductive BoundsCondKind where
+  | indexBound (idxVar : String) (arrName : String)
+  | lengthPos (arrName : String)
+  | other
+
+/-- Classify a single binary-expr bounds-condition. -/
+private def classifyBoundsCond (env : EmitEnv) : Expression → BoundsCondKind
+  | .binaryExpr _ .lt (.identifier _ idxVar) right =>
+      match isLengthMember right with
+      | some arr =>
+          if isRefinementBinding env idxVar then .indexBound idxVar arr else .other
+      | none => .other
+  | .binaryExpr _ .gt left (.identifier _ idxVar) =>
+      match isLengthMember left with
+      | some arr =>
+          if isRefinementBinding env idxVar then .indexBound idxVar arr else .other
+      | none => .other
+  | .binaryExpr _ .gt left (.literal _ (.number n) _) =>
+      if n == 0.0 then (isLengthMember left).elim .other .lengthPos else .other
+  | .binaryExpr _ .lt (.literal _ (.number n) _) right =>
+      if n == 0.0 then (isLengthMember right).elim .other .lengthPos else .other
+  | _ => .other
+
+/-- Walk a logical conjunction and gather every in-bounds fact it carries. -/
+private partial def collectCondBounds (env : EmitEnv) :
+    Expression → List (String × String)
+  | .logicalExpr _ .«and» l r => collectCondBounds env l ++ collectCondBounds env r
+  | other =>
+      match classifyBoundsCond env other with
+      | .indexBound i a => [(i, a)]
+      | _ => []
+
+/-- Detect a prelude refinement predicate call (`isInteger(x)` etc., or
+    `Number.isSafeInteger(x)` aliased to `isInteger`). Returns the var name
+    being narrowed and the resulting kind. -/
+private def detectRefinementPredicate : Expression → Option (String × RefinementKind)
+  | .callExpr _ (.identifier _ name) [.identifier _ v] _ =>
+      (RefinementKind.ofPredicate? name).map (v, ·)
+  | .callExpr _ (.memberExpr _ (.identifier _ "Number") (.identifier _ "isSafeInteger") false _)
+              [.identifier _ v] _ =>
+      some (v, .integer)
+  | _ => none
+
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
-    emit `.var "(unsupported expr)"`; SubsetCheck rejects them upstream. -/
-partial def emitExpr : Expression → LExpr
+    emit `.var "(unsupported expr)"`; SubsetCheck rejects them upstream.
+    `env` carries the binding-type table so refinement-typed identifiers
+    can be `.val`-projected when used in arithmetic. -/
+partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   -- Literals
   | .literal _ (.number n) _ => .float n
   | .literal _ (.bigint n) _ => .int n
@@ -444,41 +589,147 @@ partial def emitExpr : Expression → LExpr
       .proj (.var varName) "isSome"
   | .binaryExpr _ .neq (.identifier _ "undefined") (.identifier _ varName) =>
       .proj (.var varName) "isSome"
-  -- General binary expressions
+  -- For arithmetic/relational ops, project `.val` off refinement operands.
   | .binaryExpr _ op left right =>
-      .binOp (binaryOpStr op) (emitExpr left) (emitExpr right)
+      let lExpr := emitExprEnv env left
+      let rExpr := emitExprEnv env right
+      if arithBinaryOp op then
+        .binOp (binaryOpStr op) (coerceToFloat env left lExpr) (coerceToFloat env right rExpr)
+      else
+        .binOp (binaryOpStr op) lExpr rExpr
   -- Logical expressions
   | .logicalExpr _ .«and» left right =>
-      .binOp "&&" (emitExpr left) (emitExpr right)
+      .binOp "&&" (emitExprEnv env left) (emitExprEnv env right)
   | .logicalExpr _ .«or» left right =>
-      .binOp "||" (emitExpr left) (emitExpr right)
+      .binOp "||" (emitExprEnv env left) (emitExprEnv env right)
   -- Nullish coalescing `x ?? y` → `x.getD y`
   | .logicalExpr _ .nullishCoalesce left right =>
-      .app (.proj (emitExpr left) "getD") [emitExpr right]
+      .app (.proj (emitExprEnv env left) "getD") [emitExprEnv env right]
   -- Unary expressions
-  | .unaryExpr _ .neg _ arg => .app (.var "Neg.neg") [emitExpr arg]
-  | .unaryExpr _ .pos _ arg => emitExpr arg   -- unary + is identity in numeric context
-  | .unaryExpr _ .not _ arg => .app (.var "not") [emitExpr arg]
-  | .unaryExpr _ .bitnot _ arg => .app (.var "Complement.complement") [emitExpr arg]
+  | .unaryExpr _ .neg _ arg =>
+      let r := emitExprEnv env arg
+      .app (.var "Neg.neg") [coerceToFloat env arg r]
+  | .unaryExpr _ .pos _ arg => emitExprEnv env arg
+  | .unaryExpr _ .not _ arg => .app (.var "not") [emitExprEnv env arg]
+  | .unaryExpr _ .bitnot _ arg => .app (.var "Complement.complement") [emitExprEnv env arg]
   | .unaryExpr _ _ _ _ => .var "(unsupported: unary op)"
   -- Update (++/--): SubsetCheck rejects; placeholder
   | .updateExpr _ _ _ _ => .var "(unsupported: update expr)"
   -- Conditional (ternary)
   | .conditionalExpr _ cond thn els =>
-      .ite (emitExpr cond) (emitExpr thn) (emitExpr els)
-  -- Call expression
+      .ite (emitExprEnv env cond) (emitExprEnv env thn) (emitExprEnv env els)
+  -- Call expression. Numeric-literal args matching refinement-typed
+  -- parameters get wrapped in Subtype constructors; `Math.abs(integer)`
+  -- dispatches to `Math.absI` so the result is `Natural`.
   | .callExpr _ callee args _ =>
-      .app (emitExpr callee) (args.map emitExpr)
-  -- Member expression
+      match callee, args with
+      | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _, [arg] =>
+          let argRendered := emitExprEnv env arg
+          let isInt : Bool := match arg with
+            | .identifier _ n => isRefinementBinding env n
+            | _ => false
+          if isInt then
+            .app (.var "Math.absI") [argRendered]
+          else
+            .app (.var "Math.abs") [argRendered]
+      | _, _ =>
+      let calleeFnName : Option String := match callee with
+        | .identifier _ name => some name
+        | _ => none
+      let paramTys : List (Option TSType) := match calleeFnName with
+        | some n => match env.funcParamTypes.get? n with
+            | some tys => tys.map some ++ List.replicate (args.length - tys.length) none
+            | none => List.replicate args.length none
+        | none => List.replicate args.length none
+      let coerceArg : Expression → Option TSType → LExpr := fun a tyOpt =>
+        let raw := emitExprEnv env a
+        match tyOpt with
+        | some ty =>
+            ((emitRefinementLiteral env.aliasEnv (some ty) a)
+              <|> (emitLiteralAsCtor env.aliasEnv (some ty) a))
+              |>.getD raw
+        | none => raw
+      let coercedArgs : List LExpr := List.zipWith coerceArg args paramTys
+      .app (emitExprEnv env callee) coercedArgs
+  -- JS Number/Math static methods → Lean Float helpers.
+  | .memberExpr _ (.identifier _ "Number") (.identifier _ "isSafeInteger") false _ =>
+      .var "Float.isSafeInteger"
+  | .memberExpr _ (.identifier _ "Number") (.identifier _ "isInteger") false _ =>
+      .var "Float.isInteger"
+  | .memberExpr _ (.identifier _ "Number") (.identifier _ "isNaN") false _ =>
+      .var "isNaN"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _ =>
+      .var "Math.abs"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "floor") false _ =>
+      .var "Math.floor"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "ceil") false _ =>
+      .var "Math.ceil"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "round") false _ =>
+      .var "Math.round"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "sqrt") false _ =>
+      .var "Math.sqrt"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "min") false _ =>
+      .var "Math.min"
+  | .memberExpr _ (.identifier _ "Math") (.identifier _ "max") false _ =>
+      .var "Math.max"
+  -- `arr.length` / `s.length` lower to a `Natural` (via `toNaturalSize` /
+  -- `toNaturalLength`). `emitCondForDite` bypasses this for `dite` conds.
+  | .memberExpr _ (.identifier _ arrName) (.identifier _ "length") false _ =>
+      match env.bindingEnv.get? arrName with
+      | some (.array _) | some (.tuple _) =>
+          .app (.var "Array.toNaturalSize") [.var arrName]
+      | some (.string) =>
+          .app (.var "String.toNaturalLength") [.var arrName]
+      | _ =>
+          -- Unknown binding: best-effort `s.length.toFloat`.
+          .proj (.proj (.var arrName) "length") "toFloat"
   | .memberExpr _ obj (.identifier _ propName) false _ =>
-      .proj (emitExpr obj) propName
+      .proj (emitExprEnv env obj) propName
   | .memberExpr _ obj idx true _ =>
-      .app (.var "Thales.TS.Array.get?") [emitExpr obj, emitExpr idx]
+      let kind := IndexBounds.classify obj idx env.bindingEnv
+                    (env.boundsProofs.map fun (idxV, arrN, _) =>
+                      { indexVar := idxV, arrayName := arrN : IndexBounds.BoundsFact })
+      let arrExpr := emitExprEnv env obj
+      -- Coerce the index to `Nat` for Lean's `Array` indexing typeclass.
+      let idxAsNat : LExpr := match idx with
+        | .literal _ (.number n) _ =>
+            if n ≥ 0.0 && n == n.floor then .nat n.toUInt32.toNat
+            else emitExprEnv env idx
+        | .identifier _ name =>
+            if isRefinementBinding env name then .proj (.var name) "toNat"
+            else
+              .proj (.proj (.var name) "toUInt64") "toNat"
+        | _ => .proj (.proj (emitExprEnv env idx) "toUInt64") "toNat"
+      match kind with
+      | .byDecide =>
+          .indexProof arrExpr idxAsNat "by native_decide"
+      | .byHypothesis =>
+          match idx, obj with
+          | .identifier _ idxName, .identifier _ arrName =>
+              let proofName : Option String := env.boundsProofs.findSome? fun (iv, an, hn) =>
+                if iv == idxName && an == arrName then some hn else none
+              match proofName with
+              | some h => .indexProof arrExpr idxAsNat h
+              | none => .indexOpt arrExpr idxAsNat
+          | _, _ => .indexOpt arrExpr idxAsNat
+      | .unknown =>
+          -- Length-positive specialization: a preceding `if (xs.length > 0)`
+          -- registers a `("__zero", xs, h)` proof that discharges `xs[0]`.
+          match idx, obj with
+          | .literal _ (.number n) _, .identifier _ arrName =>
+              if n == 0.0 then
+                let proofName : Option String := env.boundsProofs.findSome? fun (iv, an, hn) =>
+                  if iv == "__zero" && an == arrName then some hn else none
+                match proofName with
+                | some h => .indexProof arrExpr idxAsNat h
+                | none => .indexOpt arrExpr idxAsNat
+              else .indexOpt arrExpr idxAsNat
+          | _, _ => .indexOpt arrExpr idxAsNat
   | .memberExpr _ obj _ _ _ =>
-      .proj (emitExpr obj) "(unknown)"
+      .proj (emitExprEnv env obj) "(unknown)"
   -- Array expression: emit as List.toArray applied to nested cons/nil
   | .arrayExpr _ elements =>
-      let exprs := elements.filterMap id |>.map emitExpr
+      let exprs := elements.filterMap id |>.map (emitExprEnv env)
       .app (.var "List.toArray") [mkListLit exprs]
   -- Arrow function expression
   | .arrowFunctionExpr _ params body _ async _ =>
@@ -490,8 +741,8 @@ partial def emitExpr : Expression → LExpr
           | .rest id => some (id.name, none)
           | .pattern _ => none
         let bodyExpr := match body with
-          | .inl e     => emitExpr e
-          | .inr stmt  => emitBody [stmt]
+          | .inl e     => emitExprEnv env e
+          | .inr stmt  => emitBodyEnv env [stmt]
         .lam leanParams bodyExpr
   -- Assignment: SubsetCheck rejects; placeholder
   | .assignmentExpr _ _ _ _ => .var "(unsupported: assignment)"
@@ -515,30 +766,65 @@ partial def emitExpr : Expression → LExpr
       match discVal with
       | some ctor =>
           let otherFields := regularProps.filter fun (k, _) => k != "kind"
-          .ctor ctor (otherFields.map fun (_, v) => emitExpr v)
+          .ctor ctor (otherFields.map fun (_, v) => emitExprEnv env v)
       | none => .var "(unsupported expr)"
   -- Everything else
   | _ => .var "(unsupported expr)"
 
-/-- Emit a list of variable declarators as nested `let` bindings. -/
-partial def emitVarDecl (decls : List VariableDeclarator) (body : LExpr) : LExpr :=
+/-- Emit a condition for `dite`, rewriting bounds shapes to `Nat`-typed
+    counterparts (`i < xs.length` → `i.toNat < xs.size`; `xs.length > 0`
+    → `0 < xs.size`). -/
+partial def emitCondForDite (env : EmitEnv) (cond : Expression) : LExpr :=
+  match classifyBoundsCond env cond with
+  | .indexBound idxVar arr =>
+      .binOp "<" (.proj (.var idxVar) "toNat") (.proj (.var arr) "size")
+  | .lengthPos arr =>
+      .binOp "<" (.nat 0) (.proj (.var arr) "size")
+  | .other => emitExprEnv env cond
+
+/-- Emit declarators as nested `let` bindings. Refinement-targeted literal
+    initializers get a Subtype constructor; new bindings extend `env`. -/
+partial def emitVarDecl (env : EmitEnv)
+    (decls : List VariableDeclarator) (body : EmitEnv → LExpr) : LExpr :=
   match decls with
-  | [] => body
+  | [] => body env
   | d :: rest =>
       match d with
       | .mk _ (.identifier id) init typeAnnotation =>
           let ty := typeAnnotation.map emitType
+          let targetTy : Option TSType := typeAnnotation
           let initExpr := match init with
-            | some e => emitExpr e
+            | some e =>
+                ((emitRefinementLiteral env.aliasEnv targetTy e)
+                  <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
+                  |>.getD (emitExprEnv env e)
             | none   => .var "()"
-          .letE id.name ty initExpr (emitVarDecl rest body)
-      | _ => emitVarDecl rest body  -- destructuring patterns skipped for v1
+          -- Synthesize a tuple binding for a literal-array initializer so
+          -- the index-bounds analyzer can see the length even without a
+          -- type annotation.
+          let inferredFromInit : Option TSType := match init with
+            | some (.arrayExpr _ elems) =>
+                some (.tuple (List.replicate elems.length .any))
+            | _ => none
+          let env' :=
+            match typeAnnotation with
+            | some t =>
+                { env with bindingEnv := env.bindingEnv.insert id.name (normalizeRefinementRef t) }
+            | none =>
+              match inferredFromInit with
+              | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
+              | none => env
+          .letE id.name ty initExpr (emitVarDecl env' rest body)
+      | _ => emitVarDecl env rest body  -- destructuring patterns skipped for v1
 
 /-- Emit a list of statements as a Lean expression. Handles var decls, `if`,
     block, expression, `return`, and `switch` on discriminated unions. -/
 partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
   | .returnStmt _ (some e) :: _ =>
-      let emitted := emitLiteralAsCtor env.aliasEnv env.retTy e |>.getD (emitExpr e)
+      let emitted :=
+        ((emitRefinementLiteral env.aliasEnv env.retTy e)
+          <|> (emitLiteralAsCtor env.aliasEnv env.retTy e))
+          |>.getD (emitExprEnv env e)
       let inner := wrapReturn env.retTy emitted
       if env.throwTypes.isEmpty then inner else .ctor "ok" [inner]
   | .returnStmt _ none :: _     => .var "()"
@@ -550,7 +836,7 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
         | [.mk _ (.identifier id) (some (callExpr@(.callExpr _ (.identifier _ calleeName) _ _))) _] =>
             match env.funcThrowsEnv.get? calleeName with
             | some calledThrows =>
-                let callLExpr := emitExpr callExpr
+                let callLExpr := emitExprEnv env callExpr
                 let okBodyExpr := emitBodyEnv env rest
                 let okArm : LPattern × LExpr := (.ctor "ok" [.var id.name], okBodyExpr)
                 let errVar := "e__prop__"
@@ -566,45 +852,57 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
                     | _ => .ctor "error" [.var errVar]
                 let errArm : LPattern × LExpr := (.ctor "error" [.var errVar], errExpr)
                 .match_ callLExpr [okArm, errArm]
-            | none => emitVarDecl decls (emitBodyEnv env rest)
-        | _ => emitVarDecl decls (emitBodyEnv env rest)
+            | none => emitVarDecl env decls (fun env' => emitBodyEnv env' rest)
+        | _ => emitVarDecl env decls (fun env' => emitBodyEnv env' rest)
       else
-        emitVarDecl decls (emitBodyEnv env rest)
+        emitVarDecl env decls (fun env' => emitBodyEnv env' rest)
   -- `if (x === null) thn else rest` with `x : Option T` becomes a match.
   | .ifStmt _ cond thn elsOpt :: rest =>
+      -- The else-continuation: shared by every emission shape (dite, ite, match).
+      let elsCont : LExpr := match elsOpt with
+        | some els => emitBodyEnv env (els :: rest)
+        | none => emitBodyEnv env rest
+      let plainIte : LExpr :=
+        .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) elsCont
+      let hName := s!"h{env.diteBinderCounter}"
+      -- `if (isInteger(x))` → `if h : isInteger x = true then let x : Integer := ⟨x, h⟩ in …`
+      match detectRefinementPredicate cond with
+      | some (varName, kind) =>
+          let condExpr : LExpr :=
+            .binOp "=" (.app (.var kind.predicate) [.var varName]) (.bool true)
+          let env' : EmitEnv :=
+            { env with
+                bindingEnv := env.bindingEnv.insert varName (.refinement kind),
+                diteBinderCounter := env.diteBinderCounter + 1 }
+          let shadowed : LExpr :=
+            .letE varName (some (.const kind.name))
+              (.anonCtor [.var varName] hName) (emitBodyEnv env' (thn :: rest))
+          .dite_ hName condExpr shadowed elsCont
+      | none =>
+      -- Bounds-fact dite rewrite. When the cond is `i < xs.length`,
+      -- `xs.length > i`, or `xs.length > 0`, emit `if h : <Nat-cond> then …`
+      -- and stash the proof in `env.boundsProofs` for the indexing emit.
+      let boundsFacts := collectCondBounds env cond
+      let mkBoundsDite (idxVar arrName : String) : LExpr :=
+        let env' : EmitEnv :=
+          { env with
+              boundsProofs := (idxVar, arrName, hName) :: env.boundsProofs,
+              diteBinderCounter := env.diteBinderCounter + 1 }
+        .dite_ hName (emitCondForDite env cond) (emitBodyEnv env' (thn :: rest)) elsCont
+      match boundsFacts, classifyBoundsCond env cond with
+      | [(idxVar, arrName)], _ => mkBoundsDite idxVar arrName
+      -- A standalone `xs.length > 0` (synthetic indexVar `__zero`).
+      | [], .lengthPos arrName => mkBoundsDite "__zero" arrName
+      | _, _ =>
       match nullCheckVar cond with
       | some varName =>
           match env.bindingEnv.get? varName with
-          | some (.option _) | some (.union _) =>
-              let isOption := match env.bindingEnv.get? varName with
-                | some (.option _) => true
-                | _ => false
-              if isOption then
-                let noneArm := (LPattern.ctor "none" [], emitBodyEnv env [thn])
-                let someVarBody := match elsOpt with
-                  | some els => emitBodyEnv env (els :: rest)
-                  | none => emitBodyEnv env rest
-                let someArm := (LPattern.ctor "some" [.var varName], someVarBody)
-                .match_ (.var varName) [noneArm, someArm]
-              else
-                match elsOpt with
-                | some els =>
-                  .ite (emitExpr cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env (els :: rest))
-                | none =>
-                  .ite (emitExpr cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env rest)
-          | _ =>
-              match elsOpt with
-              | some els =>
-                .ite (emitExpr cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env (els :: rest))
-              | none =>
-                .ite (emitExpr cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env rest)
-      | none =>
-          match elsOpt with
-          | some els =>
-            .ite (emitExpr cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env (els :: rest))
-          | none =>
-            -- No else: else-branch is the continuation, encoding the early-return pattern.
-            .ite (emitExpr cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env rest)
+          | some (.option _) =>
+              let noneArm := (LPattern.ctor "none" [], emitBodyEnv env [thn])
+              let someArm := (LPattern.ctor "some" [.var varName], elsCont)
+              .match_ (.var varName) [noneArm, someArm]
+          | _ => plainIte
+      | none => plainIte
   | .blockStmt _ inner :: rest => emitBodyEnv env (inner ++ rest)
   | .exprStmt _ _ :: rest      => emitBodyEnv env rest
   | .switchStmt _ discriminant cases :: rest =>
@@ -650,10 +948,10 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
         -- Fully-qualified `Thales.TS.E.mk msg` to avoid ambiguity inside `Except`.
         let errorVal : LExpr := match arg with
           | .newExpr _ (.identifier _ name) [msgArg] =>
-              .app (.var s!"Thales.TS.{name}.mk") [emitExpr msgArg]
+              .app (.var s!"Thales.TS.{name}.mk") [emitExprEnv env msgArg]
           | .newExpr _ (.identifier _ name) [] =>
               .var s!"(Thales.TS.{name}.mk \"\")"
-          | other => emitExpr other
+          | other => emitExprEnv env other
         let n := env.throwTypes.length
         let injected := buildInjection n idx errorVal
         .ctor "error" [injected]
@@ -676,7 +974,7 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
           | .callExpr _ (.identifier _ fname) _ _ =>
               match env.funcThrowsEnv.get? fname with
               | some _calledThrows =>
-                  let callLExpr := emitExpr callExpr
+                  let callLExpr := emitExprEnv env callExpr
                   let okVar := "v__"
                   let okResult : LExpr :=
                     if env.throwTypes.isEmpty
@@ -692,7 +990,7 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
           | .callExpr _ (.identifier _ fname) _ _ =>
               match env.funcThrowsEnv.get? fname with
               | some _calledThrows =>
-                  let callLExpr := emitExpr callExpr
+                  let callLExpr := emitExprEnv env callExpr
                   let okBodyExpr := emitBodyEnv env (moreStmts ++ outerRest)
                   let okArm : LPattern × LExpr := (.ctor "ok" [.var id.name], okBodyExpr)
                   let errArm : LPattern × LExpr := (.ctor "error" [.var catchVar], catchBodyExpr)
@@ -727,13 +1025,16 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     (params : List (String × TSType)) (retTy : TSType)
     (body : Statement) (throws : List String := [])
     (funcThrowsEnv : Std.HashMap String (List String) := {})
+    (funcParamTypes : Std.HashMap String (List TSType) := {})
     (total : Bool := false) : Option LDecl :=
   let normalizedRetTy := normalizeForEmit retTy
   let normalizedParams := params.map fun (n, t) => (n, normalizeForEmit t)
+  -- Bare `Integer`/`Natural`/`Byte`/`Bit` are rewritten to `.refinement`
+  -- so the index-bounds analyzer recognizes them.
   let bindingEnv : Std.HashMap String TSType :=
-    normalizedParams.foldl (fun m (n, t) => m.insert n t) {}
+    normalizedParams.foldl (fun m (n, t) => m.insert n (normalizeRefinementRef t)) {}
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
-                         throwTypes := throws, funcThrowsEnv }
+                         throwTypes := throws, funcThrowsEnv, funcParamTypes }
   let bodyExpr := match body with
     | .blockStmt _ stmts => emitBodyEnv env stmts
     | other              => emitBodyEnv env [other]
@@ -788,15 +1089,19 @@ private def collectImports (body : List TSStatement) : List String :=
         else none
     | _ => none
 
-/-- Build a map from function name → throws list from annotated function declarations. -/
-private def buildFuncThrowsEnv (body : List TSStatement) : Std.HashMap String (List String) :=
-  body.foldl (fun env ts =>
+/-- Build per-function throws and parameter-types maps in a single pass. -/
+private def buildFuncEnvs (body : List TSStatement) :
+    Std.HashMap String (List String) × Std.HashMap String (List TSType) :=
+  body.foldl (fun (throws, params) ts =>
     match ts with
-    | .annotatedFuncDecl _ name _ _ _ _ _ _ throwsAnn _ =>
-        match throwsAnn with
-        | .declared (t :: ts') => env.insert name (t :: ts')
-        | .declared [] | .absent => env
-    | _ => env) {}
+    | .annotatedFuncDecl _ name _ ps _ _ _ _ throwsAnn _ =>
+        let throws' := match throwsAnn with
+          | .declared (t :: ts') => throws.insert name (t :: ts')
+          | .declared [] | .absent => throws
+        let paramTys := ps.map fun (_, annot, _, _) =>
+          match annot with | some a => a.type | none => TSType.any
+        (throws', params.insert name paramTys)
+    | _ => (throws, params)) ({}, {})
 
 /-- Build a `TypeContext` for the emit pass: registers each top-level type
     alias and the declared type of each annotated `const`/`let`/`var`. Used
@@ -829,8 +1134,22 @@ private def resolveAliases (body : List TSStatement) : Std.HashMap String TSType
 /-- Walk the program and produce a Lean module string. -/
 def emit (prog : TSProgram) (moduleName : String) : String :=
   let resolvedAliases := resolveAliases prog.body
-  let funcThrowsEnv := buildFuncThrowsEnv prog.body
+  let (funcThrowsEnv, funcParamTypes) := buildFuncEnvs prog.body
   let tsImports := collectImports prog.body
+  -- Top-level binding env: annotated decls record their type so refinement
+  -- operands get `.val`-projected; unannotated literal-array decls get a
+  -- synthetic tuple binding so the index-bounds analyzer sees their length.
+  let topBindingEnv : Std.HashMap String TSType := prog.body.foldl (fun acc ts =>
+    match ts with
+    | .annotatedVarDecl _ _ name (some typeAnn) _ =>
+        acc.insert name (normalizeRefinementRef typeAnn.type)
+    | .annotatedVarDecl _ _ name none (some (.arrayExpr _ elems)) =>
+        acc.insert name (.tuple (List.replicate elems.length .any))
+    | .annotatedVarDecl _ _ name none (some (.literal _ (.string _) _)) =>
+        acc.insert name .string
+    | _ => acc) {}
+  let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
+                            funcThrowsEnv, funcParamTypes }
   let optToList : Option LDecl → List LDecl := fun
     | some d => [d]
     | none => []
@@ -849,7 +1168,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
         let throws : List String := match throwsAnn with
           | .declared ts => ts
           | .absent      => []
-        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv total)
+        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total)
     | .annotatedVarDecl _ _kind name typeAnn (some init) =>
         match init with
         | .arrowFunctionExpr _ arrowParams body _isExpr async arrowRetAnn =>
@@ -860,16 +1179,53 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
               let (simpleParams, retTy) := arrowFuncParts arrowParams effectiveAnn
               optToList (emitFuncDecl resolvedAliases name [] simpleParams retTy (match body with
                 | .inl e  => .blockStmt {} [.returnStmt {} (some e)]
-                | .inr s  => s) [] funcThrowsEnv)
+                | .inr s  => s) [] funcThrowsEnv funcParamTypes)
         | other =>
-            -- Non-arrow const requires a type annotation; without it the Lean type is unknown.
-            optToList (typeAnn.map fun ann =>
-              let initExpr :=
-                emitLiteralAsCtor resolvedAliases (some ann.type) other
-                  |>.getD (emitExpr other)
-              .def_ name [] [] (emitType ann.type) initExpr)
+            -- Non-arrow const: prefer the user's annotation when present.
+            -- Otherwise, attempt to infer a Lean type from the initializer
+            -- shape (e.g. `[10, 20, 30]` → `Array Float`). Without a usable
+            -- type, the decl is silently skipped (the type-checker will have
+            -- diagnosed the use-site already).
+            match typeAnn with
+            | some ann =>
+                let initExpr :=
+                  (emitRefinementLiteral resolvedAliases (some ann.type) other)
+                    <|> (emitLiteralAsCtor resolvedAliases (some ann.type) other)
+                    |>.getD (emitExprEnv topEnv other)
+                [.def_ name [] [] (emitType ann.type) initExpr]
+            | none =>
+                -- Unannotated `const x = init`: emit `def x := init` and
+                -- let Lean infer the type. Skip when the initializer is
+                -- something we don't yet know how to lower (a placeholder
+                -- `(unsupported expr)` would not elaborate).
+                let initExpr := emitExprEnv topEnv other
+                [.def_ name [] [] .inferred initExpr]
+    -- Bare top-level call (`asBit(2);`, `f();`, …) lowers to `#eval`.
+    -- Throwing prelude constructors use their IO-effect mirror so a
+    -- runtime failure exits non-zero, matching tsx's RangeError.
+    | .js (.exprStmt _ (call@(.callExpr _ (.identifier _ fname) callArgs _))) =>
+        -- `asInteger`/`asNatural`/`asByte`/`asBit` → `…Effect` IO mirror.
+        let asEffectName : Option String :=
+          RefinementKind.all.findSome? fun k =>
+            if fname == s!"as{k.name}" then some s!"{fname}Effect" else none
+        match asEffectName with
+        | some effFn =>
+            let leanArgs := callArgs.map (emitExprEnv topEnv)
+            [.eval_ (.app (.var effFn) leanArgs)]
+        | none =>
+        match funcThrowsEnv.get? fname with
+        | some _ =>
+            let callLExpr := emitExprEnv topEnv call
+            let okArm : LPattern × LExpr := (.ctor "ok" [.wildcard], .app (.var "pure") [.var "()"])
+            let errArm : LPattern × LExpr := (.ctor "error" [.wildcard],
+              .app (.var "panic!") [.str s!"throw from {fname}"])
+            [.eval_ (.match_ callLExpr [okArm, errArm])]
+        | none =>
+            [.eval_ (emitExprEnv topEnv call)]
     -- Top-level `console.log(arg)` → `#eval consoleLog arg`. When `arg` is a
     -- call to a `@throws` function, match on the Except to extract the value.
+    -- Multi-arg `console.log(a, b, c)` lowers to `consoleLogN [show a, …]`
+    -- which prints space-separated values, matching JS behavior.
     | .js (.exprStmt _ (.callExpr _
         (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
         args _)) =>
@@ -878,7 +1234,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
             let calleeNameOpt : Option String := match arg with
               | .callExpr _ (.identifier _ fname) _ _ => funcThrowsEnv.get? fname |>.map (fun _ => fname)
               | _ => none
-            let argExpr := emitExpr arg
+            let argExpr := emitExprEnv topEnv arg
             match calleeNameOpt with
             | some _fname =>
                 let okArm : LPattern × LExpr := (.ctor "ok" [.var "v__"], .app (.var "consoleLog") [.var "v__"])
@@ -886,6 +1242,11 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
                 [.eval_ (.match_ argExpr [okArm, errArm])]
             | none =>
                 [.eval_ (.app (.var "consoleLog") [argExpr])]
+        | _ :: _ =>
+            -- Multi-arg console.log: render each via JSShow and intercalate spaces.
+            let argExprs := args.map (emitExprEnv topEnv)
+            let listLit := mkListLit (argExprs.map fun e => .app (.var "JSShow.jsShow") [e])
+            [.eval_ (.app (.var "consoleLogN") [listLit])]
         | _     => []
     -- Top-level `try { console.log(f(args)) } catch (e) { console.log(g) }`,
     -- where `f` is `@throws`, lowers to a `#eval match` over the Except result.
@@ -907,7 +1268,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
           | .exprStmt _ (.callExpr _
               (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
               [catchArg] _) =>
-              some (.app (.var "consoleLog") [emitExpr catchArg])
+              some (.app (.var "consoleLog") [emitExprEnv topEnv catchArg])
           | _ => none
         optToList <| tryStmts.findSome? fun s =>
           match s with
@@ -917,7 +1278,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
               match funcThrowsEnv.get? calleeName with
               | some _ =>
                   let callLExpr := match s with
-                    | .exprStmt _ (.callExpr _ _ [cArg] _) => emitExpr cArg
+                    | .exprStmt _ (.callExpr _ _ [cArg] _) => emitExprEnv topEnv cArg
                     | _ => .var "()"
                   let okArm : LPattern × LExpr :=
                     (.ctor "ok" [.var "v__"], .app (.var "consoleLog") [.var "v__"])

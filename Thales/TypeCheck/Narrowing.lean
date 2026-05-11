@@ -19,6 +19,10 @@ inductive Guard where
   | equalsUndefined (varName : String)
   | truthy (varName : String)
   | discriminant (varName : String) (propName : String) (value : String)
+  -- Refinement-type predicates: isInteger(x), isNatural(x), isByte(x),
+  -- isBit(x), and Number.isSafeInteger(x) (treated as isInteger). True branch
+  -- narrows the variable's type to the corresponding refinement.
+  | refinementTest (varName : String) (kind : RefinementKind)
   | not (guard : Guard)
   | and (left : Guard) (right : Guard)
   | or (left : Guard) (right : Guard)
@@ -76,6 +80,16 @@ def hasLiteralProperty (ty : TSType) (propName : String) (value : String) : Bool
 /-! ## Guard extraction -/
 
 partial def extractGuard : Expression → Option Guard
+  -- Prelude refinement predicates `isInteger(x)`/`isNatural(x)`/`isByte(x)`/
+  -- `isBit(x)` and `Number.isSafeInteger(x)` (treated as `isInteger`).
+  -- Only bare-identifier arguments are recognized.
+  | .callExpr _ (.identifier _ name) [.identifier _ varName] _ =>
+    match RefinementKind.ofPredicate? name with
+    | some kind => some (.refinementTest varName kind)
+    | none => none
+  | .callExpr _ (.memberExpr _ (.identifier _ "Number") (.identifier _ "isSafeInteger") false _)
+              [.identifier _ varName] _ =>
+    some (.refinementTest varName .integer)
   | .binaryExpr _ op left right =>
     match op with
     | .seq =>
@@ -170,6 +184,20 @@ mutual
 
 partial def narrowType (ty : TSType) (guard : Guard) : TSType :=
   match guard with
+  -- Refinement-type predicate: in the true branch, narrow `number` (and
+  -- supertypes) to the tested refinement. If the existing type is already a
+  -- refinement, narrow to the meet (the smaller-rank kind).
+  | .refinementTest _ kind =>
+    let refTy : TSType := .refinement kind
+    match ty with
+    | .number | .any | .unknown => refTy
+    | .refinement existing =>
+      -- Meet: pick the more-specific (higher-rank) refinement.
+      if existing.rank ≥ kind.rank then ty else refTy
+    | .union types => filterUnion types fun t => match t with
+        | .number | .refinement _ | .any | .unknown => true
+        | _ => false
+    | other => other  -- Don't change non-numeric types; predicate is vacuous.
   | .typeofEquals _ typeStr =>
     match ty with
     | .union types => filterUnion types (matchesTypeof · typeStr)
@@ -225,6 +253,9 @@ partial def narrowType (ty : TSType) (guard : Guard) : TSType :=
 
 partial def narrowTypeNeg (ty : TSType) (guard : Guard) : TSType :=
   match guard with
+  -- Negated refinement predicate: nothing useful to conclude — the value
+  -- could still be `number` or a different refinement, so leave it alone.
+  | .refinementTest _ _ => ty
   | .typeofEquals _ typeStr =>
     match ty with
     | .union types => filterUnion types (!matchesTypeof · typeStr)
@@ -275,6 +306,7 @@ end
 
 def guardVarNames : Guard → List String
   | .typeofEquals v _ | .instanceOf v _ | .equalsNull v | .equalsUndefined v | .truthy v | .discriminant v _ _ => [v]
+  | .refinementTest v _ => [v]
   | .not g => guardVarNames g
   | .and g1 g2 | .or g1 g2 => guardVarNames g1 ++ guardVarNames g2
 

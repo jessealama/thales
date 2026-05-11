@@ -40,7 +40,7 @@ def testDoWhileLoop : IO Unit := expectCFCode "do {} while (false);" 10
 def testThrow : IO Unit :=
   expectThrowsCode "function f(): number { throw new Error('x'); }" 60
 
--- try/catch behavior is tested via the examples harness (example 32);
+-- try/catch behavior is tested via the conformance harness (example 32);
 -- `finally` is out of scope for v1.0.
 
 def testAsyncFunction : IO Unit := expectCFCode "async function f() {}" 12

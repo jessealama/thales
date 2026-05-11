@@ -5,6 +5,76 @@
 
 namespace Thales.TypeCheck
 
+/-- Numeric refinement-type kinds, forming an inclusion chain in `number`:
+    `Bit ⊂ Byte ⊂ Natural ⊂ Integer ⊂ number`. Introduced via `@thales/prelude`. -/
+inductive RefinementKind where
+  | integer
+  | natural
+  | byte
+  | bit
+  deriving Repr, BEq, Inhabited
+
+/-- All refinement kinds, in chain order (most general first). -/
+def RefinementKind.all : List RefinementKind :=
+  [.integer, .natural, .byte, .bit]
+
+/-- The display name used in error messages and emit. -/
+def RefinementKind.name : RefinementKind → String
+  | .integer => "Integer"
+  | .natural => "Natural"
+  | .byte => "Byte"
+  | .bit => "Bit"
+
+/-- The prelude predicate name (`is{name}`). -/
+def RefinementKind.predicate (k : RefinementKind) : String :=
+  s!"is{k.name}"
+
+/-- Inverse of `name`: recognize a TS-side refinement type alias. -/
+def RefinementKind.ofTypeName? : String → Option RefinementKind
+  | "Integer" => some .integer
+  | "Natural" => some .natural
+  | "Byte" => some .byte
+  | "Bit" => some .bit
+  | _ => none
+
+/-- Inverse of `predicate`: recognize a prelude predicate name. -/
+def RefinementKind.ofPredicate? : String → Option RefinementKind
+  | "isInteger" => some .integer
+  | "isNatural" => some .natural
+  | "isByte" => some .byte
+  | "isBit" => some .bit
+  | _ => none
+
+/-- Chain rank: smaller is more specific. `Bit` (3) ⊂ `Byte` (2) ⊂ `Natural` (1) ⊂ `Integer` (0). -/
+def RefinementKind.rank : RefinementKind → Nat
+  | .integer => 0
+  | .natural => 1
+  | .byte => 2
+  | .bit => 3
+
+/-- `a ⊆ b` in the refinement chain (lower-or-equal-rank ⊆ higher-rank, i.e. more specific ⊆ less specific). -/
+def RefinementKind.le (a b : RefinementKind) : Bool :=
+  b.rank ≤ a.rank
+
+/-- Numeric range bounds for a refinement kind, as Floats.
+    `Integer/Natural` use the IEEE-safe-integer bound 2^53 − 1. -/
+def RefinementKind.bounds : RefinementKind → Option Float × Option Float
+  | .integer => (some (-9007199254740991.0), some 9007199254740991.0)
+  | .natural => (some 0.0, some 9007199254740991.0)
+  | .byte => (some 0.0, some 255.0)
+  | .bit => (some 0.0, some 1.0)
+
+/-- Whether a `Float` literal is in-range and integral for the given refinement.
+    `bit` requires the literal to be exactly 0 or 1; the others require an integer
+    in-range. -/
+def RefinementKind.literalInRange (k : RefinementKind) (lit : Float) : Bool :=
+  let isIntegral : Bool := lit == lit.floor
+  match k with
+  | .integer => isIntegral && lit ≥ -9007199254740991.0 && lit ≤ 9007199254740991.0
+  | .natural => isIntegral && lit ≥ 0.0 && lit ≤ 9007199254740991.0
+  | .byte => isIntegral && lit ≥ 0.0 && lit ≤ 255.0
+  | .bit => lit == 0.0 || lit == 1.0
+
 mutual
 
 /-- Core TypeScript type representation -/
@@ -21,6 +91,9 @@ inductive TSType where
   | never
   | unknown
   | any
+  -- Refinement types: structurally `number`, tagged with a chain kind.
+  -- See `RefinementKind` above and `Thales.TS.Runtime` for the runtime story.
+  | refinement (kind : RefinementKind)
   -- Literal types
   | stringLit (s : String)
   | numberLit (n : Float)
@@ -67,6 +140,7 @@ private partial def eqTSType (a b : TSType) : Bool :=
   | .bigint, .bigint | .symbol, .symbol | .void_, .void_
   | .undefined, .undefined | .null_, .null_ | .never, .never
   | .unknown, .unknown | .any, .any => true
+  | .refinement k1, .refinement k2 => k1 == k2
   | .stringLit s1, .stringLit s2 => s1 == s2
   | .numberLit n1, .numberLit n2 => n1 == n2
   | .booleanLit b1, .booleanLit b2 => b1 == b2

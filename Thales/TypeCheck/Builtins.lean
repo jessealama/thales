@@ -54,6 +54,7 @@ def builtinBindings : List (String × TSType) :=
     ("Number", .object [
       .property "isNaN" (fnType [("n", .any)] .boolean) false false,
       .property "isFinite" (fnType [("n", .any)] .boolean) false false,
+      .property "isSafeInteger" (fnType [("n", .any)] .boolean) false false,
       .property "parseInt" (fnType [("s", .string)] .number) false false,
       .property "parseFloat" (fnType [("s", .string)] .number) false false
     ]),
@@ -86,17 +87,35 @@ def builtinBindings : List (String × TSType) :=
     ("Infinity", .number)
   ]
 
+/-- The element type of an array-like type. `.array T` returns `T`;
+    tuples return the union of their element types; `.ref "Array" [T]`
+    returns `T`; everything else returns `.any` (only used as a fallback
+    for property lookup, which won't see those cases). -/
+private def arrayElementType (ty : TSType) : TSType :=
+  match ty with
+  | .array elem => elem
+  | .ref "Array" [elem] => elem
+  | .tuple [] => .any
+  | .tuple [single] => single
+  | .tuple es => .union es
+  | _ => .any
+
 /-- Look up a property on a built-in primitive type -/
 def builtinProperty (ty : TSType) (name : String) : Option TSType :=
   match ty with
   | .string | .stringLit _ => stringProperty name
   | .number | .numberLit _ => numberProperty name
   | .boolean | .booleanLit _ => booleanProperty name
+  | .refinement _ => numberProperty name
+  | .array _ | .ref "Array" _ => arrayProperty (arrayElementType ty) name
+  | .tuple _ => arrayProperty (arrayElementType ty) name
   | _ => none
 where
   stringProperty (name : String) : Option TSType :=
     match name with
-    | "length" => some .number
+    -- `string.length` is non-negative (and at most 2^53-1 on JS strings),
+    -- so we expose it as `Natural` to enable bounds-aware indexing.
+    | "length" => some (.refinement .natural)
     | "charAt" => some (fnType [("pos", .number)] .string)
     | "charCodeAt" => some (fnType [("index", .number)] .number)
     | "indexOf" => some (fnType [("searchString", .string)] .number)
@@ -136,6 +155,29 @@ where
     match name with
     | "toString" => some (fnType [] .string)
     | "valueOf" => some (fnType [] .boolean)
+    | _ => none
+  arrayProperty (elem : TSType) (name : String) : Option TSType :=
+    -- The iteration callbacks all share `(value: elem, index: Natural)`.
+    let valueIndexParams : List TSParamType :=
+      [.mk "value" elem false false,
+       .mk "index" (.refinement .natural) false false]
+    -- `length` is non-negative, so we expose it as `Natural` for the bounds
+    -- analyzer. Iteration return types (map/filter/reduce) stay conservative
+    -- until full element-type inference lands.
+    match name with
+    | "length" => some (.refinement .natural)
+    | "forEach" =>
+      some (fnType [("callback", .function valueIndexParams .void_)] .void_)
+    | "map" =>
+      some (fnType [("callback", .function valueIndexParams .any)] (.array .any))
+    | "filter" =>
+      some (fnType [("predicate", .function valueIndexParams .boolean)] (.array elem))
+    | "reduce" =>
+      some (fnType
+        [("callback", .function
+          (.mk "acc" .any false false :: valueIndexParams) .any),
+         ("init", .any)]
+        .any)
     | _ => none
 
 /-- Create the initial type context with built-in bindings -/
