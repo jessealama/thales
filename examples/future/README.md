@@ -36,13 +36,10 @@ workflow is:
   `prelude-edge-negative-zero.ts`, `prelude-signatures.ts` — use
   top-level `if` statements; the emitter currently only handles
   top-level declarations and bare expressions.
-- `0081-needs-evidence-array-element.ts`,
-  `0081-needs-evidence-default-value.ts`,
-  `0081-needs-evidence-generic-arg.ts`,
-  `0081-needs-evidence-object-literal.ts`,
-  `0081-needs-evidence-property-initializer.ts`,
-  `0081-needs-evidence-rest-param.ts`,
-  `0081-needs-evidence-spread.ts` — additional contexts in which a
-  plain `number` should be rejected as unassignable to a refinement
-  type. v0.6 fires TH0081 at variable declarations, function
-  parameters, and return statements only.
+- `0081-array-element.ts`, `0081-default-value.ts`,
+  `0081-generic-arg.ts`, `0081-object-literal.ts`,
+  `0081-class-property.ts`, `0081-rest-param.ts`,
+  `0081-spread-arg.ts` — additional contexts in which a plain `number`
+  should be rejected as unassignable to a refinement type. v0.6 fires
+  TH0081 at variable declarations, function parameters, and return
+  statements only.
