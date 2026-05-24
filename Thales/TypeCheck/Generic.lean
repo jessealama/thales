@@ -517,6 +517,14 @@ partial def isSubtype (a b : TSType) : TypeCheckM Bool := do
   if let .typeVar id _ _ := b then
     if id >= 9000 then return true
   match a, b with
+  -- Refinement chain: Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number
+  -- (See `RefinementKind.le` in `TSType.lean`.)
+  | .refinement k1, .refinement k2 => return k1.le k2
+  -- Refinements widen to plain `number`.
+  | .refinement _, .number => return true
+  -- A literal numeric value is assignable to a refinement when it satisfies the
+  -- refinement's range/integrality predicate.
+  | .numberLit n, .refinement k => return k.literalInRange n
   -- Same type (identity)
   | .number, .number => return true
   | .string, .string => return true
@@ -795,11 +803,30 @@ partial def evaluateMappedType (keyVar : String) (constraint valueType : TSType)
 
 end
 
-/-- Check assignability and emit a diagnostic if it fails -/
-def checkAssignable (source target : TSType) (loc : Option SourceLocation := none) :
-    TypeCheckM Unit := do
+/-- Check assignability and emit a diagnostic if it fails.
+    Special cases:
+      - numeric literal failing the refinement range check → TH0080
+        (instead of TS2322).
+      - plain `number` source against a refinement target where the chain
+        rejects (i.e. no narrowing or constructor evidence is in scope) →
+        TH0081. `sourceName` is folded into the message; pass `""` if the
+        source isn't a simple identifier.
+    Both checks suppress the default TS2322 emission. -/
+def checkAssignable (source target : TSType) (loc : Option SourceLocation := none)
+    (sourceName : String := "") : TypeCheckM Unit := do
   let ok ← isSubtype source target
   if !ok then
-    emitDiagnostic (.typeNotAssignable source target) loc
+    -- Resolve target so we can detect a refinement target hidden behind an alias.
+    let resolvedTarget ← resolveTypeGeneric target
+    let resolvedSource ← resolveTypeGeneric source
+    match resolvedSource, resolvedTarget with
+    | .numberLit n, .refinement k =>
+      let (lo, hi) := k.bounds
+      emitDiagnostic (.thales (.literalOutOfRange n k.name lo hi)) loc
+    | .number, .refinement k =>
+      let nameForMsg := if sourceName.isEmpty then "<expr>" else sourceName
+      emitDiagnostic (.thales (.refinementNeedsEvidence nameForMsg k.name)) loc
+    | _, _ =>
+      emitDiagnostic (.typeNotAssignable source target) loc
 
 end Thales.TypeCheck

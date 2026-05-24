@@ -244,7 +244,8 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
         -- Both annotation and initializer: check initializer against annotation
         let annTy := ann.type
         let initTyped ← synthExpr (.js initExpr)
-        checkAssignable initTyped.type annTy (exprLoc initExpr)
+        let srcName := tsExprSourceName (.js initExpr)
+        checkAssignable initTyped.type annTy (exprLoc initExpr) srcName
         pure annTy
       | some ann, none =>
         -- Annotation only
@@ -333,9 +334,36 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
       let ty := match typeAnn with | some ann => ann.type | none => .any
       withScope [(vname, ty)] (checkStatements rest)
     | _ => checkStatements rest
-  | .importDecl _ _ _ =>
-    -- Import declarations are not type-checked; just continue
-    checkStatements rest
+  | .importDecl _ source _ =>
+    -- Special-case @thales/prelude: inject the in-memory shim bindings.
+    -- For all other imports, just continue (no filesystem resolution).
+    if source == "@thales/prelude" then
+      -- Type aliases: Integer/Natural/Byte/Bit are refinement-tagged variants of `number`.
+      let aliasOf (ty : TSType) := { typeParams := [], body := ty : TypeAliasDef }
+      let intTy : TSType := .refinement .integer
+      let natTy : TSType := .refinement .natural
+      let byteTy : TSType := .refinement .byte
+      let bitTy : TSType := .refinement .bit
+      -- Value types for is-predicates: (x: number) => boolean
+      let numToBoolean := TSType.function [TSParamType.mk "x" .number] .boolean
+      -- Value types for as-constructors: (x: number) => <refinement>
+      let asInt := TSType.function [TSParamType.mk "x" .number] intTy
+      let asNat := TSType.function [TSParamType.mk "x" .number] natTy
+      let asByte := TSType.function [TSParamType.mk "x" .number] byteTy
+      let asBit := TSType.function [TSParamType.mk "x" .number] bitTy
+      let preludeValues : List (String × TSType) := [
+        ("isInteger", numToBoolean), ("isNatural", numToBoolean),
+        ("isByte",    numToBoolean), ("isBit",     numToBoolean),
+        ("asInteger", asInt),        ("asNatural",  asNat),
+        ("asByte",    asByte),       ("asBit",      asBit)
+      ]
+      withTypeAlias "Integer" (aliasOf intTy)
+        (withTypeAlias "Natural" (aliasOf natTy)
+          (withTypeAlias "Byte" (aliasOf byteTy)
+            (withTypeAlias "Bit" (aliasOf bitTy)
+              (withScope preludeValues (checkStatements rest)))))
+    else
+      checkStatements rest
 
 /-- Check a JS statement without processing continuation -/
 partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
@@ -347,7 +375,7 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     match ctx.returnType, arg with
     | some expected, some expr =>
       let actualTyped ← synthJSExpr expr
-      checkAssignable actualTyped.type expected (exprLoc expr)
+      checkAssignable actualTyped.type expected (exprLoc expr) (exprSourceName expr)
     | some expected, none =>
       -- Return without value in a function that expects a return type
       match expected with
@@ -435,7 +463,7 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
         | some annTy, some expr =>
           -- Both annotation and initializer: check init against annotation
           let initTyped ← synthJSExpr expr
-          checkAssignable initTyped.type annTy (exprLoc expr)
+          checkAssignable initTyped.type annTy (exprLoc expr) (exprSourceName expr)
           markAssigned id.name
         | _annTy, none =>
           -- No initializer: track for definite assignment if let/const

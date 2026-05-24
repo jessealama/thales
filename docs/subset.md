@@ -1,8 +1,10 @@
-# Thales-TS 0.5 Subset Reference
+# Thales-TS 0.6 Subset Reference
 
 ## Overview
 
-Thales-TS 0.5 is a pure-functional subset of TypeScript with a mechanical shallow embedding into Lean 4. It is enforced by `thales` and can be translated to Lean 4 source with `thales` (emit is the default; `--no-emit` skips it). The existing Thales JavaScript VM is unchanged; Thales-TS runs on it via the usual erase-and-execute path.
+Thales-TS 0.6 is a pure-functional subset of TypeScript with a mechanical shallow embedding into Lean 4. It is enforced by `thales` and can be translated to Lean 4 source with `thales` (emit is the default; `--no-emit` skips it). The existing Thales JavaScript VM is unchanged; Thales-TS runs on it via the usual erase-and-execute path.
+
+v0.6 adds four built-in bounded number types (`Integer`, `Natural`, `Byte`, `Bit`) shipped via `@thales/prelude`. See the dedicated section below for details.
 
 Thales-TS is **not** full TypeScript. It excludes mutation, exceptions, async I/O, classes, and several advanced type constructs in order to keep every accepted program mechanically translatable to terminating, pure Lean 4 code. If your program compiles under `thales`, it has a Lean 4 image — and the behavior of the two paths is verified by the example corpus.
 
@@ -53,25 +55,26 @@ Semantics at a glance:
   Lean; `TH9002` is raised and no `.lean` sidecar is written. The
   directive is a documentation primitive, not a partial-build mechanism.
 
-See `docs/errors.md` for TH9000–TH9003 details, and the example corpus
-under `examples/` for one canonical demonstration per `TH####` code.
+See `docs/errors.md` for TH9000–TH9003 details, and the conformance corpus
+under `tests/conformance/reject/` for one canonical demonstration per `TH####` code.
 
 ## In-scope features
 
-| Kind         | Detail                                                                                                                                           |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Primitives   | `boolean`, `string`, `number` (→ Lean `Float`), `bigint` (→ Lean `Int`)                                                                          |
-| Records      | `interface` and `type` aliases — nominal by declaration                                                                                          |
-| Arrays       | `T[]` as immutable `Array T`; `arr[i]` returns `Option<T>`                                                                                       |
-| Tuples       | `[A, B]`, `[A, B, C]`, ... → Lean `×` / fixed structures                                                                                         |
-| Unions       | Discriminated unions (shared `kind` field of string-literal type) → Lean inductive; nullable unions (`T \| null`, `T \| undefined`) → `Option T` |
-| Generics     | Parametric only (`<T>`, `<T, U>`)                                                                                                                |
-| Values       | `const`, `let`, `var` — all bound once, never reassigned in 0.5                                                                                  |
-| Functions    | `function` declarations and `const f = (...) => ...` arrows                                                                                      |
-| Recursion    | Structural or with `@decreasing` hint; all functions must terminate in 0.5                                                                       |
-| Control flow | `if`/`else`, ternary, `switch` (exhaustive on a discriminated union)                                                                             |
-| Modules      | `import`/`export` of values and types                                                                                                            |
-| Stdlib       | `Option<T>`, `Result<T, E>`, array `.map`/`.filter`/`.reduce`/`.concat`/`.length`/`.slice`                                                       |
+| Kind          | Detail                                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Primitives    | `boolean`, `string`, `number` (→ Lean `Float`), `bigint` (→ Lean `Int`)                                                                          |
+| Records       | `interface` and `type` aliases — nominal by declaration                                                                                          |
+| Arrays        | `T[]` as immutable `Array T`; `arr[i]` returns `Option<T>`                                                                                       |
+| Tuples        | `[A, B]`, `[A, B, C]`, ... → Lean `×` / fixed structures                                                                                         |
+| Unions        | Discriminated unions (shared `kind` field of string-literal type) → Lean inductive; nullable unions (`T \| null`, `T \| undefined`) → `Option T` |
+| Generics      | Parametric only (`<T>`, `<T, U>`)                                                                                                                |
+| Values        | `const`, `let`, `var` — all bound once, never reassigned in 0.5                                                                                  |
+| Functions     | `function` declarations and `const f = (...) => ...` arrows                                                                                      |
+| Recursion     | Structural or with `@decreasing` hint; all functions must terminate in 0.5                                                                       |
+| Control flow  | `if`/`else`, ternary, `switch` (exhaustive on a discriminated union)                                                                             |
+| Modules       | `import`/`export` of values and types                                                                                                            |
+| Stdlib        | `Option<T>`, `Result<T, E>`, array `.map`/`.filter`/`.reduce`/`.concat`/`.length`/`.slice`                                                       |
+| Refinements   | `Integer`, `Natural`, `Byte`, `Bit` from `@thales/prelude` — Lean Subtypes of `Float`; chain `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`           |
 
 ## Out-of-scope features
 
@@ -865,3 +868,97 @@ JS: `{} === {}` is `false` (reference equality). The Lean image uses structural 
 ### Behavioral vs semantic equivalence
 
 The example corpus verifies that the VM execution and the compiled Lean both produce the same output on the corpus inputs. This is _behavioral_ equivalence on a finite set of programs, not a proof of _semantic_ equivalence. A program not in the corpus that exercises an unhandled edge case can diverge silently between the two paths. A real semantic-equivalence theorem is 5 work.
+
+## Built-in bounded number types (0.6)
+
+`@thales/prelude` exports four built-in bounded number types: `Integer`, `Natural`, `Byte`, and `Bit`. On the TypeScript side each is a branded alias of `number`; on the Lean side each is a `Subtype` of `Float` (Lean's IEEE 754 double). The chain is:
+
+```
+Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number
+```
+
+- **`Integer`** — whole numbers in the range `[-(2^53 - 1), 2^53 - 1]` (JavaScript's safe-integer range).
+- **`Natural`** — non-negative integers in `[0, 2^53 - 1]`.
+- **`Byte`** — integers in `[0, 255]`.
+- **`Bit`** — integers `0` or `1`.
+
+### Widening and narrowing
+
+The refinement types are subtypes of `number`, so every `Integer` (or `Natural`, `Byte`, `Bit`) is automatically a valid `number`. Going the other direction — from `number` to a refinement type — requires evidence, which comes in two forms:
+
+**Predicate guards** (`isInteger`, `isNatural`, `isByte`, `isBit`): Boolean functions that narrow the type inside a conditional branch.
+
+```typescript
+import { isInteger } from '@thales/prelude';
+
+function safeDouble(n: number): number {
+  if (isInteger(n)) {
+    return n * 2; // n: Integer here
+  }
+  return NaN;
+}
+```
+
+**Throwing constructors** (`asInteger`, `asNatural`, `asByte`, `asBit`): Return the value typed as the refinement type, or throw `RangeError` if the value does not satisfy the predicate. Because these constructors may throw, programs that call them are not `@total` unless the compiler can see the value is already in range.
+
+```typescript
+import { asInteger } from '@thales/prelude';
+
+const x: Integer = asInteger(42); // ok — 42 is a safe integer
+const y: Integer = asInteger(3.14); // throws RangeError at runtime
+```
+
+**Literal shorthand**: Integer literals that fall within a type's range are accepted directly, without a constructor or guard.
+
+```typescript
+import { Integer } from '@thales/prelude';
+const n: Integer = 7; // ok — 7 is a safe integer literal
+const b: Byte = 200; // ok — 200 is in [0, 255]
+```
+
+Out-of-range literals are rejected with **TH0080**. Assigning a `number`-typed expression without evidence is rejected with **TH0081**.
+
+### Arithmetic widens to `number`
+
+Standard arithmetic operators (`+`, `-`, `*`, `/`, `%`, `**`) always produce `number`, even when both operands are refinement types. This matches JavaScript's runtime semantics — there is no Integer arithmetic ring in the type system. Users who need the result as a refinement type must apply a guard or constructor:
+
+```typescript
+import { Integer, isInteger } from '@thales/prelude';
+
+declare const a: Integer;
+declare const b: Integer;
+
+const sum = a + b; // sum: number (arithmetic widens)
+if (isInteger(sum)) {
+  const s: Integer = sum; // ok — narrowed inside guard
+}
+```
+
+### Naming clash warning
+
+The prelude exports `isInteger` (tests for a safe integer). The global `Number.isInteger` tests the same mathematical property but is not part of the Thales subset and will produce a TS2339 error. Always import `isInteger` from `@thales/prelude`; do not call `Number.isInteger`.
+
+### Stdlib overloads provided by the prelude
+
+Three standard operations return refinement types when given appropriate arguments:
+
+| Call                   | Return type | Notes                                                    |
+| ---------------------- | ----------- | -------------------------------------------------------- |
+| `Math.abs(n: Integer)` | `Natural`   | absolute value of a safe integer is always a natural     |
+| `arr.length`           | `Natural`   | array length is always a non-negative safe integer       |
+| `s.length`             | `Natural`   | string `.length` (UTF-16 code units) is always a natural |
+
+These overloads are provided by `@thales/prelude`'s type declarations and require no import beyond the types themselves.
+
+### Lean representation
+
+Each refinement type is emitted as a Lean `Subtype`:
+
+| TS type   | Lean type                                             |
+| --------- | ----------------------------------------------------- |
+| `Integer` | `{x : Float // x.isInteger && x.abs ≤ 2^53 - 1}`      |
+| `Natural` | `{x : Float // x.isInteger && 0 ≤ x && x ≤ 2^53 - 1}` |
+| `Byte`    | `{x : Float // x.isInteger && 0 ≤ x && x ≤ 255}`      |
+| `Bit`     | `{x : Float // x = 0 ∨ x = 1}`                        |
+
+Lean's kernel can check membership in these predicates for concrete literal values at compile time via `by decide`, so no `sorry` is introduced. The TH9004 post-emit check confirms that emitted files are sorry-free.

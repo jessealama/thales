@@ -4,8 +4,8 @@
   "description": "Internal testing TS/JS infrastructure for Thales (should be dev deps only)",
   "private": true,
   "scripts": {
-    "examples": "node scripts/run-examples.js",
-    "examples:self-test": "node scripts/run-examples.js --self-test",
+    "conformance": "node scripts/run-examples.js",
+    "conformance:self-test": "node scripts/run-examples.js --self-test",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

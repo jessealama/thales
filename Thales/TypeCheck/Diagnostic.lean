@@ -22,6 +22,7 @@ partial def formatType : TSType → String
   | .any => "any"
   | .never => "never"
   | .unknown => "unknown"
+  | .refinement k => k.name
   | .numberLit n => toString n
   | .stringLit s => s!"\"{s}\""
   | .booleanLit true => "true"
@@ -90,11 +91,16 @@ inductive ThalesKind where
   | totalConflictsWithThrows
   | totalHasUncaughtThrow (source : ThrowSource)
   | totalityUnverified (leanError : String)
+  -- Refinement-type diagnostics (TH0080–TH0081)
+  | literalOutOfRange (literal : Float) (typeName : String) (min : Option Float) (max : Option Float)
+  | refinementNeedsEvidence (sourceName : String) (targetTypeName : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
   | emissionBlockedBySuppressedViolation
   | directiveMalformed
+  -- Emit-soundness diagnostic (TH9004)
+  | emittedCodeContainsSorry (filename : String)
   deriving Repr
 
 /-- Map a ThalesKind to its numeric TH code -/
@@ -122,10 +128,13 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .totalConflictsWithThrows => 66
   | .totalHasUncaughtThrow _ => 67
   | .totalityUnverified _ => 70
+  | .literalOutOfRange .. => 80
+  | .refinementNeedsEvidence .. => 81
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
   | .directiveMalformed => 9003
+  | .emittedCodeContainsSorry _ => 9004
 
 /-- Zero-pad a numeric code to 4 digits -/
 private def padCode (n : Nat) : String :=
@@ -169,6 +178,15 @@ def ThalesKind.message : ThalesKind → String
     s!"`@total` function calls `@throws`-annotated `{callee}` outside `try`/`catch`; catch the failure or remove `@total`"
   | .totalityUnverified leanError =>
     s!"`@total` asserted but Lean could not prove termination: {leanError}"
+  | .literalOutOfRange lit tyName min max =>
+    let bound := match min, max with
+      | some lo, some hi => s!" (must be in [{lo}, {hi}])"
+      | some lo, none => s!" (min {lo})"
+      | none, some hi => s!" (max {hi})"
+      | none, none => ""
+    s!"Literal {lit} out of range for {tyName}{bound}"
+  | .refinementNeedsEvidence sourceName tyName =>
+    s!"Value '{sourceName}' of type 'number' is not assignable to '{tyName}' without narrowing or constructor evidence"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
@@ -178,6 +196,8 @@ def ThalesKind.message : ThalesKind → String
     "Cannot emit: file contains subset violations suppressed by `@thales-expect-error`"
   | .directiveMalformed =>
     "Malformed `@thales-expect-error` directive"
+  | .emittedCodeContainsSorry filename =>
+    s!"Emitted Lean code in '{filename}' contains 'sorry' or 'sorryAx'; emit must be sorry-free"
 
 /-- Diagnostic error kinds with tsc error code mapping -/
 inductive DiagnosticKind where

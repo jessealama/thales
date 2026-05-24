@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const examplesDir = path.join(repoRoot, 'examples');
+const conformanceDir = path.join(repoRoot, 'tests', 'conformance');
 const fixturesDir = path.join(repoRoot, 'Test', 'Examples', 'fixtures');
 const thalesBin = path.join(repoRoot, '.lake', 'build', 'bin', 'thales');
 
@@ -94,6 +94,21 @@ function hasDirectivePure(src) {
 /** Does input.ts contain (at least loose) `@thales-expect-error`? */
 function hasDirective(inputPath) {
   return hasDirectivePure(fs.readFileSync(inputPath, 'utf8'));
+}
+
+/**
+ * Does input.ts import from `@thales/prelude`? Used to gate the relaxed
+ * throw-iff equivalence rule: when prelude is in use, throwing constructors
+ * (`asInteger`, `asNatural`, etc.) may throw at runtime even though the
+ * program is well-typed. In that case we require only throw-iff equivalence
+ * (both sides exit nonzero), not byte-identity of stdout/stderr/exit.
+ *
+ * Detection is a regex scan of the source text; it may over-match in
+ * string literals but that is harmless (only widens the relaxation).
+ */
+function importsPrelude(inputPath) {
+  const src = fs.readFileSync(inputPath, 'utf8');
+  return /\bfrom\s+["']@thales\/prelude["']/.test(src);
 }
 
 /** Parse input.ts and build a map from appliesToLine (1-based) to the set
@@ -377,37 +392,49 @@ function preflight() {
 // ---- per-example decision procedure ----
 
 /**
- * Translate the repo's canonical tsconfig.json into a flat `tsc` CLI argument
- * list. We invoke tsc per-file (with `--ignoreConfig` so tsc does not complain
- * about the presence of `tsconfig.json` when a file is also on the command
- * line). The tsconfig remains the single source of truth for settings; this
- * function is just the glue that forwards those settings to tsc's CLI.
+ * Run tsc --noEmit on input.ts via a per-file tsconfig.json written to a
+ * temp directory.
+ *
+ * We cannot pass `--project` together with source files on the tsc CLI, and we
+ * cannot pass `paths` via CLI flags (tsc rejects `--paths` with TS6064). The
+ * solution is to write a minimal tsconfig that inherits the repo's
+ * `compilerOptions` and adds a single `files` entry pointing to the input.
+ * This lets tsc resolve `@thales/prelude` paths correctly without any
+ * flag-serialisation hazards.
+ *
+ * The temporary directory is cleaned up synchronously before the function
+ * returns.
  */
-function tsconfigToFlags() {
-  const raw = fs.readFileSync(path.join(repoRoot, 'tsconfig.json'), 'utf8');
-  const opts = JSON.parse(raw).compilerOptions || {};
-  const flags = ['--ignoreConfig'];
-  for (const [k, v] of Object.entries(opts)) {
-    if (typeof v === 'boolean') {
-      if (v) flags.push(`--${k}`);
-    } else if (Array.isArray(v)) {
-      flags.push(`--${k}`, v.join(','));
-    } else {
-      flags.push(`--${k}`, String(v));
-    }
-  }
-  return flags;
-}
-
-/** Run tsc --noEmit on input.ts. Returns {code, stdout, stderr, diags}. */
 function runTsc(inputPath) {
-  const r = runCapture('npx', [
-    '--no-install',
-    'tsc',
-    ...tsconfigToFlags(),
-    inputPath,
-  ]);
-  return { ...r, diags: parseDiagnostics(r.stdout) };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'thales-tsc-'));
+  try {
+    const baseRaw = fs.readFileSync(
+      path.join(repoRoot, 'tsconfig.json'),
+      'utf8',
+    );
+    const base = JSON.parse(baseRaw);
+    // Override baseUrl to point at the repo root (tsconfig.json's compilerOptions
+    // may have a relative "." which is fine when tsconfig lives at the root, but
+    // our temp tsconfig lives in os.tmpdir(), so use an absolute path).
+    const compilerOptions = {
+      ...base.compilerOptions,
+      baseUrl: repoRoot,
+    };
+    const tempConfig = { compilerOptions, files: [inputPath] };
+    const tempCfgPath = path.join(tmp, 'tsconfig.json');
+    fs.writeFileSync(tempCfgPath, JSON.stringify(tempConfig));
+    const r = runCapture('npx', [
+      '--no-install',
+      'tsc',
+      '--project',
+      tempCfgPath,
+    ]);
+    return { ...r, diags: parseDiagnostics(r.stdout) };
+  } finally {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  }
 }
 
 /** Run thales --no-emit on input.ts. */
@@ -428,7 +455,40 @@ function runThcIgnoringDirectives(inputPath) {
 
 /** Run tsx input.ts. */
 function runTsx(inputPath) {
-  return runCapture('npx', ['--no-install', 'tsx', inputPath]);
+  // Silence DEP0205: tsx invokes Node's deprecated `module.register()` API.
+  // The warning fires once per process and pollutes stderr, defeating the
+  // byte-identity output check.
+  // TODO: remove this once tsx upgrades to `module.registerHooks()`. As of
+  // tsx 4.21.0 (latest on npm), it still uses the deprecated entry point.
+  return runCapture('npx', ['--no-install', 'tsx', inputPath], {
+    env: { ...process.env, NODE_OPTIONS: '--disable-warning=DEP0205' },
+  });
+}
+
+/**
+ * Check an emitted Lean file for `sorry` or `sorryAx`. Returns a TH9004
+ * diagnostic string if found, else null.
+ *
+ * This check catches emit-pipeline regressions where a soundness bug causes
+ * the emitter to produce `sorry`-bearing proof terms. TH9004 is not a user
+ * error; it signals a Thales bug. The grep is applied ONLY to files emitted
+ * by thales (not to Test/ WIP proofs or Thales/ sources).
+ */
+function checkNoSorry(leanPath) {
+  let src;
+  try {
+    src = fs.readFileSync(leanPath, 'utf8');
+  } catch {
+    return null; // file not found — emitter already reported the error
+  }
+  const sorryRe = /\bsorry(?:Ax)?\b/;
+  if (sorryRe.test(src)) {
+    return (
+      `TH9004: emitted Lean file contains 'sorry' or 'sorryAx': ${leanPath}\n` +
+      `This is a Thales emit-pipeline bug, not a user error. Please file a bug report.`
+    );
+  }
+  return null;
 }
 
 /**
@@ -453,6 +513,16 @@ function runThcThenLean(inputPath) {
     const moduleName =
       base.charAt(0).toUpperCase() + base.slice(1).replace(/[^A-Za-z0-9]/g, '');
     const leanPath = path.join(outDir, moduleName + '.lean');
+    // TH9004: post-emit noSorry check — applied only to files emitted by thales.
+    const sorryFail = checkNoSorry(leanPath);
+    if (sorryFail) {
+      return {
+        code: 1,
+        stdout: sorryFail,
+        stderr: '',
+        stage: 'nosorry',
+      };
+    }
     const r2 = runCapture('lake', ['env', 'lean', leanPath], { cwd: repoRoot });
     return {
       code: r2.code,
@@ -553,6 +623,38 @@ function evaluateCase(inputPath) {
   const tsx = runTsx(inputPath);
   const ours = runThcThenLean(inputPath);
 
+  // Relaxed throw-iff equivalence for programs that use @thales/prelude.
+  //
+  // Prelude throwing constructors (asInteger, asNatural, asByte, asBit) raise
+  // RangeError at runtime. The emitted Lean mirrors this via the Subtype
+  // constructor, which can also panic. The exact error message / exit code may
+  // differ between tsx (Node RangeError) and Lean (kernel panic). We therefore
+  // require only:
+  //   - both exit 0: byte-identity still required (full accepted check below)
+  //   - both exit nonzero: throw-iff equivalence holds — PASS as 'both-throw'
+  //   - one exits 0, the other nonzero: FAIL (throw asymmetry)
+  //
+  // For programs that do NOT import from @thales/prelude, strict byte-identity
+  // is unchanged.
+  if (importsPrelude(inputPath)) {
+    const tsxThrew = tsx.code !== 0;
+    const oursThrew = ours.code !== 0;
+    if (tsxThrew && oursThrew) {
+      // Both threw: throw-iff equivalence holds.
+      return { kind: 'pass', label: 'both-throw' };
+    }
+    if (tsxThrew !== oursThrew) {
+      return {
+        kind: 'fail',
+        label: 'throw-asymmetry',
+        detail:
+          `tsx exited ${tsx.code}, Lean exited ${ours.code} — ` +
+          'exactly one side threw; throw-iff equivalence violated',
+      };
+    }
+    // Both exited 0: fall through to byte-identity check below.
+  }
+
   if (
     tsx.stdout !== ours.stdout ||
     tsx.stderr !== ours.stderr ||
@@ -577,20 +679,31 @@ function evaluateCase(inputPath) {
 
 // ---- driver ----
 
-/** Enumerate corpus cases. For `examples/`, each `.ts` file is a case. For
+/** Enumerate corpus cases. For `tests/conformance/`, the immediate
+ *  subdirectories `accept/`, `reject/`, and `throws/` are each scanned for
+ *  `.ts` files; `future/` is skipped (parked fixtures). For
  *  `Test/Examples/fixtures/`, each subdirectory containing `input.ts` is a
  *  case (paired with `expected-outcome.txt`). Returns an array of
  *  {label, inputPath, expectedPath?} ordered by label.
  */
 function collectCases(rootDir, mode) {
-  const entries = fs.readdirSync(rootDir).sort();
   const cases = [];
   if (mode === 'flat') {
-    for (const name of entries) {
-      if (!name.endsWith('.ts')) continue;
-      cases.push({ label: name, inputPath: path.join(rootDir, name) });
+    const buckets = ['accept', 'reject', 'throws'];
+    for (const bucket of buckets) {
+      const bucketDir = path.join(rootDir, bucket);
+      if (!fs.existsSync(bucketDir)) continue;
+      const files = fs.readdirSync(bucketDir).sort();
+      for (const name of files) {
+        if (!name.endsWith('.ts')) continue;
+        cases.push({
+          label: `${bucket}/${name}`,
+          inputPath: path.join(bucketDir, name),
+        });
+      }
     }
   } else {
+    const entries = fs.readdirSync(rootDir).sort();
     for (const name of entries) {
       const dir = path.join(rootDir, name);
       if (!fs.statSync(dir).isDirectory()) continue;
@@ -709,7 +822,7 @@ if (directFail) {
   process.exit(1);
 }
 
-console.log('Running examples...\n');
-const { passes, fails } = runCorpus(examplesDir, { selfTest: false });
+console.log('Running conformance corpus...\n');
+const { passes, fails } = runCorpus(conformanceDir, { selfTest: false });
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails > 0 ? 1 : 0);
