@@ -30,37 +30,6 @@ private def mutatingMethodNames : List String :=
 private def mkThalesDiag (kind : ThalesKind) (loc : Option SourceLocation) : Diagnostic :=
   { kind := .thales kind, location := loc }
 
-/-- Extract location from an Expression (the base NodeBase field). -/
-private def exprLoc : Expression → Option SourceLocation
-  | .identifier b _ => b.loc
-  | .literal b _ _ => b.loc
-  | .thisExpr b => b.loc
-  | .arrayExpr b _ => b.loc
-  | .objectExpr b _ => b.loc
-  | .functionExpr b _ _ _ _ _ => b.loc
-  | .arrowFunctionExpr b _ _ _ _ _ => b.loc
-  | .unaryExpr b _ _ _ => b.loc
-  | .updateExpr b _ _ _ => b.loc
-  | .binaryExpr b _ _ _ => b.loc
-  | .assignmentExpr b _ _ _ => b.loc
-  | .logicalExpr b _ _ _ => b.loc
-  | .memberExpr b _ _ _ _ => b.loc
-  | .privateMemberExpr b _ _ => b.loc
-  | .conditionalExpr b _ _ _ => b.loc
-  | .callExpr b _ _ _ => b.loc
-  | .newExpr b _ _ => b.loc
-  | .chainExpr b _ => b.loc
-  | .sequenceExpr b _ => b.loc
-  | .templateLiteral b _ _ => b.loc
-  | .taggedTemplate b _ _ => b.loc
-  | .classExpr b _ _ _ => b.loc
-  | .super_ b => b.loc
-  | .spreadElement b _ => b.loc
-  | .yieldExpr b _ _ => b.loc
-  | .awaitExpr b _ => b.loc
-  | .patternExpr b _ => b.loc
-  | .metaProperty b _ _ => b.loc
-
 mutual
 
 /-- Check an expression for mutation violations. -/

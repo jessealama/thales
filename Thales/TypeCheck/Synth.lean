@@ -81,23 +81,6 @@ private partial def lookupProperty (objType : TSType) (propName : String) (depth
     return builtinProperty objType propName
   | _ => return none
 
-/-- Get the source location from a JS expression -/
-private def exprLoc : Expression → Option SourceLocation
-  | .identifier base _ => base.loc
-  | .literal base _ _ => base.loc
-  | .callExpr base _ _ _ => base.loc
-  | .binaryExpr base _ _ _ => base.loc
-  | .memberExpr base _ _ _ _ => base.loc
-  | .assignmentExpr base _ _ _ => base.loc
-  | _ => none
-
-/-- Get the source location from a TS expression -/
-private def tsExprLoc : TSExpression → Option SourceLocation
-  | .js e => exprLoc e
-  | .asExpr inner _ => tsExprLoc inner
-  | .satisfiesExpr inner _ => tsExprLoc inner
-  | .nonNullAssert inner => tsExprLoc inner
-
 /-- Best-effort extraction of a "source name" for a JS expression, used in
     TH0081 diagnostics (`Value '<name>' of type 'number' is not assignable…`).
     Returns the identifier name for a bare identifier, the dotted path for a

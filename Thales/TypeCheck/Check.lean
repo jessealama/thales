@@ -13,15 +13,6 @@ namespace Thales.TypeCheck
 
 open Thales.AST
 
-private def exprLoc : Expression → Option SourceLocation
-  | .identifier base _ => base.loc
-  | .literal base _ _ => base.loc
-  | .callExpr base _ _ _ => base.loc
-  | .binaryExpr base _ _ _ => base.loc
-  | .memberExpr base _ _ _ _ => base.loc
-  | .assignmentExpr base _ _ _ => base.loc
-  | _ => none
-
 /-- Collect all variable names declared in a JS statement with their declared types.
     Uses type annotation if present, otherwise falls back to `any`. -/
 private def collectDeclaredBindings : Statement → List (String × TSType)

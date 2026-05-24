@@ -58,6 +58,14 @@ inductive TSExpression where
 
 instance : Inhabited TSExpression := ⟨.js (.literal {} (.null) "null")⟩
 
+/-- Source location of a TS-augmented expression. TS-only wrappers
+    (`as`, `satisfies`, `!`) delegate to the inner expression. -/
+def tsExprLoc : TSExpression → Option SourceLocation
+  | .js e             => exprLoc e
+  | .asExpr inner _
+  | .satisfiesExpr inner _
+  | .nonNullAssert inner => tsExprLoc inner
+
 /-- A TS program is a list of TS statements -/
 structure TSProgram where
   base : NodeBase := {}

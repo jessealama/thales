@@ -53,6 +53,11 @@ output, or runtime behavior.
   `checkAssignable` and `emitArgMismatch` stop duplicating the logic.
 - Delete the empty `Thales/TypeCheck/Subtype.lean` (17 lines, all
   comment) left over from an earlier reorganization.
+- Promote `exprLoc` to `Thales.AST` (exhaustive over every
+  `Expression` constructor); `tsExprLoc` moves to `Thales.TypeCheck`
+  and delegates to it. Three private copies — two identical 7-case
+  partials in `Check.lean` and `Synth.lean`, and an unused 28-case
+  version in `SubsetCheck.lean` — are removed.
 
 ## 0.6 — 2026-05-24
 

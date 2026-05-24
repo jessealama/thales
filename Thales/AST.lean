@@ -268,6 +268,39 @@ inductive SwitchCase where
 
 end
 
+/-- Source location of an expression — the `loc` field of its `NodeBase`.
+    Every `Expression` constructor carries a `NodeBase` as its first field,
+    so this is exhaustive and total. -/
+def exprLoc : Expression → Option SourceLocation
+  | .identifier         base _         => base.loc
+  | .literal            base _ _       => base.loc
+  | .thisExpr           base           => base.loc
+  | .arrayExpr          base _         => base.loc
+  | .objectExpr         base _         => base.loc
+  | .functionExpr       base _ _ _ _ _ => base.loc
+  | .arrowFunctionExpr  base _ _ _ _ _ => base.loc
+  | .unaryExpr          base _ _ _     => base.loc
+  | .updateExpr         base _ _ _     => base.loc
+  | .binaryExpr         base _ _ _     => base.loc
+  | .assignmentExpr     base _ _ _     => base.loc
+  | .logicalExpr        base _ _ _     => base.loc
+  | .memberExpr         base _ _ _ _   => base.loc
+  | .privateMemberExpr  base _ _       => base.loc
+  | .conditionalExpr    base _ _ _     => base.loc
+  | .callExpr           base _ _ _     => base.loc
+  | .newExpr            base _ _       => base.loc
+  | .chainExpr          base _         => base.loc
+  | .sequenceExpr       base _         => base.loc
+  | .templateLiteral    base _ _       => base.loc
+  | .taggedTemplate     base _ _       => base.loc
+  | .classExpr          base _ _ _     => base.loc
+  | .super_             base           => base.loc
+  | .spreadElement      base _         => base.loc
+  | .yieldExpr          base _ _       => base.loc
+  | .awaitExpr          base _         => base.loc
+  | .patternExpr        base _         => base.loc
+  | .metaProperty       base _ _       => base.loc
+
 -- Manual Inhabited instances for mutual types
 mutual
 
