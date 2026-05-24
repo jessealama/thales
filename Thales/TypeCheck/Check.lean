@@ -1,11 +1,12 @@
 import Thales.TypeCheck.TSType
 import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Context
-import Thales.TypeCheck.Subtype
 import Thales.TypeCheck.Synth
 import Thales.TypeCheck.Diagnostic
 import Thales.TypeCheck.Builtins
 import Thales.TypeCheck.Generic
+import Thales.TypeCheck.TypeSubstitution
+import Thales.TypeCheck.Assignability
 import Thales.TypeCheck.Narrowing
 
 namespace Thales.TypeCheck

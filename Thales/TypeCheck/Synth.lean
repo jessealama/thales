@@ -5,9 +5,11 @@
 import Thales.TypeCheck.TSType
 import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Context
-import Thales.TypeCheck.Subtype
 import Thales.TypeCheck.Diagnostic
+import Thales.TypeCheck.RefinementDiag
 import Thales.TypeCheck.Generic
+import Thales.TypeCheck.TypeSubstitution
+import Thales.TypeCheck.Assignability
 import Thales.TypeCheck.TypedExpression
 import Thales.TypeCheck.Narrowing
 import Thales.TypeCheck.Builtins
@@ -274,24 +276,15 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
         emitDiagnostic (.argumentCountMismatch requiredCount args.length) base.loc
       else if !hasRest && args.length > params.length then
         emitDiagnostic (.argumentCountMismatch params.length args.length) base.loc
-      -- Helper: emit the right diagnostic when an argument's type is not
-      -- assignable to its parameter. Refinement targets get TH0080/TH0081
-      -- instead of TS2345 so users get a precise out-of-range / needs-evidence
-      -- message; everything else falls back to argumentTypeMismatch.
+      -- Refinement-target mismatches surface as TH0080/TH0081; everything
+      -- else falls back to TS2345 (argumentTypeMismatch).
       let emitArgMismatch (argIdx : Nat) (srcTy tgtTy : TSType)
           (argExpr : Expression) : TypeCheckM Unit := do
-        let resolvedTgt ← resolveTypeGeneric tgtTy
         let resolvedSrc ← resolveTypeGeneric srcTy
-        match resolvedSrc, resolvedTgt with
-        | .numberLit n, .refinement k =>
-          let (lo, hi) := k.bounds
-          emitDiagnostic (.thales (.literalOutOfRange n k.name lo hi)) (exprLoc argExpr)
-        | .number, .refinement k =>
-          let nm := exprSourceName argExpr
-          let nameForMsg := if nm.isEmpty then "<expr>" else nm
-          emitDiagnostic (.thales (.refinementNeedsEvidence nameForMsg k.name)) (exprLoc argExpr)
-        | _, _ =>
-          emitDiagnostic (.argumentTypeMismatch argIdx srcTy tgtTy) (exprLoc argExpr)
+        let resolvedTgt ← resolveTypeGeneric tgtTy
+        match refinementMismatch? resolvedSrc resolvedTgt (exprSourceName argExpr) with
+        | some thKind => emitDiagnostic (.thales thKind) (exprLoc argExpr)
+        | none => emitDiagnostic (.argumentTypeMismatch argIdx srcTy tgtTy) (exprLoc argExpr)
       let mut argChildren : Array TypedExpression := #[]
       for i in [:args.length] do
         if i < params.length then
