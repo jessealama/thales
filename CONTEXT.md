@@ -22,6 +22,11 @@ _Avoid_: "refinement-type machinery" (ambiguous), "lattice machinery"
 The deferred (0.9) general system for user-defined refinements: `@refine` aliases, predicate sublanguage parser, verification phase with `omega`/`grind`. **Not in the current branch.** When the user says "refinement types" colloquially they sometimes mean this; in v0.6 work it always means the Prelude library types.
 _Avoid_: bare "refinement types"
 
+**Refinement-target mismatch**:
+The case where assignability fails *and* the target is a `Prelude library type`. Two flavours:
+TH0080 (literal out of range — source is a `.numberLit` outside the kind's bounds) and TH0081 (needs evidence — source is plain `number` and no narrowing or `as<T>` constructor evidence is in scope). The classifier lives in `Thales/TypeCheck/RefinementDiag.lean` as `refinementMismatch? : TSType → TSType → String → Option ThalesKind`; the two emission sites (`checkAssignable` in `Generic.lean`, `emitArgMismatch` in `Synth.lean`) call through it and supply their own TS-code fallback (TS2322 / TS2345).
+_Avoid_: bare "refinement mismatch" (could be confused with lattice subtyping in `isSubtype`)
+
 ### Diagnostic vocabulary
 
 **`TH####` codes**:
