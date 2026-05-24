@@ -23,11 +23,6 @@ inductive Guard where
   -- isBit(x), and Number.isSafeInteger(x) (treated as isInteger). True branch
   -- narrows the variable's type to the corresponding refinement.
   | refinementTest (varName : String) (kind : RefinementKind)
-  -- Bounds fact: `i < xs.length` (or `xs.length > i`) — `arrayName` is the
-  -- name of `xs`. Records "i is in-bounds for xs" so the index-bounds
-  -- analyzer (Tasks 3.9 / 3.10) can mark `xs[i]` accesses as P2-provable.
-  -- Does not narrow types.
-  | indexBounds (indexVar : String) (arrayName : String)
   | not (guard : Guard)
   | and (left : Guard) (right : Guard)
   | or (left : Guard) (right : Guard)
@@ -215,8 +210,6 @@ partial def narrowType (ty : TSType) (guard : Guard) : TSType :=
         | .number | .refinement _ | .any | .unknown => true
         | _ => false
     | other => other  -- Don't change non-numeric types; predicate is vacuous.
-  -- Bounds facts don't change types; they're tracked separately.
-  | .indexBounds _ _ => ty
   | .typeofEquals _ typeStr =>
     match ty with
     | .union types => filterUnion types (matchesTypeof · typeStr)
@@ -275,7 +268,6 @@ partial def narrowTypeNeg (ty : TSType) (guard : Guard) : TSType :=
   -- Negated refinement predicate: nothing useful to conclude — the value
   -- could still be `number` or a different refinement, so leave it alone.
   | .refinementTest _ _ => ty
-  | .indexBounds _ _ => ty
   | .typeofEquals _ typeStr =>
     match ty with
     | .union types => filterUnion types (!matchesTypeof · typeStr)
@@ -327,7 +319,6 @@ end
 def guardVarNames : Guard → List String
   | .typeofEquals v _ | .instanceOf v _ | .equalsNull v | .equalsUndefined v | .truthy v | .discriminant v _ _ => [v]
   | .refinementTest v _ => [v]
-  | .indexBounds v _ => [v]
   | .not g => guardVarNames g
   | .and g1 g2 | .or g1 g2 => guardVarNames g1 ++ guardVarNames g2
 

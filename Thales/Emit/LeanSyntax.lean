@@ -29,7 +29,6 @@ inductive LPattern where
 /-- Lean term. Only the subset the emitter uses. -/
 inductive LExpr where
   | var (name : String)
-  | nat (n : Nat)
   | int (n : Int)
   | float (n : Float)
   | str (s : String)
@@ -49,10 +48,6 @@ inductive LExpr where
   -- callers supply complete tactic syntax (e.g. `"by native_decide"`,
   -- `"h"`).
   | anonCtor (args : List LExpr) (proofTactic : String)
-  -- Index access with an explicit proof: `arr[k]'h`. Used by P1/P2 emit.
-  -- `proofTactic` is rendered as `'(<tactic>)`. For P1 it is
-  -- `"by native_decide"`; for P2 it is a constructed proof term.
-  | indexProof (arr : LExpr) (idx : LExpr) (proofTactic : String)
   -- Optional indexing: `arr[k]?` returning `Option α`. Used as the P0
   -- fallback when no bounds proof is available.
   | indexOpt (arr : LExpr) (idx : LExpr)
@@ -164,7 +159,6 @@ mutual
 
   partial def renderExpr : LExpr → String
     | .var n    => n
-    | .nat n    => toString n
     | .int n    => if n < 0 then s!"({n})" else toString n
     | .float f  => renderFloat f
     | .str s    => s!"\"{escapeString s}\""
@@ -204,8 +198,6 @@ mutual
         let argsS := args.map renderExpr
         let parts := argsS ++ [proofTactic]
         s!"⟨{String.intercalate ", " parts}⟩"
-    | .indexProof arr idx proofTactic =>
-        s!"{renderExprAtom arr}[{renderExpr idx}]'({proofTactic})"
     | .indexOpt arr idx =>
         s!"{renderExprAtom arr}[{renderExpr idx}]?"
     | .dite_ binderName cond thn els =>
@@ -213,7 +205,6 @@ mutual
 
   partial def renderExprAtom : LExpr → String
     | .var n      => n
-    | .nat n      => toString n
     | .int n      => if n < 0 then s!"({n})" else toString n
     | .float f    => renderFloat f
     | .str s      => s!"\"{escapeString s}\""

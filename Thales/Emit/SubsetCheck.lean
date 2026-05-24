@@ -7,7 +7,7 @@
 import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Diagnostic
 import Thales.Emit.DirectiveApply
-import Batteries.Data.HashMap
+import Std.Data.HashMap
 
 namespace Thales.Emit
 

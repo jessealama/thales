@@ -313,17 +313,14 @@ private partial def substMemberAccessStmt (scrutName : String) : Statement → S
     Returns `some varName` for `x === null`, `x === undefined`, `null === x`, `undefined === x`.
     Returns `none` for other conditions. -/
 private def nullCheckVar : Expression → Option String
-  | .binaryExpr _ .seq (.identifier _ varName) (.literal _ .null _) => some varName
-  | .binaryExpr _ .eq (.identifier _ varName) (.literal _ .null _) => some varName
-  | .binaryExpr _ .seq (.literal _ .null _) (.identifier _ varName) => some varName
-  | .binaryExpr _ .eq (.literal _ .null _) (.identifier _ varName) => some varName
-  | .binaryExpr _ .seq (.identifier _ varName) (.identifier _ "undefined") =>
-    if varName != "undefined" then some varName else none
-  | .binaryExpr _ .eq (.identifier _ varName) (.identifier _ "undefined") =>
-    if varName != "undefined" then some varName else none
-  | .binaryExpr _ .seq (.identifier _ "undefined") (.identifier _ varName) =>
-    if varName != "undefined" then some varName else none
-  | .binaryExpr _ .eq (.identifier _ "undefined") (.identifier _ varName) =>
+  | .binaryExpr _ .seq (.identifier _ varName) (.literal _ .null _)
+  | .binaryExpr _ .eq  (.identifier _ varName) (.literal _ .null _)
+  | .binaryExpr _ .seq (.literal _ .null _)    (.identifier _ varName)
+  | .binaryExpr _ .eq  (.literal _ .null _)    (.identifier _ varName) => some varName
+  | .binaryExpr _ .seq (.identifier _ varName) (.identifier _ "undefined")
+  | .binaryExpr _ .eq  (.identifier _ varName) (.identifier _ "undefined")
+  | .binaryExpr _ .seq (.identifier _ "undefined") (.identifier _ varName)
+  | .binaryExpr _ .eq  (.identifier _ "undefined") (.identifier _ varName) =>
     if varName != "undefined" then some varName else none
   | _ => none
 
@@ -533,39 +530,25 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   -- Identifier
   | .identifier _ name => .var name
   -- Binary expressions — null-equality checks emit isNone/isSome on Option values
-  -- `x === null` → x.isNone
-  | .binaryExpr _ .seq (.identifier _ varName) (.literal _ .null _) =>
+  -- `x === null` / `x === undefined` (and reverses, with `==` too) → x.isNone
+  | .binaryExpr _ .seq (.identifier _ varName) (.literal _ .null _)
+  | .binaryExpr _ .eq  (.identifier _ varName) (.literal _ .null _)
+  | .binaryExpr _ .seq (.literal _ .null _)    (.identifier _ varName)
+  | .binaryExpr _ .eq  (.literal _ .null _)    (.identifier _ varName)
+  | .binaryExpr _ .seq (.identifier _ varName) (.identifier _ "undefined")
+  | .binaryExpr _ .eq  (.identifier _ varName) (.identifier _ "undefined")
+  | .binaryExpr _ .seq (.identifier _ "undefined") (.identifier _ varName)
+  | .binaryExpr _ .eq  (.identifier _ "undefined") (.identifier _ varName) =>
       .proj (.var varName) "isNone"
-  | .binaryExpr _ .eq (.identifier _ varName) (.literal _ .null _) =>
-      .proj (.var varName) "isNone"
-  | .binaryExpr _ .seq (.literal _ .null _) (.identifier _ varName) =>
-      .proj (.var varName) "isNone"
-  | .binaryExpr _ .eq (.literal _ .null _) (.identifier _ varName) =>
-      .proj (.var varName) "isNone"
-  | .binaryExpr _ .seq (.identifier _ varName) (.identifier _ "undefined") =>
-      .proj (.var varName) "isNone"
-  | .binaryExpr _ .eq (.identifier _ varName) (.identifier _ "undefined") =>
-      .proj (.var varName) "isNone"
-  | .binaryExpr _ .seq (.identifier _ "undefined") (.identifier _ varName) =>
-      .proj (.var varName) "isNone"
-  | .binaryExpr _ .eq (.identifier _ "undefined") (.identifier _ varName) =>
-      .proj (.var varName) "isNone"
-  -- `x !== null` → x.isSome
-  | .binaryExpr _ .sneq (.identifier _ varName) (.literal _ .null _) =>
-      .proj (.var varName) "isSome"
-  | .binaryExpr _ .neq (.identifier _ varName) (.literal _ .null _) =>
-      .proj (.var varName) "isSome"
-  | .binaryExpr _ .sneq (.literal _ .null _) (.identifier _ varName) =>
-      .proj (.var varName) "isSome"
-  | .binaryExpr _ .neq (.literal _ .null _) (.identifier _ varName) =>
-      .proj (.var varName) "isSome"
-  | .binaryExpr _ .sneq (.identifier _ varName) (.identifier _ "undefined") =>
-      .proj (.var varName) "isSome"
-  | .binaryExpr _ .neq (.identifier _ varName) (.identifier _ "undefined") =>
-      .proj (.var varName) "isSome"
-  | .binaryExpr _ .sneq (.identifier _ "undefined") (.identifier _ varName) =>
-      .proj (.var varName) "isSome"
-  | .binaryExpr _ .neq (.identifier _ "undefined") (.identifier _ varName) =>
+  -- `x !== null` / `x !== undefined` (and reverses, with `!=` too) → x.isSome
+  | .binaryExpr _ .sneq (.identifier _ varName) (.literal _ .null _)
+  | .binaryExpr _ .neq  (.identifier _ varName) (.literal _ .null _)
+  | .binaryExpr _ .sneq (.literal _ .null _)    (.identifier _ varName)
+  | .binaryExpr _ .neq  (.literal _ .null _)    (.identifier _ varName)
+  | .binaryExpr _ .sneq (.identifier _ varName) (.identifier _ "undefined")
+  | .binaryExpr _ .neq  (.identifier _ varName) (.identifier _ "undefined")
+  | .binaryExpr _ .sneq (.identifier _ "undefined") (.identifier _ varName)
+  | .binaryExpr _ .neq  (.identifier _ "undefined") (.identifier _ varName) =>
       .proj (.var varName) "isSome"
   -- General binary expressions: when the op is arithmetic/relational, project
   -- `.val` off any refinement-typed identifier operands so the operation
@@ -800,11 +783,17 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
         emitVarDecl env decls (fun env' => emitBodyEnv env' rest)
   -- `if (x === null) thn else rest` with `x : Option T` becomes a match.
   | .ifStmt _ cond thn elsOpt :: rest =>
+      -- Else-branch with the continuation appended: missing `else` encodes the
+      -- early-return pattern, so `rest` becomes the implicit else-body.
+      let elseBody : LExpr := match elsOpt with
+        | some els => emitBodyEnv env (els :: rest)
+        | none => emitBodyEnv env rest
+      let fallback : LExpr :=
+        .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) elseBody
       -- Refinement-narrowing predicate: `if (isInteger(x)) { … }` becomes
       -- `if h : isInteger x = true then let x : Integer := ⟨x, h⟩ in … else …`.
       -- The shadow-let makes `x` flow at the refined type inside the body.
-      let predOpt := detectRefinementPredicate cond
-      match predOpt with
+      match detectRefinementPredicate cond with
       | some (varName, kind) =>
           let hName := s!"h{env.diteBinderCounter}"
           let predName := refinementKindPredicate kind
@@ -818,44 +807,17 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
           let shadowed : LExpr :=
             .letE varName (some (.const kind.name))
               (.anonCtor [.var varName] hName) inner
-          let elsExpr := match elsOpt with
-            | some els => emitBodyEnv env (els :: rest)
-            | none => emitBodyEnv env rest
-          .dite_ hName condExpr shadowed elsExpr
+          .dite_ hName condExpr shadowed elseBody
       | none =>
-      match nullCheckVar cond with
-      | some varName =>
-          match env.bindingEnv.get? varName with
-          | some (.option _) | some (.union _) =>
-              let isOption := match env.bindingEnv.get? varName with
-                | some (.option _) => true
-                | _ => false
-              if isOption then
+        match nullCheckVar cond with
+        | some varName =>
+            match env.bindingEnv.get? varName with
+            | some (.option _) =>
                 let noneArm := (LPattern.ctor "none" [], emitBodyEnv env [thn])
-                let someVarBody := match elsOpt with
-                  | some els => emitBodyEnv env (els :: rest)
-                  | none => emitBodyEnv env rest
-                let someArm := (LPattern.ctor "some" [.var varName], someVarBody)
+                let someArm := (LPattern.ctor "some" [.var varName], elseBody)
                 .match_ (.var varName) [noneArm, someArm]
-              else
-                match elsOpt with
-                | some els =>
-                  .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env (els :: rest))
-                | none =>
-                  .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env rest)
-          | _ =>
-              match elsOpt with
-              | some els =>
-                .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env (els :: rest))
-              | none =>
-                .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env rest)
-      | none =>
-          match elsOpt with
-          | some els =>
-            .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env (els :: rest))
-          | none =>
-            -- No else: else-branch is the continuation, encoding the early-return pattern.
-            .ite (emitExprEnv env cond) (emitBodyEnv env (thn :: rest)) (emitBodyEnv env rest)
+            | _ => fallback
+        | none => fallback
   | .blockStmt _ inner :: rest => emitBodyEnv env (inner ++ rest)
   | .exprStmt _ _ :: rest      => emitBodyEnv env rest
   | .switchStmt _ discriminant cases :: rest =>
