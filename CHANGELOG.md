@@ -35,6 +35,25 @@ basis is a seventh boundary axiom (`Float.toUInt64_of_isNatural`) plus
 `Natural.toNat`, which round-trip an `isNatural` Float through
 `UInt64.toNat` for use as a `Nat`-typed index.
 
+## 0.6.1 — 2026-05-24
+
+Internal refactor with no user-visible change to diagnostics, emit
+output, or runtime behavior.
+
+### Changed
+
+- Split `Thales/TypeCheck/Generic.lean` (832 → 608 lines): pure
+  structural substitution moves to `TypeSubstitution.lean`; the
+  `checkAssignable` gate moves to `Assignability.lean`. The
+  irreducible mutual block (`resolveTypeGeneric`, `isSubtype`,
+  `evaluateConditionalType`, `evaluateSingleConditional`,
+  `evaluateMappedType`) stays intact.
+- Consolidate TH0080 / TH0081 emission behind a single classifier in
+  the new `RefinementDiag.lean`; the two call sites in
+  `checkAssignable` and `emitArgMismatch` stop duplicating the logic.
+- Delete the empty `Thales/TypeCheck/Subtype.lean` (17 lines, all
+  comment) left over from an earlier reorganization.
+
 ## 0.6 — 2026-05-24
 
 ### Added
