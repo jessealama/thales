@@ -31,10 +31,11 @@ Provably-safe array indexing in two contexts: literal-index into a
 literal array (`[10, 20, 30][1]`) and length-narrowed access with a
 `Natural` index (`if (i < xs.length) xs[i]` where `i: Natural`). These
 will return `T` instead of `T | undefined`. The Lean-side soundness
-basis is the fourth boundary axiom (`Float.toUInt64_of_isNatural`)
-plus `Natural.toNat`.
+basis is a seventh boundary axiom (`Float.toUInt64_of_isNatural`) plus
+`Natural.toNat`, which round-trip an `isNatural` Float through
+`UInt64.toNat` for use as a `Nat`-typed index.
 
-## 0.6 — 2026-05-08
+## 0.6 — 2026-05-24
 
 ### Added
 
@@ -46,7 +47,10 @@ plus `Natural.toNat`.
 - Eight prelude functions per refinement type:
   `isInteger`/`isNatural`/`isByte`/`isBit` (TypeScript type-guard
   predicates) and `asInteger`/`asNatural`/`asByte`/`asBit` (throwing
-  constructors that raise `RangeError` on out-of-range input).
+  constructors that raise `RangeError` on out-of-range input). At the
+  top level, a bare `asBit(2);` statement is emitted as an
+  `asBitEffect` IO mirror that `IO.Process.exit 1`s on failure so the
+  Lean path matches `tsx`'s nonzero exit.
 - Predicate-guard narrowing: `if (isInteger(x)) { ... }` (also
   `Number.isSafeInteger`) narrows `x` to the corresponding refinement
   type in the true branch. `Number.isInteger` is intentionally not
@@ -58,16 +62,42 @@ plus `Natural.toNat`.
   function parameters, return statements).
 - TH9004: emitted Lean code contains `sorry`. The conformance harness
   greps every emitted file after emit and fails on a hit.
+- Lean-side reflection for `Integer`: `Integer.toInt` and
+  `Integer.ofInt` round-trip the type into `Int`, with arithmetic
+  homomorphisms for `+`/`-`/`*`. Downstream Lean proofs can reason
+  about safe-integer arithmetic at the `Int` level.
+- Twelve IEEE-754 boundary axioms in `Thales.TS.Runtime`, grouped by
+  purpose (Float ↔ Int boundary, `Float.abs`, `Integer` reflection).
+  See [`docs/axioms.md`](docs/axioms.md) for the full list and
+  rationale. `JSShow` instances for the four refinement types so
+  `console.log(x)` prints them the same way as the VM path.
+- [`docs/beyond-typescript.md`](docs/beyond-typescript.md): an
+  orientation for readers who want to know what Thales gives you that
+  TypeScript alone cannot — the bounded number types are the v0.6
+  headline.
 
 ### Changed
 
 - `Math.abs` is typed `Integer → Natural` when the argument is
-  `Integer`-typed (still `number → number` otherwise).
+  `Integer`-typed (still `number → number` otherwise). The Lean
+  runtime ships `Math.absI : Integer → Natural` for this overload.
 - `Array<T>.length` and `string.length` are typed `Natural` (was
   `number`). Existing code that assigned them to `number` continues to
   work via the chain's coercions.
 - `Array<T>` callback types for `forEach`, `map`, `filter`, and
   `reduce` give the `index` parameter type `Natural` (was `number`).
+- Conformance corpus relocated from `examples/` to
+  `tests/conformance/{accept,reject,throws,future}`. Contributors
+  adding fixtures should pick the directory that matches the fixture's
+  expected outcome; `future/` holds parked fixtures the harness
+  ignores.
+
+### Fixed
+
+- Conformance harness now passes `NODE_OPTIONS=--disable-warning=DEP0205`
+  to its `tsx` invocation. tsx triggers Node's deprecated
+  `module.register()` API once per process; the resulting stderr line
+  was failing byte-identity checks on every fixture.
 
 ## 0.5 — 2026-04-28
 
