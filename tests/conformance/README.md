@@ -12,7 +12,7 @@ tests/conformance/
 └── future/   parked: design intent only, not visited by the harness
 ```
 
-Directory membership *is* the test specification — the harness routes each file according to its bucket. No additional directives mark the expected outcome.
+Directory membership _is_ the test specification — the harness routes each file according to its bucket. No additional directives mark the expected outcome.
 
 ## The contract
 
@@ -30,15 +30,19 @@ Directory membership *is* the test specification — the harness routes each fil
 ## Buckets
 
 ### `accept/`
+
 Both `tsc` and `thales` accept the file; both runtimes produce byte-identical output.
 
 ### `reject/`
+
 `tsc` accepts; `thales` rejects with one or more `TH####` codes, each documented by a `@thales-expect-error` directive above the violating line. The runtime stage is skipped (the file cannot be emitted to Lean). Files demonstrating a single TH code are named `<NNNN>-<slug>.ts` (e.g. `0030-class.ts` demonstrates TH0030).
 
 ### `throws/`
-Both type-checkers accept the file; the program throws at runtime. The harness asserts the *relaxed* throw-iff equivalence — both `tsx` and the Lean emission must throw, but their messages and exit codes need not match. Filename convention: `<feature>-throw.ts`.
+
+Both type-checkers accept the file; the program throws at runtime. The harness asserts the _relaxed_ throw-iff equivalence — both `tsx` and the Lean emission must throw, but their messages and exit codes need not match. Filename convention: `<feature>-throw.ts`.
 
 ### `future/`
+
 Parked fixtures: valid against the intended Thales subset, but the current compiler can't fully check or emit them. The harness skips this directory. See `tests/conformance/future/README.md`.
 
 See `docs/subset.md` for the directive semantics and `docs/errors.md` for the TH-code catalogue.
