@@ -3,7 +3,7 @@
 **Status:** accepted (2026-05-24); **amended by ADR-0002 (2026-05-26).**
 
 > **Amendment (ADR-0002).** Every "v0.7" reference below is superseded: v0.7
-> became a 0.6-*completeness* release and provably-safe array indexing
+> became a 0.6-_completeness_ release and provably-safe array indexing
 > (together with the `Float.toUInt64_of_isNatural` axiom and `Natural.toNat`)
 > was re-deferred to a later, not-yet-fixed release. The split decision and the
 > Subtype-representation decision recorded here still stand — only the target
@@ -25,7 +25,7 @@ The forEach/map/filter/reduce callback `index: Natural` overload ships in v0.6 e
 
 The bundled release was, by the V2 spec's own estimate, 13–22 days of active work and ~25–30 new corpus fixtures. A branch that size is hard to review carefully and hard to land without integration drag. Splitting it gives two reviewable releases instead of one large one — the project's standing preference is to avoid large, unreviewable branches.
 
-The split is asymmetric: indexing genuinely *needs* the prelude (P2's Float-to-Nat conversion requires the non-negative + safe-integer guarantee of `Natural`), but the prelude doesn't need indexing — it stands on its own as a documentation/discipline primitive in the same family as `@throws`. The user-visible v0.6 story works without indexing: literal range checks via TH0080, evidence-required flow via TH0081, `is<T>` narrowing, throwing `as<T>` constructors, lattice coercions, and a small set of refinement-typed stdlib overloads. It's quieter than the indexing pitch but it's a real release.
+The split is asymmetric: indexing genuinely _needs_ the prelude (P2's Float-to-Nat conversion requires the non-negative + safe-integer guarantee of `Natural`), but the prelude doesn't need indexing — it stands on its own as a documentation/discipline primitive in the same family as `@throws`. The user-visible v0.6 story works without indexing: literal range checks via TH0080, evidence-required flow via TH0081, `is<T>` narrowing, throwing `as<T>` constructors, lattice coercions, and a small set of refinement-typed stdlib overloads. It's quieter than the indexing pitch but it's a real release.
 
 Keeping the V2 (`Subtype`) representation rather than reverting to V0 (Float `abbrev`) avoids paying the V1→V2 representation-switch cost a second time when indexing ships. The `Subtype` representation is not coupled to indexing per se; it's coupled to carrying the refinement at the Lean type level, which is what makes the prelude types honest about their constraints regardless of who consumes them.
 

@@ -23,7 +23,7 @@ The deferred (0.9) general system for user-defined refinements: `@refine` aliase
 _Avoid_: bare "refinement types"
 
 **Refinement-target mismatch**:
-The case where assignability fails *and* the target is a `Prelude library type`. Two flavours:
+The case where assignability fails _and_ the target is a `Prelude library type`. Two flavours:
 TH0080 (literal out of range — source is a `.numberLit` outside the kind's bounds) and TH0081 (needs evidence — source is plain `number` and no narrowing or `as<T>` constructor evidence is in scope). The classifier lives in `Thales/TypeCheck/RefinementDiag.lean` as `refinementMismatch? : TSType → TSType → String → Option ThalesKind`; the two emission sites (`checkAssignable` in `Generic.lean`, `emitArgMismatch` in `Synth.lean`) call through it and supply their own TS-code fallback (TS2322 / TS2345).
 _Avoid_: bare "refinement mismatch" (could be confused with lattice subtyping in `isSubtype`)
 
@@ -47,4 +47,4 @@ _Avoid_: "test suite" (the harness is not a unit test framework)
   1. The Prelude library types (the concrete `Integer`/`Natural`/`Byte`/`Bit`).
   2. The Subtype machinery on the Lean side.
   3. The Refinement-type framework (deferred to 0.9; user-defined refinements).
-  When discussing the current v0.6 branch, default reading is (1); the branch ships none of (3).
+     When discussing the current v0.6 branch, default reading is (1); the branch ships none of (3).

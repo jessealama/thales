@@ -60,21 +60,21 @@ under `tests/conformance/reject/` for one canonical demonstration per `TH####` c
 
 ## In-scope features
 
-| Kind          | Detail                                                                                                                                           |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Primitives    | `boolean`, `string`, `number` (→ Lean `Float`), `bigint` (→ Lean `Int`)                                                                          |
-| Records       | `interface` and `type` aliases — nominal by declaration                                                                                          |
-| Arrays        | `T[]` as immutable `Array T`; `arr[i]` returns `Option<T>`                                                                                       |
-| Tuples        | `[A, B]`, `[A, B, C]`, ... → Lean `×` / fixed structures                                                                                         |
-| Unions        | Discriminated unions (shared `kind` field of string-literal type) → Lean inductive; nullable unions (`T \| null`, `T \| undefined`) → `Option T` |
-| Generics      | Parametric only (`<T>`, `<T, U>`)                                                                                                                |
-| Values        | `const`, `let`, `var` — all bound once, never reassigned in 0.5                                                                                  |
-| Functions     | `function` declarations and `const f = (...) => ...` arrows                                                                                      |
-| Recursion     | Structural or with `@decreasing` hint; all functions must terminate in 0.5                                                                       |
-| Control flow  | `if`/`else`, ternary, `switch` (exhaustive on a discriminated union)                                                                             |
-| Modules       | `import`/`export` of values and types                                                                                                            |
-| Stdlib        | `Option<T>`, `Result<T, E>`, array `.map`/`.filter`/`.reduce`/`.concat`/`.length`/`.slice`                                                       |
-| Refinements   | `Integer`, `Natural`, `Byte`, `Bit` from `@thales/prelude` — Lean Subtypes of `Float`; chain `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`           |
+| Kind         | Detail                                                                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Primitives   | `boolean`, `string`, `number` (→ Lean `Float`), `bigint` (→ Lean `Int`)                                                                          |
+| Records      | `interface` and `type` aliases — nominal by declaration                                                                                          |
+| Arrays       | `T[]` as immutable `Array T`; `arr[i]` returns `Option<T>`                                                                                       |
+| Tuples       | `[A, B]`, `[A, B, C]`, ... → Lean `×` / fixed structures                                                                                         |
+| Unions       | Discriminated unions (shared `kind` field of string-literal type) → Lean inductive; nullable unions (`T \| null`, `T \| undefined`) → `Option T` |
+| Generics     | Parametric only (`<T>`, `<T, U>`)                                                                                                                |
+| Values       | `const`, `let`, `var` — all bound once, never reassigned in 0.5                                                                                  |
+| Functions    | `function` declarations and `const f = (...) => ...` arrows                                                                                      |
+| Recursion    | Structural or with `@decreasing` hint; all functions must terminate in 0.5                                                                       |
+| Control flow | `if`/`else`, ternary, `switch` (exhaustive on a discriminated union)                                                                             |
+| Modules      | `import`/`export` of values and types                                                                                                            |
+| Stdlib       | `Option<T>`, `Result<T, E>`, array `.map`/`.filter`/`.reduce`/`.concat`/`.length`/`.slice`                                                       |
+| Refinements  | `Integer`, `Natural`, `Byte`, `Bit` from `@thales/prelude` — Lean Subtypes of `Float`; chain `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`           |
 
 ## Out-of-scope features
 

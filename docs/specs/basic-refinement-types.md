@@ -42,6 +42,7 @@ approach: ship a narrow but principled refinement system with
 across four versions so each ships independently.
 
 **Companion artifacts.**
+
 - PoC: `Test/PoC/RefinementGrind.lean` and `Test/PoC/FINDINGS.md` on
   branch `feat/thales-grind-poc` (validates the 0.8 verification
   approach before any 0.6 code lands).
@@ -59,7 +60,7 @@ the 0.6 → 0.9 ladder in one place. The sections progress from "what"
 → "why" → "how" → "in what order":
 
 - **Part I — Locked design decisions.** The 16 decisions that
-  define what "refinement types in 0.6" *is*. Stable; changes here
+  define what "refinement types in 0.6" _is_. Stable; changes here
   invalidate downstream parts.
 - **Part II — Decisions added during 2026-05-06 review.** Smaller
   follow-ups raised by external review, PoC findings, and a
@@ -109,7 +110,7 @@ already promised in `docs/future.md`.
 
 - **Runtime:** A refinement-typed value lowers to its base TS type's
   runtime representation. `Integer` lowers to Lean `Float`. The
-  refinement is *transparent at runtime* — that's the cultural
+  refinement is _transparent at runtime_ — that's the cultural
   promise of refinement types.
 - **Verification:** For verification, the framework reflects refined
   values to a domain `omega` is strong on (Lean `Int` for the
@@ -154,7 +155,7 @@ type Integer = number;
 
 ### 4. Composition: subtype-aware refinement of refinements (P3)
 
-`@refine` aliases may have *another refined alias* on the RHS. The
+`@refine` aliases may have _another refined alias_ on the RHS. The
 effective predicate is the conjunction along the chain. Subtyping is
 read off the alias chain — no implication-checking obligations.
 
@@ -163,13 +164,13 @@ read off the alias chain — no implication-checking obligations.
 type Integer = number;
 
 /** @refine x => x >= 0 */
-type Nat = Integer;          // effective: isInteger(x) ∧ x ≥ 0
+type Nat = Integer; // effective: isInteger(x) ∧ x ≥ 0
 
 /** @refine x => x <= 255 */
-type Byte = Nat;             // effective: isInteger(x) ∧ x ≥ 0 ∧ x ≤ 255
+type Byte = Nat; // effective: isInteger(x) ∧ x ≥ 0 ∧ x ≤ 255
 
 /** @refine x => x < 2 */
-type Bit = Nat;              // effective: isInteger(x) ∧ x ≥ 0 ∧ x < 2
+type Bit = Nat; // effective: isInteger(x) ∧ x ≥ 0 ∧ x < 2
 ```
 
 These four types ship in `Thales/TS/Prelude.d.ts` as part of 0.6.
@@ -214,16 +215,16 @@ atoms).
 ### 6. Arithmetic propagation: refinements widen by default; small sound-by-construction static table
 
 **Reframing.** `Integer` and `Nat` (with safe-integer bounds, see
-decision 8) are *boundary refinements*. They carry information
-across function signatures and through narrowing; they are *not*
+decision 8) are _boundary refinements_. They carry information
+across function signatures and through narrowing; they are _not_
 arithmetic rings. Arithmetic on full-range `Integer × Integer` is
-genuinely *not* closed under the safe-integer predicate:
+genuinely _not_ closed under the safe-integer predicate:
 
 - `MAX_SAFE_INTEGER + 1 = 2^53` is integer-valued but outside the
   safe bound, so the `Integer` predicate fails.
 - `MAX_SAFE + MAX_SAFE` (each operand at the boundary) overflows
   Float precision such that the Float result and the Int reflection
-  of the exact sum *disagree*, breaking L3 fidelity.
+  of the exact sum _disagree_, breaking L3 fidelity.
 - `Nat ** Nat` runs to `Infinity` quickly; `Number.isInteger(Infinity)`
   is `false`.
 
@@ -243,25 +244,25 @@ it cannot, the user gets a refinement-violation diagnostic
 
 **Static sound-by-construction table.** A small set of forms whose
 soundness is provable from safe-integer bounds and L3 reflection
-alone; the type-checker applies these *without* generating an
+alone; the type-checker applies these _without_ generating an
 obligation:
 
-| Form                  | Result    | Why sound                                        |
-| --------------------- | --------- | ------------------------------------------------ |
-| Unary `-` on `Integer`| `Integer` | `\|MIN_SAFE\| = MAX_SAFE`, so negation stays in range |
-| Unary `-` on `Nat`    | `Integer` | Result in `[-MAX_SAFE, 0]` ⊂ Integer             |
-| `Bit & Bit`           | `Bit`     | Closed in `{0,1}`                                |
-| `Bit \| Bit`          | `Bit`     | Same                                             |
-| `Bit ^ Bit`           | `Bit`     | Same                                             |
-| `Bit * Bit`           | `Bit`     | Same                                             |
-| `Bit + Bit`           | `Nat`     | Result in `{0,1,2}`                              |
-| `Byte + Byte`         | `Nat`     | Max `510 < MAX_SAFE`; Float-exact at this magnitude |
-| `Byte * Byte`         | `Nat`     | Max `65025 < MAX_SAFE`; Float-exact              |
-| `Byte - Byte`         | `Integer` | Range `[-255, 255]`; Float-exact                 |
-| `Math.abs(Integer)`   | `Nat`     | `\|MIN_SAFE\| = MAX_SAFE` (decision 11)          |
-| `Math.abs(Nat)`       | `Nat`     | Identity in range                                |
-| `Math.abs(Byte)`      | `Byte`    | Same magnitude domain, refinement preserved      |
-| `Math.abs(Bit)`       | `Bit`     | Same                                             |
+| Form                   | Result    | Why sound                                             |
+| ---------------------- | --------- | ----------------------------------------------------- |
+| Unary `-` on `Integer` | `Integer` | `\|MIN_SAFE\| = MAX_SAFE`, so negation stays in range |
+| Unary `-` on `Nat`     | `Integer` | Result in `[-MAX_SAFE, 0]` ⊂ Integer                  |
+| `Bit & Bit`            | `Bit`     | Closed in `{0,1}`                                     |
+| `Bit \| Bit`           | `Bit`     | Same                                                  |
+| `Bit ^ Bit`            | `Bit`     | Same                                                  |
+| `Bit * Bit`            | `Bit`     | Same                                                  |
+| `Bit + Bit`            | `Nat`     | Result in `{0,1,2}`                                   |
+| `Byte + Byte`          | `Nat`     | Max `510 < MAX_SAFE`; Float-exact at this magnitude   |
+| `Byte * Byte`          | `Nat`     | Max `65025 < MAX_SAFE`; Float-exact                   |
+| `Byte - Byte`          | `Integer` | Range `[-255, 255]`; Float-exact                      |
+| `Math.abs(Integer)`    | `Nat`     | `\|MIN_SAFE\| = MAX_SAFE` (decision 11)               |
+| `Math.abs(Nat)`        | `Nat`     | Identity in range                                     |
+| `Math.abs(Byte)`       | `Byte`    | Same magnitude domain, refinement preserved           |
+| `Math.abs(Bit)`        | `Bit`     | Same                                                  |
 
 The four `Math.abs` rows are covered by the more general
 "`Math.abs` preserves any non-negative refinement" principle that
@@ -274,37 +275,37 @@ here for clarity.
 
 - **`Integer + Integer`, `Integer - Integer`, `Integer * Integer`,
   `Nat + Nat`, `Nat * Nat`, `Nat ** Nat`** — none of these are
-  closed under the safe-integer predicate; obligations would
-  correctly fail for some operands in range. The sound thing for
-  users is to widen parameters to a smaller refinement (`Byte`) or
-  accept widening to `number`.
+closed under the safe-integer predicate; obligations would
+correctly fail for some operands in range. The sound thing for
+users is to widen parameters to a smaller refinement (`Byte`) or
+accept widening to `number`.
 - **`Integer % Integer`** — `5 % 0 = NaN`;
   `Number.isInteger(NaN)` is `false`. Closure requires the divisor
   be provably nonzero, which is not free. Widens to `number`; the
   user narrows after a `b !== 0` guard if needed.
 - **`Integer / Integer`** — already widens (JS `5 / 2 = 2.5`).
-  `Math.floor(a / b)` does *not* recover an `Integer`
+  `Math.floor(a / b)` does _not_ recover an `Integer`
   automatically because `Math.floor` returns `number` (NaN/Infinity
   for non-finite input — see decision 11 deferred list).
 
 **Implication for the corpus.** The first instinct
 — `function add(a: Integer, b: Integer): Integer { return a + b; }`
-— is *correctly* rejected. The corpus shows this as an
+— is _correctly_ rejected. The corpus shows this as an
 expected-failure example so users see the boundary explicitly.
 
 **Informational widening diagnostic (`TH0086`).** When binary
 arithmetic on refined-int operands produces a `number` result
-(i.e., widens), Thales emits an *informational* diagnostic at the
+(i.e., widens), Thales emits an _informational_ diagnostic at the
 operator site:
 
 > `TH0086`: arithmetic on `Integer`/`Nat`/`Byte`/`Bit` widens to
 > `number`; the result may be out of refinement range without
 > further assumptions.
 
-This is a hint, not a build failure (severity *info*; see decision
+This is a hint, not a build failure (severity _info_; see decision
 12). The triggering rule for 0.6 is conservative: fire only when
-*both* operands are refined-int and the operator/operand-types pair
-is *not* on the static sound table. Forms that *are* on the table
+_both_ operands are refined-int and the operator/operand-types pair
+is _not_ on the static sound table. Forms that _are_ on the table
 do not fire `TH0086`.
 
 For TH0086's interaction with `TH0080`, see Part II, decision D18.
@@ -371,7 +372,7 @@ Implementation note discovered during the PoC: the verifier either
 emits literal numeric bounds (`9007199254740991`) directly, or
 emits an `unfold minSafe maxSafe at *` step before the discharger.
 
-Refinement verification runs *before* directive application, so
+Refinement verification runs _before_ directive application, so
 refinement-violation diagnostics can be suppressed by
 `@thales-expect-error TH0080` like any other TH code. TH9002
 correctly blocks emission when a refinement violation has been
@@ -389,7 +390,7 @@ keeps the shell-out approach because it reuses the existing
 
 **Hypothesis plumbing.** When the verification emitter encounters a
 TS conditional (`if (cond) ... else ...`) or ternary
-(`cond ? a : b`), it lowers to Lean's *binding* form of `if`:
+(`cond ? a : b`), it lowers to Lean's _binding_ form of `if`:
 
 ```lean
 if h : <cond_lowered> then <then_branch> else <else_branch>
@@ -441,15 +442,15 @@ being refuted. For other failure modes, see Part II, decision D19.
 
 L3 reflection's per-value fidelity — that every `Integer`-typed
 Float maps to a unique `Int` and `Float.ofInt` is exact at that
-point — holds *only* within the JS safe-integer range
+point — holds _only_ within the JS safe-integer range
 (±(2⁵³−1)). Outside that range, integer-valued Floats exist (e.g.,
 `2^53` itself is exactly representable), but Float arithmetic on
 them rounds in ways that desynchronize from `Int` arithmetic. So
-the safe-integer bound is required to make the *reflection* sound
+the safe-integer bound is required to make the _reflection_ sound
 for any individual value.
 
-(Note: bounding individual *operands* is necessary but *not
-sufficient* to make arithmetic *operations* preserve refinement —
+(Note: bounding individual _operands_ is necessary but _not
+sufficient_ to make arithmetic _operations_ preserve refinement —
 `MAX_SAFE + 1` is integer-valued but exceeds the bound, and
 `MAX_SAFE + MAX_SAFE` rounds in Float arithmetic. That's why
 decision 6 only places a small set of operations on the static
@@ -474,9 +475,9 @@ Consequences:
 - A literal outside the safe range (e.g.,
   `let n: Integer = 9007199254740993`) is a refinement violation
   at type-check time. The "warning if integers exceed safe limits"
-  from the original pitch is automatic and is an *error*, not a
+  from the original pitch is automatic and is an _error_, not a
   warning.
-- No separate `SafeInteger` type. `Integer` *means* JS-safe.
+- No separate `SafeInteger` type. `Integer` _means_ JS-safe.
 
 **Note on negative zero.** `Number.isInteger(-0)` returns `true`,
 so `-0` is a member of the JS-side `Integer` predicate. Lean
@@ -510,7 +511,11 @@ condition whose body matches the refinement's effective predicate
 exactly, and narrows the variable:
 
 ```ts
-if (Number.isInteger(n) && n >= Number.MIN_SAFE_INTEGER && n <= Number.MAX_SAFE_INTEGER) {
+if (
+  Number.isInteger(n) &&
+  n >= Number.MIN_SAFE_INTEGER &&
+  n <= Number.MAX_SAFE_INTEGER
+) {
   // n: Integer here
 }
 ```
@@ -567,11 +572,11 @@ resolution; defer that):
 - For all other call shapes, `Math.abs(n: number): number` (TS lib
   default).
 
-Note that `arr.length` returning `Nat` is a *typing* change, not a
+Note that `arr.length` returning `Nat` is a _typing_ change, not a
 user-facing `@refine` annotation. Programmers don't write this;
 Thales knows it.
 
-Deferred (explicitly *not* in the 0.6 → 0.9 ladder):
+Deferred (explicitly _not_ in the 0.6 → 0.9 ladder):
 
 - `Math.floor`/`ceil`/`trunc`/`round` — return `number` because of
   NaN/Infinity for non-finite input. Typing them as `Integer`
@@ -582,7 +587,7 @@ Deferred (explicitly *not* in the 0.6 → 0.9 ladder):
   Part XI for the overload sketches a future version might
   ship.)
 - `parseInt`, `Number(bigint)` — return `number`; user narrows.
-- **Array bounds-checking** — `arr[i]` does *not* require
+- **Array bounds-checking** — `arr[i]` does _not_ require
   `i < arr.length` across 0.6 → 0.9. That's a separate, much
   bigger refinement (in-range indices with dependent
   length-tracking) that belongs to a future "non-empty array /
@@ -592,16 +597,16 @@ Deferred (explicitly *not* in the 0.6 → 0.9 ladder):
 
 `TH0080`–`TH0089` reserved for refinement types. Initial allocation:
 
-| Code     | Severity | Meaning (user-facing message)                                                |
-| -------- | -------- | ---------------------------------------------------------------------------- |
-| `TH0080` | error    | Refinement obligation not discharged                                         |
-| `TH0081` | error    | Refinement predicate not recognized                                          |
-| `TH0082` | error    | `@refine` alias must have base type `number` or another refined alias        |
-| `TH0083` | error    | Literal value out of range for refinement type                               |
-| `TH0084` | error    | Cast to refinement type not permitted                                        |
-| `TH0085` | error    | Multiple `@refine` annotations on one type alias                             |
-| `TH0086` | info     | Arithmetic on refinement type widens to `number`                             |
-| `TH0087` | error    | Refinement predicate references variable not bound by the lambda parameter  |
+| Code     | Severity | Meaning (user-facing message)                                              |
+| -------- | -------- | -------------------------------------------------------------------------- |
+| `TH0080` | error    | Refinement obligation not discharged                                       |
+| `TH0081` | error    | Refinement predicate not recognized                                        |
+| `TH0082` | error    | `@refine` alias must have base type `number` or another refined alias      |
+| `TH0083` | error    | Literal value out of range for refinement type                             |
+| `TH0084` | error    | Cast to refinement type not permitted                                      |
+| `TH0085` | error    | Multiple `@refine` annotations on one type alias                           |
+| `TH0086` | info     | Arithmetic on refinement type widens to `number`                           |
+| `TH0087` | error    | Refinement predicate references variable not bound by the lambda parameter |
 
 `TH0088`–`TH0089` reserved for additions during the 0.6 → 0.9
 implementation.
@@ -617,15 +622,15 @@ does not block. `@thales-expect-error TH<code>` works for both
 severities — a user who has explicitly considered an `info` site
 can suppress it.
 
-`TH0086` triggers conservatively: only when *both* operands of a
+`TH0086` triggers conservatively: only when _both_ operands of a
 binary arithmetic op are refined-int and the operator/operand-types
-pair is *not* on decision 6's static sound table. Forms that *are*
+pair is _not_ on decision 6's static sound table. Forms that _are_
 on the table do not fire `TH0086`.
 
 User-facing messages do not name the discharger (`omega`/`grind`/etc.)
 and do not mention version numbers. Implementation comments and
 `docs/errors.md` may explain mechanism, but the diagnostic itself
-describes the *phenomenon*, not the *means*.
+describes the _phenomenon_, not the _means_.
 
 `TH0080` is a single code covering all undischarged obligations
 regardless of which refinement is involved — the diagnostic message
@@ -646,10 +651,10 @@ harness's `diagKey` matching already accommodates Thales adding
 
 `Math.abs(Integer): Nat` returns the same runtime `Float` value as
 `Math.abs(number): number` — refinement is type-level, not
-runtime-level. So `Math.abs` does *not* get a special runtime
+runtime-level. So `Math.abs` does _not_ get a special runtime
 helper. This is documented in `docs/runtime.md`.
 
-### 14. Scope lock — what is *deliberately not shipping*
+### 14. Scope lock — what is _deliberately not shipping_
 
 See Part IX for the complete lock list, broken out per version.
 
@@ -685,20 +690,20 @@ expressions like `byte + bit` are expressible. Decision needed.
 mixed-pair entries; do not derive a general subtype-join.** The
 extension:
 
-| Operands              | Result    |
-| --------------------- | --------- |
-| `Byte + Bit`          | `Nat`     |
-| `Bit + Byte`          | `Nat`     |
-| `Nat + Bit`           | `Nat`     |
-| `Bit + Nat`           | `Nat`     |
-| `Nat + Byte`          | `Nat`     |
-| `Byte + Nat`          | `Nat`     |
-| `Integer + Byte`      | `Integer` |
-| `Byte + Integer`      | `Integer` |
-| `Integer + Bit`       | `Integer` |
-| `Bit + Integer`       | `Integer` |
-| `Integer + Nat`       | `Integer` |
-| `Nat + Integer`       | `Integer` |
+| Operands         | Result    |
+| ---------------- | --------- |
+| `Byte + Bit`     | `Nat`     |
+| `Bit + Byte`     | `Nat`     |
+| `Nat + Bit`      | `Nat`     |
+| `Bit + Nat`      | `Nat`     |
+| `Nat + Byte`     | `Nat`     |
+| `Byte + Nat`     | `Nat`     |
+| `Integer + Byte` | `Integer` |
+| `Byte + Integer` | `Integer` |
+| `Integer + Bit`  | `Integer` |
+| `Bit + Integer`  | `Integer` |
+| `Integer + Nat`  | `Integer` |
+| `Nat + Integer`  | `Integer` |
 
 Subtraction follows the same lattice but never falls into `Nat` or
 `Byte` because subtraction can produce a negative; mixed-pair
@@ -755,13 +760,13 @@ errors with no obligation reference, etc.).
 see; distinguish failure modes through the diagnostic _note_, not
 through new TH codes.**
 
-| Failure mode                                        | Surfaced as                                                |
-| --------------------------------------------------- | ---------------------------------------------------------- |
-| Timeout                                             | TH0080 with note `obligation timed out (N s)`              |
-| Lean process killed (OOM / SIGKILL)                 | TH0080 with note `verifier killed (signal N)` + first 200 chars of stderr |
-| `omega` failed for a recognized obligation index    | TH0080 with predicate/context from registry (standard)     |
+| Failure mode                                                                 | Surfaced as                                                                                                                  |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Timeout                                                                      | TH0080 with note `obligation timed out (N s)`                                                                                |
+| Lean process killed (OOM / SIGKILL)                                          | TH0080 with note `verifier killed (signal N)` + first 200 chars of stderr                                                    |
+| `omega` failed for a recognized obligation index                             | TH0080 with predicate/context from registry (standard)                                                                       |
 | Lean exited non-zero, no obligation reference, recognizable elaboration text | TH0080 with note `internal: verifier rejected the generated Lean (first 200 chars: ...)` (emitter bug, not user-program bug) |
-| Lean exited non-zero, no recognizable text          | TH0080 with note `internal: unexpected verification error` + first 200 chars of stderr |
+| Lean exited non-zero, no recognizable text                                   | TH0080 with note `internal: unexpected verification error` + first 200 chars of stderr                                       |
 
 Conditions that bypass TH0080 entirely (treat as harness errors,
 exit non-zero, no per-obligation surfacing):
@@ -880,7 +885,7 @@ noticing, and a manual "doc-vs-impl diff" is fragile.
 **Decision: add a small standalone `scripts/validate-tour.js` (or
 a similar Lean test) in Milestone F that parses the `// ✓` and
 `// ✗ TH00xx` comments out of each tour file and confirms the
-actual compiler behavior matches.** The validator is *not* part of
+actual compiler behavior matches.** The validator is _not_ part of
 the conformance harness — tour files are still documentation, not
 fixtures, and the validator's failure mode is "the tour is lying,"
 not "the compiler is wrong." It runs in CI alongside the harness.
@@ -1015,7 +1020,7 @@ that is sound because outside the safe range, monotonicity of
 (rounding cannot flip a strict order between distinct integers
 separated by at least one). Trust weight: low.
 
-#### What's *not* in the trust base
+#### What's _not_ in the trust base
 
 No axiom is shipped for multiplication, division, modulo, or any
 bitwise operation. The static sound table in decision 6 handles
@@ -1125,7 +1130,7 @@ the earliest version where the example becomes a corpus fixture.
 4. **`function clamp(b: Byte): Byte { return b > 200 ? 200 : b; }`**
    `[ships in: 0.7]` — both ternary branches return `Byte` values
    (`200` is a `Byte` literal; `b: Byte` already). The 0.7 example
-   does *not* exercise verification — it works at the type level.
+   does _not_ exercise verification — it works at the type level.
    In 0.8 the verification emitter additionally reifies the
    conditional with the `b > 200` hypothesis available at each
    slot, but for `clamp` the obligations discharge trivially.
@@ -1137,7 +1142,7 @@ the earliest version where the example becomes a corpus fixture.
    type-checker special case that produces `Nat` directly.
 
 6. **`function fromUnknown(raw: number): Integer`**
-   `[ships in: 0.7]` — *the boundary pattern.* Demonstrates how
+   `[ships in: 0.7]` — _the boundary pattern._ Demonstrates how
    an externally-supplied `number` is narrowed via the prelude
    guard:
 
@@ -1145,7 +1150,7 @@ the earliest version where the example becomes a corpus fixture.
    /** @throws RangeError */
    function fromUnknown(raw: number): Integer {
      if (isInteger(raw)) return raw;
-     throw new RangeError("not a safe integer");
+     throw new RangeError('not a safe integer');
    }
    ```
 
@@ -1173,7 +1178,9 @@ the earliest version where the example becomes a corpus fixture.
    ```ts
    // @thales-expect-error TH0080
    // @thales-expect-error TH0086
-   function add(a: Integer, b: Integer): Integer { return a + b; }
+   function add(a: Integer, b: Integer): Integer {
+     return a + b;
+   }
    ```
 
    Demonstrates the central design constraint:
@@ -1182,7 +1189,7 @@ the earliest version where the example becomes a corpus fixture.
    `omega` (counterexample: `a = b = MAX_SAFE`). Per Part II
    decision D18, both diagnostics fire and both are suppressed by
    the directive pair. In 0.7 (no verification), the same source
-   fails with `TH0086` *and* a regular type-mismatch
+   fails with `TH0086` _and_ a regular type-mismatch
    (`number` not assignable to `Integer`), since no obligation
    pipeline exists to discharge widening — the corpus example
    ships in 0.7 with that exact diagnostic shape, then mutates to
@@ -1194,7 +1201,9 @@ the earliest version where the example becomes a corpus fixture.
    ```ts
    // @thales-expect-error TH0080
    // @thales-expect-error TH0086
-   function half(n: Integer): Integer { return n / 2; }
+   function half(n: Integer): Integer {
+     return n / 2;
+   }
    ```
 
    `Integer / Integer` widens (`5 / 2 = 2.5`). In 0.8 the
@@ -1207,9 +1216,9 @@ the earliest version where the example becomes a corpus fixture.
     ```ts
     // No prelude import: user-defined Integer (different
     // semantics) coexists with the prelude name unused.
-    type Integer = bigint;       // domain wants arbitrary precision
+    type Integer = bigint; // domain wants arbitrary precision
     function safeAdd(a: Integer, b: Integer): Integer {
-      return a + b;              // bigint + bigint, no Thales refinement
+      return a + b; // bigint + bigint, no Thales refinement
     }
     ```
 
@@ -1223,10 +1232,10 @@ the earliest version where the example becomes a corpus fixture.
     `[ships in: 0.6]`
 
     ```ts
-    import { Integer as PreludeInteger } from "@thales/prelude";
+    import { Integer as PreludeInteger } from '@thales/prelude';
 
-    type Integer = string;       // user's own; no conflict
-    const a: Integer = "hello";
+    type Integer = string; // user's own; no conflict
+    const a: Integer = 'hello';
     const b: PreludeInteger = 42;
     ```
 
@@ -1238,13 +1247,13 @@ the earliest version where the example becomes a corpus fixture.
     `[ships in: 0.6]`
 
     ```ts
-    import { Integer } from "@thales/prelude";
+    import { Integer } from '@thales/prelude';
 
-    const outer: Integer = 42;   // prelude's Integer
+    const outer: Integer = 42; // prelude's Integer
 
     function localOverride(): string {
-      type Integer = string;     // shadows the import in this scope
-      const inner: Integer = "hello";
+      type Integer = string; // shadows the import in this scope
+      const inner: Integer = 'hello';
       return inner;
     }
     ```
@@ -1256,9 +1265,9 @@ the earliest version where the example becomes a corpus fixture.
     `[ships in: 0.6]`
 
     ```ts
-    import { Integer } from "@thales/prelude";
+    import { Integer } from '@thales/prelude';
     // @ts-expect-error TS2440
-    type Integer = string;       // duplicate identifier
+    type Integer = string; // duplicate identifier
     ```
 
     Tests that Thales does not need to add a separate diagnostic
@@ -1273,12 +1282,13 @@ the earliest version where the example becomes a corpus fixture.
 These four examples walk through the verification-pipeline data
 flow end-to-end (TS source → typed AST → verification Lean →
 registry entry → `lake env lean` → diagnostic). They are a
-*thinking tool* for the design, not corpus examples; they're
+_thinking tool_ for the design, not corpus examples; they're
 chosen to stress different aspects of the source-map and
 obligation-generation design and to expose friction points before
 Milestone C commits.
 
 Each tracer documents:
+
 - **Source** — TS file the user would write.
 - **What happens** — the type-checker / emitter walkthrough.
 - **Verification Lean** — the `def __thalesObligation_<n>` shape
@@ -1326,8 +1336,8 @@ def __thalesObligation_0 (x : Float) :
 
 **Friction revealed.** The obligation has to take the function's
 parameters as Lean binders; it isn't a closed proposition. The
-verification emitter must compute *the relevant scope at each
-slot*: which parameters/locals the predicate references, and
+verification emitter must compute _the relevant scope at each
+slot_: which parameters/locals the predicate references, and
 which of those have refinement hypotheses available.
 
 ### Tracer 2 — "Narrowing rescue"
@@ -1340,14 +1350,14 @@ function takeInteger(x: number): Integer {
   if (isInteger(x)) {
     return x;
   }
-  throw new RangeError("not a safe integer");
+  throw new RangeError('not a safe integer');
 }
 ```
 
 **What happens.** Type-checker recognizes `isInteger` as a
 narrowing guard (decision 10's C2). Inside the `then`-branch, `x`
 has type `Integer` (not `number`). The return-slot type matches
-the value type *syntactically*; no obligation is generated. The
+the value type _syntactically_; no obligation is generated. The
 throw branch satisfies `@throws`; the function as a whole is
 well-typed.
 
@@ -1363,11 +1373,11 @@ subprocess to `lake env lean` can be skipped.
 **Friction revealed.** Many functions will produce zero
 obligations (those whose refinements are fully discharged at the
 type-checker level via narrowing or static rules). The pipeline
-should detect an empty registry and *skip* the `lake env lean`
+should detect an empty registry and _skip_ the `lake env lean`
 invocation entirely; otherwise we pay subprocess overhead for
 trivial cases.
 
-### Tracer 3 — "Conditional with hypothesis" *(highest-stress tracer)*
+### Tracer 3 — "Conditional with hypothesis" _(highest-stress tracer)_
 
 **Source.**
 
@@ -1379,11 +1389,11 @@ function offsetSign(n: Integer): Nat {
 
 **What happens.**
 
-- *Then-branch* (`n < 0` true): the static sound table says unary
+- _Then-branch_ (`n < 0` true): the static sound table says unary
   `-` of `Integer` is `Integer`, so `-n : Integer`. But the slot
   is `Nat`. So an Integer-into-Nat obligation is generated, with
   `n < 0` available as a hypothesis from the ternary lowering.
-- *Else-branch* (`n < 0` false): `n : Integer` flows into a `Nat`
+- _Else-branch_ (`n < 0` false): `n : Integer` flows into a `Nat`
   slot, with `¬(n < 0)` (i.e., `n ≥ 0`) as a hypothesis.
 
 Both obligations need the discharger to use the conditional
@@ -1414,7 +1424,7 @@ the ternary.
 
 **Outcome.** Both `thales_grind` invocations succeed; no `TH0080`.
 
-**Friction *originally* anticipated, *resolved* by the PoC.**
+**Friction _originally_ anticipated, _resolved_ by the PoC.**
 `omega`/`grind` on `Float` directly is intractable (IEEE 754 lacks
 the algebraic structure needed). The PoC validated the resolution:
 the emitter destructures `Float.IsSafeInteger` hypotheses into
@@ -1422,7 +1432,7 @@ the emitter destructures `Float.IsSafeInteger` hypotheses into
 a thin rewrite-and-`omega` macro on the Int side.
 
 The L3 design (decision 2) anticipated the reflection but didn't
-specify *how* it happens. Tracer 3 makes it concrete:
+specify _how_ it happens. Tracer 3 makes it concrete:
 
 1. The emitter inspects the goal and hypotheses, identifies
    `Float` values with attached `IsSafeInteger` hypotheses.
@@ -1488,7 +1498,7 @@ error[TH0080]: refinement obligation not discharged
   = note: could not show that `a + b` satisfies `Number.isInteger(x) && x in [MIN_SAFE_INTEGER, MAX_SAFE_INTEGER]`
 ```
 
-**Friction revealed.** Choosing the *right TS position* matters
+**Friction revealed.** Choosing the _right TS position_ matters
 for diagnostic UX. Three plausible spans:
 
 - the return statement (`return a + b;` — the slot)
@@ -1513,7 +1523,7 @@ the **slot**. So `ObligationInfo` carries both `value_span` and
    original spec. The PoC concretized it (Part VI).
 
 These four tracers may be repurposed as `Test/Examples/fixtures/`
-self-tests during Milestone C, where their job *is* to stress the
+self-tests during Milestone C, where their job _is_ to stress the
 architecture.
 
 ---
@@ -1527,12 +1537,12 @@ with `Test/PoC/FINDINGS.md` summarizing outcomes.
 
 ### Phase A — Int-side obligations
 
-| Tracer                       | Expected                          | Result   |
-| ---------------------------- | --------------------------------- | -------- |
-| 3a (negation of negative)    | succeed via `omega`               | GREEN    |
-| 3b (non-negative pass-through)| succeed via `omega`              | GREEN    |
-| 1 (no bounds info)           | fail under `fail_if_success`      | GREEN    |
-| 4 (sum can overflow)         | fail under `fail_if_success`      | GREEN    |
+| Tracer                         | Expected                     | Result |
+| ------------------------------ | ---------------------------- | ------ |
+| 3a (negation of negative)      | succeed via `omega`          | GREEN  |
+| 3b (non-negative pass-through) | succeed via `omega`          | GREEN  |
+| 1 (no bounds info)             | fail under `fail_if_success` | GREEN  |
+| 4 (sum can overflow)           | fail under `fail_if_success` | GREEN  |
 
 **Notes.** One minor surprise: `omega` does not unfold `abbrev`s
 when they're used as hypothesis bounds. We had to add
@@ -1549,9 +1559,10 @@ no local definition needed.
 
 **Reflection lemma `Float.IsSafeInteger`:** defined as a
 definitional existential (Part III). No additional axiom required
-to *state* the predicate.
+to _state_ the predicate.
 
 **Homomorphism axioms used in PoC:**
+
 - `Float.ofInt_neg : ∀ (n : Int), -(Float.ofInt n) = Float.ofInt (-n)`
 - `Float.ofInt_lt : ∀ (a b : Int), Float.ofInt a < Float.ofInt b ↔ a < b`
 - `Float.ofInt_le : ∀ (a b : Int), Float.ofInt a ≤ Float.ofInt b ↔ a ≤ b`
@@ -1579,10 +1590,10 @@ which hypotheses to destructure (it generated them) and emits the
 `obtain` directly. A tactic that auto-destructures every
 `IsSafeInteger` hypothesis is unnecessary.
 
-| Tracer (Float-side) | Manual proof | `thales_grind` |
-| ------------------- | ------------ | -------------- |
-| 3a                  | succeed      | succeed        |
-| 3b                  | succeed      | succeed        |
+| Tracer (Float-side) | Manual proof          | `thales_grind`              |
+| ------------------- | --------------------- | --------------------------- |
+| 3a                  | succeed               | succeed                     |
+| 3b                  | succeed               | succeed                     |
 | 1                   | (n/a — expected fail) | `fail_if_success` confirmed |
 | 4                   | (n/a — expected fail) | `fail_if_success` confirmed |
 
@@ -1605,11 +1616,11 @@ soundness bug), `fail_if_success` would fail the build.
 
 ### Timing
 
-| Measurement                        | Value     |
-| ---------------------------------- | --------- |
-| Warm compile of the PoC file       | ~0.43 s   |
-| Number of theorem/example decls    | 10        |
-| Per-obligation amortized cost      | ~43 ms    |
+| Measurement                     | Value   |
+| ------------------------------- | ------- |
+| Warm compile of the PoC file    | ~0.43 s |
+| Number of theorem/example decls | 10      |
+| Per-obligation amortized cost   | ~43 ms  |
 
 For Milestone C: a typical Thales source file might generate 10–50
 refinement obligations. At ~43 ms per obligation, that's ~0.4–2.2
@@ -1647,10 +1658,10 @@ axioms, and per-obligation cost is well under our budget.
 ## Part VII — Version ladder & milestone breakdown
 
 This part is the implementation plan, expressed as four shippable
-versions. The work is an *epic*, not a single feature; building it
+versions. The work is an _epic_, not a single feature; building it
 as horizontal layers (parser fully → type-checker fully → emitter
 fully → verifier fully) means the system isn't end-to-end working
-until the very last step. The slicing below is *vertical*: each
+until the very last step. The slicing below is _vertical_: each
 version crosses every layer needed for that version's user value,
 leaves the build green, and ships something a user could
 meaningfully exercise.
@@ -1718,7 +1729,7 @@ validator).
 fails to assign back into a refined slot with a regular
 type-mismatch error). No narrowing (`if (isInteger(x)) ...` is
 not understood). No verification phase (so even when arithmetic
-*could* be proven safe, the tooling doesn't try). No user-defined
+_could_ be proven safe, the tooling doesn't try). No user-defined
 `@refine` aliases (predicates outside the four prelude shapes are
 rejected with `TH0081`).
 
@@ -1727,7 +1738,7 @@ rejected with `TH0081`).
 ```ts
 // 0.6: refinement types as documentation primitives.
 
-import type { Integer, Nat, Byte } from "./prelude";
+import type { Integer, Nat, Byte } from './prelude';
 
 // `Math.abs` overload: type-checker special-case returns Nat.
 function magnitude(n: Integer): Nat {
@@ -1736,7 +1747,7 @@ function magnitude(n: Integer): Nat {
 
 // `Array<T>.length: Nat` from the builtin-type-table.
 function isEmpty<T>(arr: T[]): boolean {
-  const n: Nat = arr.length;   // OK: arr.length is Nat
+  const n: Nat = arr.length; // OK: arr.length is Nat
   return n === 0;
 }
 
@@ -1771,7 +1782,7 @@ function double(b: Byte): Byte {
 }
 ```
 
-This is *correctly rejected* in 0.6 — refined-type-preserving
+This is _correctly rejected_ in 0.6 — refined-type-preserving
 arithmetic is the next version's job. The error code is `TS2322`
 (plain TypeScript type mismatch), not `TH0080` (which doesn't
 exist yet because there's no verifier).
@@ -1796,7 +1807,7 @@ narrowing) → D1a (refinement-narrowing guard kind) → D1b
 
 **What's still missing in 0.7.** No verification phase yet: when
 arithmetic falls off the static table and the result flows into a
-refined slot, the user gets `TH0086` *plus* a regular type-
+refined slot, the user gets `TH0086` _plus_ a regular type-
 mismatch error (just as in 0.6). The user can't yet write
 `function add(a: Integer, b: Integer): Integer { return a + b; }`
 and have the tool either prove or refute the refinement; the tool
@@ -1809,12 +1820,12 @@ rejected.
 // 0.7: arithmetic on the static table preserves refinement;
 // narrowing recognizes prelude guards.
 
-import type { Integer, Nat, Byte, Bit } from "./prelude";
-import { isInteger, isByte } from "./prelude";
+import type { Integer, Nat, Byte, Bit } from './prelude';
+import { isInteger, isByte } from './prelude';
 
 // Static table: Byte + Byte = Nat.
 function sumBytes(a: Byte, b: Byte): Nat {
-  return a + b;     // Byte + Byte: Nat per static table
+  return a + b; // Byte + Byte: Nat per static table
 }
 
 // Static table: Bit & Bit = Bit (and similar for | ^ *).
@@ -1831,14 +1842,14 @@ function byteWithFlag(b: Byte, flag: Bit): Nat {
 // throwing on failure. Requires D0.5 (post-throw narrowing).
 /** @throws RangeError */
 function asInteger(raw: number): Integer {
-  if (!isInteger(raw)) throw new RangeError("not a safe integer");
-  return raw;       // raw: Integer here, by D0.5 narrowing
+  if (!isInteger(raw)) throw new RangeError('not a safe integer');
+  return raw; // raw: Integer here, by D0.5 narrowing
 }
 
 // Math.abs hooks (already in 0.6).
 function distance(start: Byte, end: Byte): Nat {
-  const diff = end - start;       // Byte - Byte: Integer per static table
-  return Math.abs(diff);          // Math.abs(Integer): Nat
+  const diff = end - start; // Byte - Byte: Integer per static table
+  return Math.abs(diff); // Math.abs(Integer): Nat
 }
 
 // Off-static-table arithmetic: TH0086 fires (info), and the
@@ -1865,9 +1876,9 @@ function tooMuch(a: Integer, b: Integer): Integer {
 ### 0.8 — Verification pipeline + obligations
 
 **What the user can do.** Arithmetic outside the static table
-gets *verified* rather than just refused. The `add(a, b)`
+gets _verified_ rather than just refused. The `add(a, b)`
 example correctly fails with `TH0080` (a counterexample exists
-at the safe-integer boundary). Code paths that *can* be proven
+at the safe-integer boundary). Code paths that _can_ be proven
 safe — even when they're outside the static table — pass the
 verifier and are accepted. The conditional-with-hypothesis
 pattern (`offsetSign(n: Integer): Nat = n < 0 ? -n : n`) works
@@ -1890,7 +1901,7 @@ recognized.
 ```ts
 // 0.8: verification pipeline ships. Obligations get checked.
 
-import type { Integer, Nat, Byte } from "./prelude";
+import type { Integer, Nat, Byte } from './prelude';
 
 // Now possible because the verifier sees the ternary's hypothesis
 // and discharges the obligation Integer → Nat under `n < 0`.
@@ -1911,7 +1922,7 @@ function clampToByteOr(n: Integer, fallback: Byte): Byte {
 // The verifier sees both operands are Byte (each ≤ 255),
 // so the sum ≤ 510, well within Nat.
 function safeSum(a: Byte, b: Byte): Nat {
-  return a + b;     // already in 0.7; mentioned to contrast
+  return a + b; // already in 0.7; mentioned to contrast
 }
 
 // Off-table arithmetic that does NOT verify: TH0080 + TH0086.
@@ -1930,7 +1941,7 @@ function add(a: Integer, b: Integer): Integer {
   validated this discharge mechanism on `feat/thales-grind-poc`.
 - The `add` example was a TS2322 in 0.7 and is now a TH0080 in
   0.8 — same source, different diagnostic, more useful error
-  message (the verifier explains *why* the assignment is
+  message (the verifier explains _why_ the assignment is
   refused). Corpus example 8 captures this transition.
 
 ---
@@ -1967,8 +1978,8 @@ function bind(port: Port): Server {
   return server.listen(port);
 }
 
-bind(80);     // OK: 80 is in [1, 65535]
-bind(80000);  // TH0083: literal out of range for Port
+bind(80); // OK: 80 is in [1, 65535]
+bind(80000); // TH0083: literal out of range for Port
 
 // User predicate that's an alpha-rename of the prelude's Integer.
 // The parser produces an AST that normalizes to the prelude shape;
@@ -1977,7 +1988,7 @@ bind(80000);  // TH0083: literal out of range for Port
 type MyInt = number;
 
 const a: Integer = 42;
-const b: MyInt = a;   // OK: AST equivalence
+const b: MyInt = a; // OK: AST equivalence
 
 // User predicate using disjunction: rejected.
 /** @refine x => x === 0 || x === 1 */
@@ -2037,11 +2048,12 @@ all `<: number`) is in place; out-of-range literals fail at
 compile time.
 
 **Layers touched.**
-- *Type-checker:* refinement-type AST representation; subtype
+
+- _Type-checker:_ refinement-type AST representation; subtype
   lattice; static literal-range check.
-- *Diagnostics:* `TH0083` (literal out of range), `TH0085`
+- _Diagnostics:_ `TH0083` (literal out of range), `TH0085`
   (multiple `@refine` on one alias).
-- *Tests:* `Test/TypeCheck/RefinementLatticeTest.lean` covers
+- _Tests:_ `Test/TypeCheck/RefinementLatticeTest.lean` covers
   transitivity, literal edges (-2^53+1, 0, 255, 256, 2^53-1,
   2^53).
 
@@ -2056,14 +2068,15 @@ in function signatures, parameter lists, return types, and variable
 declarations.
 
 **Layers touched.**
-- *Parser:* recognize `@refine` JSDoc on type aliases. Hardcoded
+
+- _Parser:_ recognize `@refine` JSDoc on type aliases. Hardcoded
   recognition of the four prelude predicates (real parser ships
   in E; tracked as decision D22).
-- *Stdlib hooks:* `Array.length: Nat`, `string.length: Nat`, four
+- _Stdlib hooks:_ `Array.length: Nat`, `string.length: Nat`, four
   `Math.abs` overloads.
-- *Prelude:* `Thales/TS/Prelude.d.ts` ships the four refined
+- _Prelude:_ `Thales/TS/Prelude.d.ts` ships the four refined
   types.
-- *Corpus:* a positive case using `Integer` in a signature; the
+- _Corpus:_ a positive case using `Integer` in a signature; the
   TH0083 + TH0085 expected-failure fixtures.
 
 **Estimated effort.** 2 days. Depends on A1.
@@ -2075,14 +2088,15 @@ preserves refinement: `negate`, `double`, `bitAnd`. The
 informational `TH0086` widening diagnostic begins firing.
 
 **Layers touched.**
-- *Type-checker:* implement decision 6's static sound table.
-- *Diagnostic infrastructure (NEW):* introduce `Severity` field
+
+- _Type-checker:_ implement decision 6's static sound table.
+- _Diagnostic infrastructure (NEW):_ introduce `Severity` field
   (`error | info`) in `Thales/TypeCheck/Diagnostic.lean`. The
   field does not exist today (audit confirmed; Part VIII).
   Existing diagnostics become `error`. This is the slice that
   lands the severity concept.
-- *Diagnostics:* `TH0086` (info, conservative trigger).
-- *Corpus:* `negate`, `double`, `bitAnd` (positive). No
+- _Diagnostics:_ `TH0086` (info, conservative trigger).
+- _Corpus:_ `negate`, `double`, `bitAnd` (positive). No
   obligations yet, so failure cases that depend on TH0080 are
   deferred to Milestone D2.
 
@@ -2097,13 +2111,13 @@ non-`number` types. `Byte + Bit` is `Nat`, etc. (per decision
 D17).
 
 **Layers touched.**
-- *Type-checker:* extend the static table with the 12 mixed-pair
+
+- _Type-checker:_ extend the static table with the 12 mixed-pair
   entries from D17.
-- *Tests:* extend `RefinementLatticeTest.lean` with the new rows.
+- _Tests:_ extend `RefinementLatticeTest.lean` with the new rows.
 
 **Acceptance.** All 12 mixed-pair entries from D17 typecheck per
-the table. Off-table mixed pairs still fire `TH0086` per decision
-6.
+the table. Off-table mixed pairs still fire `TH0086` per decision 6.
 
 **Estimated effort.** ½ day. Depends on B.
 
@@ -2116,10 +2130,11 @@ re-merged then re-split as C2 below — see decision history).
 for one minimal obligation kind (literal-into-refined-slot).
 
 **Layers touched.**
-- *Pipeline (NEW):* new phase 5 in `Thales/Main.lean`.
-- *Verification emitter (NEW):* `Thales/Emit/Verify.lean`. Lowers
+
+- _Pipeline (NEW):_ new phase 5 in `Thales/Main.lean`.
+- _Verification emitter (NEW):_ `Thales/Emit/Verify.lean`. Lowers
   one minimal obligation kind to verification-only Lean.
-- *Source-map registry (NEW):* in-memory `Std.HashMap Nat ObligationInfo`,
+- _Source-map registry (NEW):_ in-memory `Std.HashMap Nat ObligationInfo`,
   keyed by per-invocation `Nat` index. `ObligationInfo` shape per
   decision D20 (no `ts_file`; carries `value_span`, `slot_span`,
   `predicateText`, `contextDesc`).
@@ -2135,11 +2150,12 @@ Split from original Milestone C.
 preserve the temp file via `--keep-verify-temp`.
 
 **Layers touched.**
-- *Subprocess driver (NEW):* `lake env lean` invocation with a
+
+- _Subprocess driver (NEW):_ `lake env lean` invocation with a
   per-call timeout (initial 30 s, configurable). Lean is invoked
   only when the registry is non-empty (skip path takes zero
   subprocess time per tracer 2's friction).
-- *CLI:* `--keep-verify-temp` flag preserves the verify temp
+- _CLI:_ `--keep-verify-temp` flag preserves the verify temp
   file + serializes the registry to JSON next to it.
 
 **Estimated effort.** 2 days. Depends on B.5. (Can run parallel
@@ -2153,16 +2169,17 @@ Split from original Milestone C.
 positioned `TH0080` surfaces correctly.
 
 **Layers touched.**
-- *Stderr parser:* scan for `__thalesObligation_<n>` mentions;
+
+- _Stderr parser:_ scan for `__thalesObligation_<n>` mentions;
   extract the index. Narrow substring-match (decision D19).
-- *Diagnostic surfacing:* map indices to `ObligationInfo`; emit
+- _Diagnostic surfacing:_ map indices to `ObligationInfo`; emit
   `TH0080` with predicate/context notes.
-- *Edge-case fixtures:* synthetic failing-obligation, synthetic
+- _Edge-case fixtures:_ synthetic failing-obligation, synthetic
   passing-obligation, multi-obligation (≥2 obligations, exactly
   one failing), conditional-with-hypothesis (pre-empts `if h :`
   lowering risk for D2), zero-refinement (no subprocess invoked),
   timeout.
-- *Tests:* `Test/Emit/SourceMapRegistryTest.lean` (registry
+- _Tests:_ `Test/Emit/SourceMapRegistryTest.lean` (registry
   round-trip), `Test/Emit/VerifyDriverTest.lean` (mocked stderr,
   no subprocess).
 
@@ -2177,6 +2194,7 @@ and tested; the soundness section of this spec is reviewed and
 approved before any homomorphism axioms are committed.
 
 **Layers touched.**
+
 - Implementation pass on the D19 failure-mode table (each note
   prefix produces the right diagnostic).
 - Review pass on Part III; no changes to Part III without
@@ -2194,9 +2212,10 @@ a branch terminated by `throw`/`return`. Prerequisite for D1's
 genuinely missing today.
 
 **Layers touched.**
-- *Narrowing.lean:* approximately 30 lines of code per decision
+
+- _Narrowing.lean:_ approximately 30 lines of code per decision
   D21's scope.
-- *Tests:* `Test/TypeCheck/NonReturningNarrowingTest.lean`.
+- _Tests:_ `Test/TypeCheck/NonReturningNarrowingTest.lean`.
 
 **Estimated effort.** ½ – 1 day. Depends on B.5.
 
@@ -2208,13 +2227,14 @@ Split from original Milestone D1.
 and inline patterns.
 
 **Layers touched.**
-- *Narrowing.lean:* refinement-narrowing guard kind, parallel to
+
+- _Narrowing.lean:_ refinement-narrowing guard kind, parallel to
   `typeofEquals`/`instanceOf`.
-- *Recognition:* prelude guards by name (`isInteger`, `isNat`,
+- _Recognition:_ prelude guards by name (`isInteger`, `isNat`,
   `isByte`, `isBit`); inline predicate AST shapes for the four
   prelude predicates (string-match, replaced by parser-driven AST
   in E per decision D22).
-- *Prelude:* `isInteger`/`isNat`/`isByte`/`isBit` declared with
+- _Prelude:_ `isInteger`/`isNat`/`isByte`/`isBit` declared with
   matching JS runtime bodies.
 
 **Estimated effort.** 2 days. Depends on D0.5.
@@ -2227,17 +2247,18 @@ Split from original Milestone D1.
 `clamp`, `abs`, `fromUnknown` all work positively.
 
 **Layers touched.**
-- *Corpus:* `clamp(b: Byte): Byte`,
+
+- _Corpus:_ `clamp(b: Byte): Byte`,
   `abs(n: Integer): Nat = Math.abs(n)`,
   `fromUnknown(raw: number): Integer` (boundary pattern with
   `@throws RangeError`).
-- *Perf sweep:* `Test/PoC/` tracer timing `omega` discharge with
+- _Perf sweep:_ `Test/PoC/` tracer timing `omega` discharge with
   1, 2, 4, 8, 16 stacked refinement-bound hypotheses; surfaces
   any super-linear cost growth before D2 commits to obligation
   generation.
 
 **Estimated effort.** 2 days. Depends on D1a. The `fromUnknown`
-example is the *first* corpus example added (so any residual
+example is the _first_ corpus example added (so any residual
 risk from D0.5 surfaces in week 1, not at end of milestone).
 
 ### Milestone D2 — Arithmetic obligations + `if h :` lowering + `thales_grind`
@@ -2249,16 +2270,17 @@ preserve refinement: `add(a: Integer, b: Integer): Integer`
 correctly fails; `half(n: Integer): Integer` correctly fails.
 
 **Layers touched.**
-- *Type-checker:* arithmetic widening rules from decision 6 (the
+
+- _Type-checker:_ arithmetic widening rules from decision 6 (the
   non-static-table cases generate obligations).
-- *Verification emitter:* full obligation generation for
+- _Verification emitter:_ full obligation generation for
   arithmetic flowing into refined slots; `if h : ...` binding form
   for conditionals and ternaries.
-- *Axioms:* the homomorphism axioms from Part III. Each annotated
+- _Axioms:_ the homomorphism axioms from Part III. Each annotated
   `-- AXIOM(thales): ...`.
-- *thales_grind macro:* per Part VI.
-- *Corpus:* `add`, `half` (both expect-error: TH0080 + TH0086).
-- *Tests:* `Test/Emit/ObligationEmissionTest.lean` (golden Lean
+- _thales_grind macro:_ per Part VI.
+- _Corpus:_ `add`, `half` (both expect-error: TH0080 + TH0086).
+- _Tests:_ `Test/Emit/ObligationEmissionTest.lean` (golden Lean
   output), `Test/Emit/SoundnessTest.lean` (boundary-value pinning
   of `Float.ofInt`).
 
@@ -2270,20 +2292,21 @@ Kept atomic.
 
 **User value.** Predictable diagnostics when a user tries to
 define their own `@refine` alias. User-defined refinements aren't
-*accepted* in 0.6, but the error messages are clean rather than
+_accepted_ in 0.6, but the error messages are clean rather than
 "unhandled syntax." Sets up the post-0.6 generalization cleanly.
 Retires the hardcoded recognizer per D22.
 
 **Layers touched.**
-- *Parser:* implement the full predicate sublanguage grammar from
+
+- _Parser:_ implement the full predicate sublanguage grammar from
   decision 5 (with decision 9's named-constant atoms).
-- *Type-checker:* validate user `@refine` aliases — the prelude
+- _Type-checker:_ validate user `@refine` aliases — the prelude
   four match (special-cased by AST equivalence, not text);
   everything else yields `TH0081`.
-- *Diagnostics:* `TH0081`, `TH0082`, `TH0084`, `TH0087`.
-- *Regression:* the four prelude refinements still parse and
+- _Diagnostics:_ `TH0081`, `TH0082`, `TH0084`, `TH0087`.
+- _Regression:_ the four prelude refinements still parse and
   behave per A1+A2; D22's hand-off invariant is pinned.
-- *Corpus:* dedicated single-purpose examples for `TH0081`,
+- _Corpus:_ dedicated single-purpose examples for `TH0081`,
   `TH0082`, `TH0084`, `TH0087`.
 
 **Estimated effort.** 3–5 days. Depends on D2.
@@ -2322,35 +2345,35 @@ sweep.
 extra ~2 days are the per-version F.X polish overhead).
 Per-version subtotals:
 
-| Version | Milestones                                  | Subtotal     |
-| ------- | ------------------------------------------- | ------------ |
-| 0.6     | M0, A1, A2, F.6                             | 5½–6 days    |
-| 0.7     | B, B.5, D0.5, D1a, D1b, F.7                 | 10½–12 days  |
-| 0.8     | C1, C2, C3, C.5, D2, F.8                    | 13–15 days   |
-| 0.9     | E, F.9                                      | 3½–6 days    |
+| Version | Milestones                  | Subtotal    |
+| ------- | --------------------------- | ----------- |
+| 0.6     | M0, A1, A2, F.6             | 5½–6 days   |
+| 0.7     | B, B.5, D0.5, D1a, D1b, F.7 | 10½–12 days |
+| 0.8     | C1, C2, C3, C.5, D2, F.8    | 13–15 days  |
+| 0.9     | E, F.9                      | 3½–6 days   |
 
 ### Milestone summary table
 
-| Milestone | Ships in | User value                                              | Highest-risk question answered                          | Effort |
-| --------- | -------- | ------------------------------------------------------- | ------------------------------------------------------- | ------ |
-| M0        | 0.6      | Tour                                                    | Are there structural design holes?                      | 1d     |
-| A1        | 0.6      | Lattice & literal range                                 | Subtype lattice clean?                                  | 2d     |
-| A2        | 0.6      | Prelude + overloads                                     | Builtin-type-table conflicts?                           | 2d     |
-| F.6       | 0.6      | Polish + tour validator                                 | Tour-vs-impl agreement                                  | ½–1d   |
-| B         | 0.7      | Static table + severity                                 | Severity-aware diagnostic plumbing                      | 3d     |
-| B.5       | 0.7      | Mixed-pair table                                        | Mixed-refinement coherent?                              | ½d     |
-| D0.5      | 0.7      | `@throws` non-returning narrowing                       | Boundary pattern unblocked?                             | ½–1d   |
-| D1a       | 0.7      | Refinement narrowing guard kind                         | Narrowing infrastructure?                               | 2d     |
-| D1b       | 0.7      | Positive corpus + perf sweep                            | `omega` cost growth bounded?                            | 2d     |
-| F.7       | 0.7      | Polish                                                  | Doc-vs-impl drift                                       | ½–1d   |
-| C1        | 0.8      | Obligation emitter + registry                           | Source-map round-trips?                                 | 3d     |
-| C2        | 0.8      | Subprocess driver                                       | Subprocess plumbing solid?                              | 2d     |
-| C3        | 0.8      | Stderr parsing + TH0080                                 | Architecture viable?                                    | 2d     |
-| C.5       | 0.8      | Error model + soundness lock                            | All failure modes handled?                              | 1d     |
-| D2        | 0.8      | Arithmetic obligations + `thales_grind`                 | Discharger handles real arithmetic?                     | 4d     |
-| F.8       | 0.8      | Polish (incl. soundness doc promotion)                  | Trust-base auditable                                    | 1d     |
-| E         | 0.9      | Predicate parser + user-defined rejection               | Grammar implementable?                                  | 3–5d   |
-| F.9       | 0.9      | Polish                                                  | Doc-vs-impl drift                                       | ½–1d   |
+| Milestone | Ships in | User value                                | Highest-risk question answered      | Effort |
+| --------- | -------- | ----------------------------------------- | ----------------------------------- | ------ |
+| M0        | 0.6      | Tour                                      | Are there structural design holes?  | 1d     |
+| A1        | 0.6      | Lattice & literal range                   | Subtype lattice clean?              | 2d     |
+| A2        | 0.6      | Prelude + overloads                       | Builtin-type-table conflicts?       | 2d     |
+| F.6       | 0.6      | Polish + tour validator                   | Tour-vs-impl agreement              | ½–1d   |
+| B         | 0.7      | Static table + severity                   | Severity-aware diagnostic plumbing  | 3d     |
+| B.5       | 0.7      | Mixed-pair table                          | Mixed-refinement coherent?          | ½d     |
+| D0.5      | 0.7      | `@throws` non-returning narrowing         | Boundary pattern unblocked?         | ½–1d   |
+| D1a       | 0.7      | Refinement narrowing guard kind           | Narrowing infrastructure?           | 2d     |
+| D1b       | 0.7      | Positive corpus + perf sweep              | `omega` cost growth bounded?        | 2d     |
+| F.7       | 0.7      | Polish                                    | Doc-vs-impl drift                   | ½–1d   |
+| C1        | 0.8      | Obligation emitter + registry             | Source-map round-trips?             | 3d     |
+| C2        | 0.8      | Subprocess driver                         | Subprocess plumbing solid?          | 2d     |
+| C3        | 0.8      | Stderr parsing + TH0080                   | Architecture viable?                | 2d     |
+| C.5       | 0.8      | Error model + soundness lock              | All failure modes handled?          | 1d     |
+| D2        | 0.8      | Arithmetic obligations + `thales_grind`   | Discharger handles real arithmetic? | 4d     |
+| F.8       | 0.8      | Polish (incl. soundness doc promotion)    | Trust-base auditable                | 1d     |
+| E         | 0.9      | Predicate parser + user-defined rejection | Grammar implementable?              | 3–5d   |
+| F.9       | 0.9      | Polish                                    | Doc-vs-impl drift                   | ½–1d   |
 
 ---
 
@@ -2408,7 +2431,7 @@ Milestone D0.5 introduces the latter as a separate, focused pass.
 ## Part IX — Out of scope (per version)
 
 Each version ships with a tighter scope than the next; the cuts
-below identify what's *not* in each version, so reviewers can
+below identify what's _not_ in each version, so reviewers can
 calibrate expectations.
 
 ### Out of scope for 0.6
@@ -2448,7 +2471,7 @@ calibrate expectations.
 
 ### Out of scope for 0.9 (and the whole 0.6 → 0.9 ladder)
 
-These remain *post-0.9* features even after the full ladder
+These remain _post-0.9_ features even after the full ladder
 ships. Each is a deliberate scope lock that prevents the basic
 refinement-types epic from accreting unrelated work.
 
@@ -2495,7 +2518,7 @@ Each should resolve before its containing milestone starts.
    obligation in D2 before the axiom set freezes.
 
 2. **`if h :` lowering edge cases.** The C3 fixture covers an
-   obligation living inside a conditional that *uses* the
+   obligation living inside a conditional that _uses_ the
    hypothesis. D2 must extend this to ternaries and nested
    conditionals. The PoC validated the simple case; nested
    stacking is not pre-validated. If the lowering is harder than
@@ -2506,8 +2529,7 @@ Each should resolve before its containing milestone starts.
    The choice depends on what's easier to keep in sync with the
    actual diagnostic output format. Decide during F.
 
-4. **Per-obligation timeout policy.** Initial 30s is from decision
-   7. Whether to make this user-configurable at the CLI in 0.6, or
+4. **Per-obligation timeout policy.** Initial 30s is from decision 7. Whether to make this user-configurable at the CLI in 0.6, or
    defer to 0.7, is open. Default to "not configurable in 0.6;
    stretch goal."
 
@@ -2543,9 +2565,8 @@ Each should resolve before its containing milestone starts.
    **Decision deferred to Milestone D2 / 0.8.** This question
    does not block 0.6 or 0.7 (neither has a verifier). When 0.8
    implementation begins, pick one of:
-
    - **Domain-restrict the axiom** — `Float.ofInt_neg (n : Int)
-     (h : n ≠ 0) : ...`. Smallest change; obligation emitter
+(h : n ≠ 0) : ...`. Smallest change; obligation emitter
      threads the `n ≠ 0` precondition from surrounding
      hypotheses.
    - **Type-system rename** — introduce a `TSInteger` type
@@ -2569,8 +2590,8 @@ Each should resolve before its containing milestone starts.
 
 ## Part XI — Prelude documentation conventions
 
-`Thales/TS/Prelude.d.ts` is the source of truth for *both* the
-refinement type aliases *and* the refinement-aware overloads of
+`Thales/TS/Prelude.d.ts` is the source of truth for _both_ the
+refinement type aliases _and_ the refinement-aware overloads of
 stdlib functions. Adding a new prelude refinement (in any version,
 including post-0.9) means editing this one file: declare the type
 alias, declare any overloads that participate in
@@ -2582,8 +2603,8 @@ overloads' refined return types are erased to `number` at runtime.
 
 ### Why this works
 
-`tsc` and Thales agree on what `Integer` *is* (it's `number`) but
-disagree on what it *means*. From `tsc`'s perspective, all the
+`tsc` and Thales agree on what `Integer` _is_ (it's `number`) but
+disagree on what it _means_. From `tsc`'s perspective, all the
 following overloads collapse to `Math.abs(n: number): number`:
 
 ```ts
@@ -2682,7 +2703,7 @@ have full JS implementations (not just `declare` statements) so
 that the runtime behavior matches the type-checker's
 interpretation.
 
-**Note on `-0`:** the runtime guards do *not* reject `-0`.
+**Note on `-0`:** the runtime guards do _not_ reject `-0`.
 Negative zero is a real JavaScript value and `Number.isInteger(-0)`
 is `true`; pretending it isn't would lead to surprises. The
 verifier-side handling of `-0` is deferred to Milestone D2 / 0.8
@@ -2693,9 +2714,11 @@ the literal predicate translation:
 /** True iff `n` is a JS-safe integer.
  *  Type-checker recognizes this by name as a narrowing guard for `Integer`. */
 export function isInteger(n: number): boolean {
-  return Number.isInteger(n)
-      && n >= Number.MIN_SAFE_INTEGER
-      && n <= Number.MAX_SAFE_INTEGER;
+  return (
+    Number.isInteger(n) &&
+    n >= Number.MIN_SAFE_INTEGER &&
+    n <= Number.MAX_SAFE_INTEGER
+  );
 }
 
 /** True iff `n` is a non-negative JS-safe integer.
@@ -2801,18 +2824,18 @@ imported are not in scope. Mirroring tsc:
   uses an `import as` rename, which `tsc` accepts cleanly:
 
   ```ts
-  import { Integer as PreludeInteger } from "@thales/prelude";
-  type Integer = string;          // user's own; no conflict
+  import { Integer as PreludeInteger } from '@thales/prelude';
+  type Integer = string; // user's own; no conflict
   ```
 
 - Inner-scope shadowing always works (TS scoping rule):
 
   ```ts
-  import { Integer } from "@thales/prelude";
+  import { Integer } from '@thales/prelude';
 
   function localOverride(): string {
-    type Integer = string;        // shadows the import inside this scope
-    const x: Integer = "hello";
+    type Integer = string; // shadows the import inside this scope
+    const x: Integer = 'hello';
     return x;
   }
   ```
@@ -2845,11 +2868,11 @@ prelude there:
 
 ```ts
 // my-domain-types.ts — no prelude import
-export type Integer = bigint;     // my domain wants arbitrary-precision
+export type Integer = bigint; // my domain wants arbitrary-precision
 export type Nat = bigint;
 
 // rest-of-app.ts — uses my types, not the prelude
-import type { Integer, Nat } from "./my-domain-types";
+import type { Integer, Nat } from './my-domain-types';
 ```
 
 #### How Thales handles a user-shadowed prelude type
@@ -2865,7 +2888,7 @@ user who shadows `Integer` to mean `bigint` (or `string`, or
 anything else) gets exactly the type they declared, with no
 interference.
 
-A user who shadows a prelude type *and* attaches a different
+A user who shadows a prelude type _and_ attaches a different
 `@refine` predicate gets a different refinement type. Same
 machinery, different predicate; no special case needed.
 
@@ -2890,7 +2913,7 @@ drafting.
 
 - **`docs/subset.md`** — new "Refinement types" section
   introducing the four prelude types, the subtype lattice, and
-  the literal-range check. Does *not* yet describe arithmetic or
+  the literal-range check. Does _not_ yet describe arithmetic or
   narrowing (those land in 0.7).
 - **`docs/errors.md`** — entries for `TH0083` (literal out of
   range), `TH0085` (multiple `@refine`). Stub for the new

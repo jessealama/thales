@@ -1,7 +1,7 @@
 # Re-sequence 0.7 as a 0.6-completeness release; re-defer indexing
 
 **Status:** accepted (2026-05-26). Amends ADR-0001, which had deferred
-provably-safe array indexing *to* v0.7.
+provably-safe array indexing _to_ v0.7.
 
 ## Context
 
@@ -12,7 +12,7 @@ and provably-safe array indexing (targeted at v0.7). `CHANGELOG.md`, the
 v0.7 as the indexing release.
 
 Reviewing the actual 0.6 shipped state surfaced three features that are
-already *inside the subset* but incomplete:
+already _inside the subset_ but incomplete:
 
 - `Array.map` / `Array.reduce` return `any` (no callback-return inference),
   and `any` is rejected by SubsetCheck — so array transforms are
