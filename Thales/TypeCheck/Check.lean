@@ -235,7 +235,7 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
       | some ann, some initExpr =>
         -- Both annotation and initializer: check initializer against annotation
         let annTy := ann.type
-        let initTyped ← synthExpr (.js initExpr)
+        let initTyped ← synthExpr (.js initExpr) (some annTy)
         let srcName := tsExprSourceName (.js initExpr)
         checkAssignable initTyped.type annTy (exprLoc initExpr) srcName
         pure annTy
@@ -454,7 +454,7 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
         match typeAnn, init with
         | some annTy, some expr =>
           -- Both annotation and initializer: check init against annotation
-          let initTyped ← synthJSExpr expr
+          let initTyped ← synthJSExpr expr (some annTy)
           checkAssignable initTyped.type annTy (exprLoc expr) (exprSourceName expr)
           markAssigned id.name
         | _annTy, none =>

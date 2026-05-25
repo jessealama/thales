@@ -452,6 +452,10 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       match elem with
       | some e =>
         let typed ← synthJSExpr e elemExpected
+        match elemExpected with
+        | some elemTy =>
+          checkAssignable typed.type elemTy (exprLoc e) (exprSourceName e)
+        | none => pure ()
         elemTypes := elemTypes ++ [typed.type]
         children := children.push typed
       | none => elemTypes := elemTypes ++ [.undefined]
@@ -481,7 +485,12 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
               | .indexSignature _ _ _ _ => none
           | _ => none
         let typedValue ← synthJSExpr value memberExpected
-        memberTypes := memberTypes ++ [.property propName typedValue.type false false]
+        let propTy ← match memberExpected with
+          | some tgt => do
+            checkAssignable typedValue.type tgt (exprLoc value) (exprSourceName value)
+            pure tgt
+          | none => pure typedValue.type
+        memberTypes := memberTypes ++ [.property propName propTy false false]
         children := children.push typedValue
       | .spread _ arg =>
         let typedArg ← synthJSExpr arg
