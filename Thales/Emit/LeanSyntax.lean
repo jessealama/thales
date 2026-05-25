@@ -58,6 +58,9 @@ inductive LExpr where
   -- A `do`-block sequencing several IO actions: `(do s₁; s₂; …)`. Used to
   -- sequence top-level IO statements (e.g. two consecutive `console.log`s
   -- inside an `if` branch) where there is no value to bind.
+  -- MUST be constructed with ≥ 2 elements: empty renders invalid `(do)` and
+  -- a singleton is degenerate. All current call sites are guarded by
+  -- `stmtsHaveIO`, which ensures the tail is non-empty before wrapping.
   | doSeq (stmts : List LExpr)
   deriving Inhabited
 

@@ -561,9 +561,9 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .binaryExpr _ .sneq (.identifier _ "undefined") (.identifier _ varName)
   | .binaryExpr _ .neq  (.identifier _ "undefined") (.identifier _ varName) =>
       .proj (.var varName) "isSome"
-  -- General binary expressions: when the op is arithmetic/relational, project
-  -- `.val` off any refinement-typed identifier operands so the operation
-  -- elaborates on plain `Float`.
+  -- General binary expressions: when the op is arithmetic, relational, or
+  -- equality, project `.val` off any refinement-typed identifier operands
+  -- so the operation elaborates on plain `Float`.
   | .binaryExpr _ op left right =>
       let lExpr := emitExprEnv env left
       let rExpr := emitExprEnv env right
@@ -945,9 +945,15 @@ partial def emitBody : List Statement → LExpr :=
 end
 
 /-- Lower a top-level `console.log(...)` call to its IO action, or `none`
-    if `e` is not a `console.log` call. Mirrors the top-level `console.log`
-    arm in `emit`: single arg → `consoleLog e`; multi-arg → `consoleLogN
-    [JSShow.jsShow e₁, …]`. -/
+    if `e` is not a `console.log` call. Single arg → `consoleLog e`;
+    multi-arg → `consoleLogN [JSShow.jsShow e₁, …]`.
+
+    NOTE: unlike the top-level `console.log` arm in `emit`, this does NOT
+    special-case `@throws`-annotated callees. A call like
+    `console.log(throwsFn(x))` inside an `if` branch would emit the raw
+    `Except` value rather than matching on `.ok`/`.error`. This limitation
+    is harmless at present because no in-scope or parked fixture exercises
+    that combination; add a `@throws`-aware arm here if one does. -/
 private def consoleLogAction (env : EmitEnv) : Expression → Option LExpr
   | .callExpr _
       (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
