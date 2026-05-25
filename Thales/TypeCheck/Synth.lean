@@ -490,6 +490,9 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
             checkAssignable typedValue.type tgt (exprLoc value) (exprSourceName value)
             pure tgt
           | none => pure typedValue.type
+        -- Record the target type (not the synthesized value type) so the
+        -- synthesized object type matches the expected type; this prevents a
+        -- spurious outer-level TS2322 firing alongside the inner TH0081.
         memberTypes := memberTypes ++ [.property propName propTy false false]
         children := children.push typedValue
       | .spread _ arg =>
