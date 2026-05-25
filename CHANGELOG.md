@@ -33,12 +33,13 @@ the prior 0.7 plan — was re-sequenced out; see ADR-0002 for why.
   result take the type of the seed value. Monomorphic only —
   named-reference and generic callbacks stay conservative. `filter` was
   already exact.
-- TH0081 at four further positions: object-literal properties, array
-  elements, default parameter values, and explicit generic type
-  arguments. 0.6 fired it only at variable declarations, function
-  parameters, and return statements. (Spread arguments are deferred —
-  they need spread-into-call semantics first; the class-property context
-  is unreachable while classes are TH0030.)
+- TH0081 at two further positions: object-literal property values and
+  array-literal elements. 0.6 fired it only at variable declarations,
+  function parameters, and return statements. (Default parameter values
+  and explicit generic type arguments are deferred — both require
+  parser/AST changes to capture syntax the parser currently discards;
+  spread arguments additionally need spread-into-call semantics; the
+  class-property context is unreachable while classes are TH0030.)
 - Top-level `if`-statements. 0.6 lowered only top-level declarations and
   bare expressions, forcing top-level `if`s into a function wrapper; they
   now lower into the script's `#eval (do …)` sequence, reusing the

@@ -26,10 +26,10 @@ already *inside the subset* but incomplete:
 ## Decision
 
 Make v0.7 a **completeness release**: `map`/`reduce` return inference (inline
-arrow / function-expression callbacks, monomorphic), TH0081 at four further
-positions (object-literal property, array element, default value, generic
-argument), and top-level `if`. Its defining property is that it adds **no new
-language surface** — every item finishes a feature already in the subset.
+arrow / function-expression callbacks, monomorphic), TH0081 at two further
+positions (object-literal property values and array-literal elements), and
+top-level `if`. Its defining property is that it adds **no new language
+surface** — every item finishes a feature already in the subset.
 
 Re-defer all provably-safe array indexing (P1/P2/tuple/P3), the seventh
 boundary axiom (`Float.toUInt64_of_isNatural`), and `Natural.toNat` to a
@@ -48,10 +48,13 @@ mutation) is left open.
   surface is the most direct answer to the recurring over-scoping problem
   ADR-0001 was itself created to manage. It cannot balloon the way a
   new-theme branch can.
-- **The scope is self-limiting and was pruned during planning.** Spread-
-  argument TH0081 was excluded because it needs spread-into-call semantics
-  (new surface); class-property TH0081 is unreachable while classes are
-  TH0030; `map`/`reduce` inference is capped at inline monomorphic callbacks.
+- **The scope is self-limiting and was pruned during planning.** TH0081's
+  default-value and generic-argument positions were trimmed because they
+  require parser+AST schema changes to capture syntax the parser currently
+  discards (leaving only the two pure-routing positions); spread-argument
+  TH0081 additionally needs spread-into-call semantics (new surface);
+  class-property TH0081 is unreachable while classes are TH0030; `map`/
+  `reduce` inference is capped at inline monomorphic callbacks.
 - **Indexing reads better after loops exist.** Every P2 fixture in the
   indexing spec is contorted into recursion because loops are TH0010. The
   idiomatic consumer of bounds-checked indexing is a counted `for` loop.
