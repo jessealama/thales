@@ -299,6 +299,9 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       -- Currently: `Math.abs(x)` returns `Natural` when `x : Integer` (and
       -- therefore also when `x : Natural | Byte | Bit` by lattice widening),
       -- and `number` otherwise.
+      -- v0.7: `Array.map(cb)` infers return type from the callback body;
+      -- `Array.reduce(cb, init)` infers return type from the seed argument.
+      let recvTy := (calleeTyped.children[0]?).map (·.type)
       let refinedRetTy : TSType ← (do
         match callee, argChildren.toList with
         | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _,
@@ -307,6 +310,42 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
           match resolvedArgTy with
           | .refinement _ => return (.refinement .natural : TSType)
           | _ => return retTy
+        | .memberExpr _ _ (.identifier _ "map") false _, cbArg :: _ =>
+          -- Recover element type from receiver (handles .array and .tuple)
+          let elemTy : Option TSType ← do
+            match recvTy with
+            | none => pure none
+            | some rTy =>
+              let resolved ← resolveTypeGeneric rTy
+              match resolved with
+              | .array e => pure (some e)
+              | .tuple [] => pure (some .any)
+              | .tuple [single] => pure (some single)
+              | .tuple es => pure (some (.union es))
+              | _ => pure none
+          match elemTy with
+          | none => return retTy
+          | some elem =>
+            -- Unwrap TSExpression to Expression for synthCallbackBody
+            let cbExpr : Option Expression := match cbArg.expr with
+              | .js e => some e
+              | _ => none
+            match cbExpr with
+            | none => return retTy
+            | some e =>
+              match ← synthCallbackBody e [elem, .refinement .natural] with
+              | some u => return (.array u : TSType)
+              | none => return retTy
+        | .memberExpr _ _ (.identifier _ "reduce") false _, cbArg :: seedArg :: _ =>
+          -- Seed argument determines the accumulator type
+          let seedTy := seedArg.type
+          -- Optionally synthesize body to surface diagnostics; result drives return type
+          let cbExpr : Option Expression := match cbArg.expr with
+            | .js e => some e
+            | _ => none
+          if let some e := cbExpr then
+            let _ ← synthCallbackBody e [seedTy, .any, .refinement .natural]
+          return seedTy
         | _, _ => return retTy)
       return mk refinedRetTy (#[calleeTyped] ++ argChildren)
     | .any => return mk .any #[calleeTyped]
@@ -489,6 +528,28 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
 
   -- Graceful degradation: return any for unhandled expression forms
   | _ => return mk .any #[]
+
+/-- Synthesize the return type of an inline callback (arrow or function expression)
+    given the positional types for its parameters. Returns `none` for non-inline
+    forms (named refs, identifiers, etc.) so callers can fall back gracefully.
+    Only expression-bodied arrows are supported for now; block-bodied callbacks
+    return `none` to avoid surfacing spurious diagnostics inside the callback body. -/
+partial def synthCallbackBody
+    (callback : Expression) (paramTys : List TSType) : TypeCheckM (Option TSType) := do
+  match callback with
+  | .arrowFunctionExpr _ params (.inl bodyExpr) _ _ _ =>
+    let names := callbackParamNames params
+    let bindings := names.zip paramTys
+    let bodyTyped ← withScope bindings (synthJSExpr bodyExpr)
+    return some bodyTyped.type
+  | _ => return none
+where
+  callbackParamNames (params : List FunctionParam) : List String :=
+    params.filterMap fun
+      | .simple id => some id.name
+      | .withDefault id _ => some id.name
+      | .rest id => some id.name
+      | .pattern _ => none
 
 end
 
