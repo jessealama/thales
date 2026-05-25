@@ -301,7 +301,6 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       -- and `number` otherwise.
       -- v0.7: `Array.map(cb)` infers return type from the callback body;
       -- `Array.reduce(cb, init)` infers return type from the seed argument.
-      let recvTy := (calleeTyped.children[0]?).map (·.type)
       let refinedRetTy : TSType ← (do
         match callee, argChildren.toList with
         | .memberExpr _ (.identifier _ "Math") (.identifier _ "abs") false _,
@@ -312,6 +311,7 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
           | _ => return retTy
         | .memberExpr _ _ (.identifier _ "map") false _, cbArg :: _ =>
           -- Recover element type from receiver (handles .array and .tuple)
+          let recvTy := (calleeTyped.children[0]?).map (·.type)
           let elemTy : Option TSType ← do
             match recvTy with
             | none => pure none
@@ -337,9 +337,15 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
               | some u => return (.array u : TSType)
               | none => return retTy
         | .memberExpr _ _ (.identifier _ "reduce") false _, cbArg :: seedArg :: _ =>
-          -- Seed argument determines the accumulator type
+          -- Seed argument determines the accumulator type; the seed type is
+          -- always returned as the result type (not inferred from the callback body).
           let seedTy := seedArg.type
-          -- Optionally synthesize body to surface diagnostics; result drives return type
+          -- Synthesize the callback body to surface internal type errors; the
+          -- seed argument's type is the accumulator and the return type.
+          -- Note: the element/value parameter is passed as `.any` rather than the
+          -- receiver's element type because that type is not yet threaded through
+          -- to reduce — do not "fix" this without also wiring up element-type
+          -- extraction, or it will produce spurious diagnostics.
           let cbExpr : Option Expression := match cbArg.expr with
             | .js e => some e
             | _ => none
