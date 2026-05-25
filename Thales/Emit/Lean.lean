@@ -467,6 +467,17 @@ private def arithBinaryOp : BinaryOperator → Bool
   | .bitor | .bitxor | .bitand | .shl | .shr | .ushr => true
   | _ => false
 
+/-- Equality operators (`===`/`!==`/`==`/`!=`). When one operand is a
+    refinement-typed identifier (e.g. comparing `b === 0` with `b : Bit`),
+    the operand is `.val`-projected so the comparison elaborates as
+    `Float == Float` rather than `Bit == Float` (which would need an
+    impossible `OfScientific Bit`). `coerceToFloat` only projects genuine
+    refinement bindings, so string/boolean/discriminant equalities are
+    unaffected. -/
+private def eqBinaryOp : BinaryOperator → Bool
+  | .eq | .neq | .seq | .sneq => true
+  | _ => false
+
 /-- True when the named binding holds a refinement-typed value, so an
     `.identifier` expression referring to it should be projected via
     `.val` in arithmetic contexts. -/
@@ -556,7 +567,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .binaryExpr _ op left right =>
       let lExpr := emitExprEnv env left
       let rExpr := emitExprEnv env right
-      if arithBinaryOp op then
+      if arithBinaryOp op || eqBinaryOp op then
         .binOp (binaryOpStr op) (coerceToFloat env left lExpr) (coerceToFloat env right rExpr)
       else
         .binOp (binaryOpStr op) lExpr rExpr
@@ -933,6 +944,98 @@ partial def emitBody : List Statement → LExpr :=
 
 end
 
+/-- Lower a top-level `console.log(...)` call to its IO action, or `none`
+    if `e` is not a `console.log` call. Mirrors the top-level `console.log`
+    arm in `emit`: single arg → `consoleLog e`; multi-arg → `consoleLogN
+    [JSShow.jsShow e₁, …]`. -/
+private def consoleLogAction (env : EmitEnv) : Expression → Option LExpr
+  | .callExpr _
+      (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
+      args _ =>
+      match args with
+      | [arg] => some (.app (.var "consoleLog") [emitExprEnv env arg])
+      | _ :: _ =>
+          let argExprs := args.map (emitExprEnv env)
+          let listLit := mkListLit (argExprs.map fun e => .app (.var "JSShow.jsShow") [e])
+          some (.app (.var "consoleLogN") [listLit])
+      | [] => some (.app (.var "pure") [.var "()"])
+  | _ => none
+
+/-- True when a top-level statement list contains at least one IO action
+    (a `console.log` call or a nested `if`). Used to decide whether a tail
+    needs `do`-sequencing after a preceding IO action. -/
+private partial def stmtsHaveIO : List Statement → Bool
+  | [] => false
+  | s :: rest =>
+      let hereIO : Bool := match s with
+        | .ifStmt _ _ _ _ => true
+        | .blockStmt _ inner => stmtsHaveIO inner
+        | .exprStmt _ (.callExpr _
+            (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _) _ _) => true
+        | _ => false
+      hereIO || stmtsHaveIO rest
+
+mutual
+
+/-- IO-aware sibling of `emitBodyEnv`: lower a top-level statement list into a
+    single `LExpr : IO Unit`. Unlike `emitBodyEnv` (which is pure and *drops*
+    `console.log`), this preserves `console.log` as a `consoleLog`/`consoleLogN`
+    IO action and sequences multiple actions with a `do` block. `const`
+    declarations become let-in bindings wrapping the IO continuation;
+    refinement-narrowing `if`s reuse the `dite` machinery from `emitBodyEnv`. -/
+partial def emitIOBodyEnv (env : EmitEnv) : List Statement → LExpr
+  | [] => .app (.var "pure") [.var "()"]
+  | .variableDecl (.mk _ decls _) :: rest =>
+      emitVarDecl env decls (fun env' => emitIOBodyEnv env' rest)
+  | .ifStmt _ cond thn elsOpt :: rest =>
+      emitIfIO env cond thn elsOpt rest
+  | .blockStmt _ inner :: rest => emitIOBodyEnv env (inner ++ rest)
+  | (.exprStmt _ e) :: rest =>
+      match consoleLogAction env e with
+      | some act =>
+          if stmtsHaveIO rest then .doSeq [act, emitIOBodyEnv env rest]
+          else act
+      | none => emitIOBodyEnv env rest
+  | _ :: rest => emitIOBodyEnv env rest
+
+/-- Lower a top-level `if (cond) thn else? elsOpt` followed by `rest` into an
+    IO action. The `if` itself is self-contained (its narrowing does not
+    extend into `rest`); `rest` is sequenced afterwards via `do` when it
+    carries IO. The refinement-narrowing case reuses the exact `dite` shape
+    from `emitBodyEnv`: `if h : pred x = true then let x : T := ⟨x, h⟩; … else …`. -/
+partial def emitIfIO (env : EmitEnv) (cond : Expression) (thn : Statement)
+    (elsOpt : Option Statement) (rest : List Statement) : LExpr :=
+  let thnStmts : List Statement := match thn with
+    | .blockStmt _ stmts => stmts
+    | other => [other]
+  let elseStmts : List Statement := match elsOpt with
+    | some (.blockStmt _ stmts) => stmts
+    | some other => [other]
+    | none => []
+  let elseExpr : LExpr := emitIOBodyEnv env elseStmts
+  let ifAct : LExpr :=
+    match detectRefinementPredicate cond with
+    | some (varName, kind) =>
+        let hName := s!"h{env.diteBinderCounter}"
+        let predName := refinementKindPredicate kind
+        let condExpr : LExpr :=
+          .binOp "=" (.app (.var predName) [.var varName]) (.bool true)
+        let env' : EmitEnv :=
+          { env with
+              bindingEnv := env.bindingEnv.insert varName (.refinement kind),
+              diteBinderCounter := env.diteBinderCounter + 1 }
+        let inner := emitIOBodyEnv env' thnStmts
+        let shadowed : LExpr :=
+          .letE varName (some (.const kind.name))
+            (.anonCtor [.var varName] hName) inner
+        .dite_ hName condExpr shadowed elseExpr
+    | none =>
+        .ite (emitExprEnv env cond) (emitIOBodyEnv env thnStmts) elseExpr
+  if stmtsHaveIO rest then .doSeq [ifAct, emitIOBodyEnv env rest]
+  else ifAct
+
+end
+
 /-- Normalize a TSType for use in emission: convert nullable unions to `option`. -/
 private def normalizeForEmit : TSType → TSType
   | .union types =>
@@ -1083,7 +1186,12 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
   let optToList : Option LDecl → List LDecl := fun
     | some d => [d]
     | none => []
-  let decls : List LDecl := prog.body.flatMap fun
+  -- Pair each top-level item with its index so that the dite-binder counter
+  -- can be seeded distinctly per item (two top-level `if`s would otherwise
+  -- both start at `h0` and collide). `16` leaves generous headroom for the
+  -- number of `dite` binders any single top-level statement could introduce.
+  let decls : List LDecl := prog.body.zipIdx.flatMap fun (ts, idx) =>
+    match ts with
     | .typeAliasDecl _ name tps ty =>
         let bodyTy := resolvedAliases.getD name ty
         emitTypeAlias name (typeParamNames tps) bodyTy
@@ -1231,6 +1339,13 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
                   some (.eval_ (.match_ callLExpr [okArm, errArm]))
               | none => none
           | _ => none
+    -- Top-level `if (cond) { … }` lowers to `#eval <IO action>`, preserving
+    -- `console.log`s inside the branch and any refinement-narrowing. Seed the
+    -- dite-binder counter per item so distinct top-level `if`s get distinct
+    -- binder names (`h0`, `h16`, …) and never collide.
+    | .js (.ifStmt _ cond thn elsOpt) =>
+        let ifEnv : EmitEnv := { topEnv with diteBinderCounter := idx * 16 }
+        [.eval_ (emitIfIO ifEnv cond thn elsOpt [])]
     | _ => []
   let body : LDecl :=
     if moduleName.isEmpty then .namespace_ "Input" decls
