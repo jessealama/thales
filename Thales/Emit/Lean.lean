@@ -505,7 +505,12 @@ private def coerceToFloat (env : EmitEnv) (e : Expression) (rendered : LExpr) : 
 /-- Detect the prelude refinement-narrowing predicates `isInteger(x)`,
     `isNatural(x)`, `isByte(x)`, `isBit(x)`, and `Number.isSafeInteger(x)`
     (the latter is treated as `isInteger`). Returns the var name being
-    narrowed and the kind it gets refined to. -/
+    narrowed and the kind it gets refined to.
+
+    Also handles `&&` chains: `isInteger(x) && isNatural(x) && isByte(x)` is
+    recognised as narrowing `x` to the most-specific kind across the chain
+    (highest `RefinementKind.rank`), provided every leaf tests the same variable.
+    Mixed-variable conjunctions return `none`. -/
 private def detectRefinementPredicate : Expression → Option (String × RefinementKind)
   | .callExpr _ (.identifier _ "isInteger") [.identifier _ v] _ => some (v, .integer)
   | .callExpr _ (.identifier _ "isNatural") [.identifier _ v] _ => some (v, .natural)
@@ -514,6 +519,16 @@ private def detectRefinementPredicate : Expression → Option (String × Refinem
   | .callExpr _ (.memberExpr _ (.identifier _ "Number") (.identifier _ "isSafeInteger") false _)
               [.identifier _ v] _ =>
       some (v, .integer)
+  -- `&&` conjunction: both sides must narrow the same variable; return the
+  -- most-specific kind (highest rank = lowest in the inclusion chain).
+  | .logicalExpr _ .«and» left right =>
+      match detectRefinementPredicate left, detectRefinementPredicate right with
+      | some (lv, lk), some (rv, rk) =>
+          if lv == rv then
+            -- Pick the kind with the higher rank (more specific).
+            some (lv, if lk.rank ≥ rk.rank then lk else rk)
+          else none
+      | _, _ => none
   | _ => none
 
 /-- Map a refinement kind to the runtime predicate name (used by both the
@@ -723,6 +738,28 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
           let otherFields := regularProps.filter fun (k, _) => k != "kind"
           .ctor ctor (otherFields.map fun (_, v) => emitExprEnv env v)
       | none => .var "(unsupported expr)"
+  -- Template literal: `q0${e0}q1${e1}...qn`
+  -- Emitted as string concatenation: "q0" ++ JSShow.jsShow e0 ++ "q1" ++ ...
+  -- Quasis has (n+1) elements for n expressions; gaps with empty strings are skipped.
+  | .templateLiteral _ quasis exprs =>
+      -- Build a flat list of string pieces, alternating quasis and jsShow(expr).
+      let pieces : List LExpr :=
+        let qExprs := quasis.map fun q => LExpr.str q.value
+        let eExprs := exprs.map fun e => LExpr.app (.var "JSShow.jsShow") [emitExprEnv env e]
+        -- Interleave: q0, e0, q1, e1, ..., qn (quasis always has one more than exprs)
+        let zipped := qExprs.zip eExprs  -- pairs (q0,e0), (q1,e1), ...
+        let interleaved := zipped.flatMap fun (q, e) => [q, e]
+        -- Append the last quasi (if quasis is longer than exprs)
+        let lastQ := qExprs.getLast?
+        match lastQ with
+        | some last => interleaved ++ [last]
+        | none => interleaved
+      -- Remove empty string pieces to keep the output clean.
+      let nonEmpty := pieces.filter fun p => match p with | .str "" => false | _ => true
+      match nonEmpty with
+      | [] => .str ""
+      | [single] => single
+      | first :: rest => rest.foldl (fun acc p => .binOp "++" acc p) first
   -- Everything else
   | _ => .var "(unsupported expr)"
 
