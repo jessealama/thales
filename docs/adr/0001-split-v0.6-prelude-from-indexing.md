@@ -1,6 +1,13 @@
-# Split v0.6 into prelude (v0.6) and provably-safe indexing (v0.7)
+# Split v0.6 into prelude (v0.6) and provably-safe indexing (later release)
 
-**Status:** accepted (2026-05-24)
+**Status:** accepted (2026-05-24); **amended by ADR-0002 (2026-05-26).**
+
+> **Amendment (ADR-0002).** Every "v0.7" reference below is superseded: v0.7
+> became a 0.6-*completeness* release and provably-safe array indexing
+> (together with the `Float.toUInt64_of_isNatural` axiom and `Natural.toNat`)
+> was re-deferred to a later, not-yet-fixed release. The split decision and the
+> Subtype-representation decision recorded here still stand — only the target
+> version for indexing changed. See ADR-0002 for the rationale.
 
 ## Context
 

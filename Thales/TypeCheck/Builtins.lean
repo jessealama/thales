@@ -165,7 +165,8 @@ where
     -- v0.6 forEach/map/filter/reduce surface signatures. The callback's
     -- index parameter (`i`) is exposed as `Natural` so that future P3
     -- per-array-bound threading can lift `xs[i]` from `T | undefined`
-    -- to `T` (deferred to v0.7 — see docs/subset.md "P3 deferral").
+    -- to `T` (deferred past v0.7 — see docs/subset.md "P3 deferral"
+    -- and ADR-0002; v0.7 is a 0.6-completeness release).
     -- The element parameter is the array's element type.
     | "forEach" =>
       some (fnType

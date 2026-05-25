@@ -50,8 +50,9 @@ landed.
 
 A seventh boundary axiom (`Float.toUInt64_of_isNatural`,
 asserting that an `isNatural` Float round-trips through
-`Float → UInt64 → Nat → Float`) will ship in v0.7 alongside
-`Natural.toNat` and provably-safe array indexing.
+`Float → UInt64 → Nat → Float`) will ship alongside `Natural.toNat`
+and provably-safe array indexing — both re-deferred past v0.7, which
+became a 0.6-completeness release (see ADR-0002).
 
 ## Group 2 — `Float.abs`
 

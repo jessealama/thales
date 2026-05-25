@@ -7,33 +7,42 @@ release-to-release deltas. The format follows
 
 ## Unreleased
 
-Rough plans for 0.8.
-
-### Added
-
-- forEach-callback bounds: `arr.forEach((x, i) => arr[i])` becomes a
-  provably-total access. 0.6 already types the callback's `index`
-  parameter as `Natural`; the bounds-aware emit lowering is the next
-  step.
-- TH0081 in more positions: object-literal properties, array elements,
-  generic arguments, rest parameters, spread elements, default values,
-  and property initializers. 0.6 emits TH0081 only at variable
-  declarations, function parameters, and return statements.
-- Tuple indexing as a provably-total access: `tup[k]` for tuples with
-  statically-known length returns `T` instead of `T | undefined`.
-- Top-level `if`-statements in script files. 0.6 only lowers top-level
-  declarations and bare expressions; ifs at the top level currently
-  must be wrapped in a function.
+After 0.7, the next headline candidate is **provably-safe array
+indexing**, re-deferred from 0.7 (see ADR-0002). Two contexts:
+literal-index into a literal/known-length array (`[10, 20, 30][1]`) and
+length-narrowed access with a `Natural` index (`if (i < xs.length) xs[i]`
+where `i: Natural`), both returning `T` instead of `T | undefined`. Tuple
+indexing (`tup[k]`) joins the same static-length family. The Lean-side
+soundness basis is a seventh boundary axiom (`Float.toUInt64_of_isNatural`)
+plus `Natural.toNat`, which round-trip an `isNatural` Float through
+`UInt64.toNat` for use as a `Nat`-typed index. forEach/map/filter/reduce
+callback indexing (P3) is a later stretch. Sequencing against Arc-1 work
+(loops / local mutation, see `docs/future.md`) is not yet fixed.
 
 ## 0.7 — forthcoming
 
-Provably-safe array indexing in two contexts: literal-index into a
-literal array (`[10, 20, 30][1]`) and length-narrowed access with a
-`Natural` index (`if (i < xs.length) xs[i]` where `i: Natural`). These
-will return `T` instead of `T | undefined`. The Lean-side soundness
-basis is a seventh boundary axiom (`Float.toUInt64_of_isNatural`) plus
-`Natural.toNat`, which round-trip an `isNatural` Float through
-`UInt64.toNat` for use as a `Nat`-typed index.
+A **0.6-completeness** release: it finishes features already inside the
+subset and adds no new language surface. Provably-safe array indexing —
+the prior 0.7 plan — was re-sequenced out; see ADR-0002 for why.
+
+### Added
+
+- `Array<T>.map` / `Array<T>.reduce` return-type inference for inline
+  arrow / function-expression callbacks: `[1, 2, 3].map(x => x * 2)` is
+  typed `number[]` (was `Array<any>`), and `reduce`'s accumulator and
+  result take the type of the seed value. Monomorphic only —
+  named-reference and generic callbacks stay conservative. `filter` was
+  already exact.
+- TH0081 at four further positions: object-literal properties, array
+  elements, default parameter values, and explicit generic type
+  arguments. 0.6 fired it only at variable declarations, function
+  parameters, and return statements. (Spread arguments are deferred —
+  they need spread-into-call semantics first; the class-property context
+  is unreachable while classes are TH0030.)
+- Top-level `if`-statements. 0.6 lowered only top-level declarations and
+  bare expressions, forcing top-level `if`s into a function wrapper; they
+  now lower into the script's `#eval (do …)` sequence, reusing the
+  existing `is<T>` narrowing emit.
 
 ## 0.6.1 — 2026-05-24
 

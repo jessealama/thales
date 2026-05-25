@@ -11,11 +11,11 @@ The four numerical types Thales ships out-of-the-box in `@thales/prelude`: `Inte
 _Avoid_: "refinement types" (ambiguous — see Flagged ambiguities)
 
 **Provably-safe array indexing**:
-The user-facing feature that lifts `arr[i] : T | undefined` to `arr[i] : T` when Thales can prove the index is in bounds. Covers two patterns: P1 (literal index into literal/tuple array) and P2 (length-narrowed access with a `Natural`-typed index). Stretch goal P3 (iteration callbacks) deferred. **Deferred to v0.7** — split out of v0.6 to keep that release small and reviewable.
+The user-facing feature that lifts `arr[i] : T | undefined` to `arr[i] : T` when Thales can prove the index is in bounds. Covers two patterns: P1 (literal index into literal/tuple array) and P2 (length-narrowed access with a `Natural`-typed index). Stretch goal P3 (iteration callbacks) deferred. **Deferred** — split out of v0.6 to keep that release small and reviewable, then re-sequenced past v0.7 (which became a 0.6-completeness release); see ADR-0001 and ADR-0002.
 _Avoid_: "indexing refinements", "bounds checking"
 
 **Subtype machinery**:
-The Lean-side scaffolding that gives the prelude library types proof-bearing representations: Subtype definitions, `Coe` instances for the lattice chain, the three homomorphism boundary axioms (`Float.ofInt_neg/_lt/_le`), and the reflection theorems (`Integer.toInt`, `Integer.ofInt`, round-trip + homomorphism). The fourth boundary axiom (`Float.toUInt64_of_isNatural`) and `Natural.toNat` exist only for `Provably-safe array indexing` and **defer to v0.7**. Not directly user-visible.
+The Lean-side scaffolding that gives the prelude library types proof-bearing representations: Subtype definitions, `Coe` instances for the lattice chain, the three homomorphism boundary axioms (`Float.ofInt_neg/_lt/_le`), and the reflection theorems (`Integer.toInt`, `Integer.ofInt`, round-trip + homomorphism). The fourth boundary axiom (`Float.toUInt64_of_isNatural`) and `Natural.toNat` exist only for `Provably-safe array indexing` and **are deferred with it** (past v0.7 — see ADR-0002). Not directly user-visible.
 _Avoid_: "refinement-type machinery" (ambiguous), "lattice machinery"
 
 **Refinement-type framework**:

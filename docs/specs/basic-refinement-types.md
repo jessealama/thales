@@ -5,6 +5,18 @@ revised 2026-05-06 to span four versions (0.6 → 0.9), each shippable
 as workable software with visible user value. Single source of truth
 for all refinement-types ideation.
 
+> **⚠️ Version labels superseded (2026-05-26).** The actual release train
+> diverged from the "0.6 → 0.9" ladder below. 0.6 shipped the built-in
+> bounded number types (the "documentation primitives" milestone); **0.7
+> became a 0.6-completeness release** (map/reduce inference, TH0081
+> coverage, top-level `if` — see ADR-0002), **not** the "refinement-aware
+> arithmetic + narrowing" described here. The refinement-arithmetic,
+> verification-pipeline, and user-defined-refinement work in this spec is
+> re-deferred and not yet scheduled (the framework as a whole is tracked as
+> ~0.9 in `CONTEXT.md`). Treat every per-version milestone label in this
+> document as historical design intent, not a committed schedule — the
+> design content itself remains a valid reference.
+
 **Target releases.** The feature lands across four versions, each
 independently useful:
 
