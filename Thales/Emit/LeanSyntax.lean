@@ -55,6 +55,10 @@ inductive LExpr where
   -- proof of the condition into the then-branch so refinement-typed
   -- accessors can discharge their bounds proofs.
   | dite_ (binderName : String) (cond thn els : LExpr)
+  -- A `do`-block sequencing several IO actions: `(do s₁; s₂; …)`. Used to
+  -- sequence top-level IO statements (e.g. two consecutive `console.log`s
+  -- inside an `if` branch) where there is no value to bind.
+  | doSeq (stmts : List LExpr)
   deriving Inhabited
 
 /-- Top-level declaration. -/
@@ -202,6 +206,9 @@ mutual
         s!"{renderExprAtom arr}[{renderExpr idx}]?"
     | .dite_ binderName cond thn els =>
         s!"if {binderName} : {renderExpr cond} then {renderExpr thn} else {renderExpr els}"
+    | .doSeq stmts =>
+        let body := lines (stmts.map renderExpr)
+        s!"(do\n{indent body})"
 
   partial def renderExprAtom : LExpr → String
     | .var n      => n
