@@ -599,6 +599,13 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
             .app (.var "Math.absI") [argRendered]
           else
             .app (.var "Math.abs") [argRendered]
+      -- `xs.reduce(cb, init)` → Lean `xs.foldl cb init` (built-in
+      -- `Array.foldl` has `(f) (init)` order, matching TS's
+      -- `(callback, initialValue)`). The runtime `Array.reduce` helper has
+      -- the opposite order and must NOT be used here.
+      | .memberExpr _ obj (.identifier _ "reduce") false _, [cb, initArg] =>
+          .app (.proj (emitExprEnv env obj) "foldl")
+            [emitExprEnv env cb, emitExprEnv env initArg]
       | _, _ =>
       let calleeFnName : Option String := match callee with
         | .identifier _ name => some name
