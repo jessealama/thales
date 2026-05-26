@@ -43,7 +43,14 @@ the prior 0.7 plan — was re-sequenced out; see ADR-0002 for why.
 - Top-level `if`-statements. 0.6 lowered only top-level declarations and
   bare expressions, forcing top-level `if`s into a function wrapper; they
   now lower into the script's `#eval (do …)` sequence, reusing the
-  existing `is<T>` narrowing emit.
+  existing `is<T>` narrowing emit. Conjunction guards
+  (`if (isInteger(x) && isByte(x))`) narrow to the most-specific
+  refinement kind.
+- Template-literal emission. `` `a=${x}` `` now lowers to string
+  concatenation with per-interpolation `JSShow` (previously emitted as an
+  unsupported-expression placeholder). Template literals were already
+  parsed and type-checked; this completes their emit path. No new
+  language surface.
 
 ## 0.6.1 — 2026-05-24
 
