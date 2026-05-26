@@ -21,7 +21,7 @@ def RefinementKind.name : RefinementKind → String
   | .byte => "Byte"
   | .bit => "Bit"
 
-/-- Chain rank: smaller is more specific. `Bit` (3) ⊆ `Byte` (2) ⊆ `Natural` (1) ⊆ `Integer` (0). -/
+/-- Chain rank: higher rank is more specific. `Bit` (3) ⊆ `Byte` (2) ⊆ `Natural` (1) ⊆ `Integer` (0). -/
 def RefinementKind.rank : RefinementKind → Nat
   | .integer => 0
   | .natural => 1

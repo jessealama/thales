@@ -753,7 +753,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
         let lastQ := qExprs.getLast?
         match lastQ with
         | some last => interleaved ++ [last]
-        | none => interleaved
+        | none => interleaved  -- unreachable: parser guarantees quasis is non-empty
       -- Remove empty string pieces to keep the output clean.
       let nonEmpty := pieces.filter fun p => match p with | .str "" => false | _ => true
       match nonEmpty with
