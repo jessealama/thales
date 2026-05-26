@@ -67,6 +67,60 @@ numbers. We intend that the arcs build off of each other: a
 bit of progress in one, a bit of progress in the other,
 going back and forth.
 
+## Emit architecture: structured output instead of strings
+
+This is a robustness follow-on, not part of either feature arc.
+
+Today the emitter (`Thales/Emit/LeanSyntax.lean`) builds Lean source by
+rendering a custom `LExpr` AST to **strings** and concatenating them,
+with newlines. Correct **parenthesization** and **layout** are
+unenforced invariants maintained by hand — `renderExprAtom` wraps
+non-atomic forms, `indent` re-indents every line. That kind of invariant
+leaks. We have already hit two instances:
+
+- A top-level `if` branch that sequenced IO (a `console.log`) **and** a
+  nested narrowing `if` emitted a `do` block whose nested `let … else …`
+  chain was not grouped, orphaning the trailing `else` (Lean: `unexpected
+token 'else'`). Fixed by atomizing `doSeq` elements, but the fix is
+  "remember to group at this new context" — the same shape of latent bug
+  can reappear at the next layout-sensitive context.
+- A bare `number` flowing into an `Option`-typed slot emits the
+  unwrapped value, which is a different category (missing `.some`
+  injection) but the same theme: string emit makes whole classes of
+  malformed output expressible.
+
+Lean has the machinery to make these impossible by construction. The
+idea: emit a **structured representation** that gets serialized, rather
+than assembling text. Two variants, both larger than any per-bug patch:
+
+- **A — Lean's own syntax + pretty-printer.** Build `Lean.Syntax` /
+  `TSyntax` (directly or via quotation) and serialize with
+  `Lean.PrettyPrinter`: the **parenthesizer** inserts parentheses where
+  the grammar requires them (by precedence), and the **formatter** lays
+  out via `Std.Format` (`nest`/`group`/`align`, a Wadler-style engine).
+  Parenthesization and indentation become correct by construction.
+  _Cost:_ the printer runs in `CoreM` and needs an `Environment` with the
+  relevant notations imported, so emit would stand up a Lean elaborator
+  context (`importModules` + run) instead of doing pure string work; it
+  couples emit to Lean's internal pretty-printer API, which moves across
+  toolchains (a maintenance cost against the pinned toolchain and future
+  bumps); and it is a rewrite of `LeanSyntax.lean`. The conformance
+  contract is on program **stdout**, not `.lean` source, so byte-identity
+  is unaffected — but any `Test/Emit` expectations that match emitted
+  source text would need regenerating against a fixed print width.
+
+- **B — keep `LExpr`, replace the renderer.** Swap the string renderer
+  for a `Std.Format`-based one (correct indentation via `nest`/`group`)
+  plus a precedence-aware parenthesization pass over `LExpr`. Kills the
+  same bug class with no `CoreM`/`Environment` dependency and a smaller
+  blast radius, at the cost of re-implementing precedence rules ourselves
+  rather than inheriting Lean's.
+
+Neither is scheduled. The trigger to pick this up is a third instance of
+the bug class, or any larger emit expansion (e.g. classes, generators)
+that would multiply the number of layout-sensitive contexts we maintain
+by hand.
+
 ## Non-goals
 
 We do not aim for Thales to ever match _all_ of
