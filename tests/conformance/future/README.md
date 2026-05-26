@@ -33,10 +33,8 @@ workflow is:
 - `indexing-multiple-bounds.ts`, `indexing-recursion.ts` — exercise
   `noUncheckedIndexedAccess` patterns that Thales' type-checker does
   not yet reproduce.
-- `indexing-out-of-bounds.ts`, `prelude-arithmetic-widening.ts`,
-  `prelude-edge-negative-zero.ts`, `prelude-signatures.ts` — use
-  top-level `if` statements; the emitter currently only handles
-  top-level declarations and bare expressions.
+- `indexing-out-of-bounds.ts` — uses a top-level `if` statement with
+  an out-of-bounds index; the indexing subset check is not yet implemented.
 - `0081-array-element.ts`, `0081-default-value.ts`,
   `0081-generic-arg.ts`, `0081-object-literal.ts`,
   `0081-class-property.ts`, `0081-rest-param.ts`,
