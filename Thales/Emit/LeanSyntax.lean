@@ -210,7 +210,13 @@ mutual
     | .dite_ binderName cond thn els =>
         s!"if {binderName} : {renderExpr cond} then {renderExpr thn} else {renderExpr els}"
     | .doSeq stmts =>
-        let body := lines (stmts.map renderExpr)
+        -- Each statement must render as a SINGLE `do`-element. A `letE`/`dite_`/
+        -- `ite`/`match_` element produces a multi-line `let …; … else …` chain
+        -- whose layout would otherwise leak into the whitespace-sensitive `do`
+        -- block and orphan a trailing `else`. `renderExprAtom` parenthesizes any
+        -- non-atomic element, keeping the chain (and its `else`) grouped; bare
+        -- `app`s like `consoleLog x` are wrapped harmlessly as `(consoleLog x)`.
+        let body := lines (stmts.map renderExprAtom)
         s!"(do\n{indent body})"
 
   partial def renderExprAtom : LExpr → String
