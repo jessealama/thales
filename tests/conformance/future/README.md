@@ -35,10 +35,8 @@ workflow is:
   not yet reproduce.
 - `indexing-out-of-bounds.ts` — uses a top-level `if` statement with
   an out-of-bounds index; the indexing subset check is not yet implemented.
-- `0081-array-element.ts`, `0081-default-value.ts`,
-  `0081-generic-arg.ts`, `0081-object-literal.ts`,
-  `0081-class-property.ts`, `0081-rest-param.ts`,
-  `0081-spread-arg.ts` — additional contexts in which a plain `number`
-  should be rejected as unassignable to a refinement type. v0.6 fires
-  TH0081 at variable declarations, function parameters, and return
-  statements only.
+- `0081-default-value.ts`, `0081-generic-arg.ts`,
+  `0081-class-property.ts`, `0081-spread-arg.ts` — additional contexts
+  in which a plain `number` should be rejected as unassignable to a
+  refinement type. v0.6 fires TH0081 at variable declarations, function
+  parameters, and return statements only.
