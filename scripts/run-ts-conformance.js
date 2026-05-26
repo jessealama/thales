@@ -186,8 +186,10 @@ for (const testFile of tests) {
   // Run tsc
   const tsc = runCmd(`npx tsc --noEmit --strict --target es2020 "${testFile}"`);
 
-  // Run thales
-  const thales = runCmd(`"${THALES_BIN}" "${testFile}"`);
+  // Run thales. `--no-emit` keeps this an apples-to-apples type-check
+  // comparison with `tsc --noEmit` above, and avoids dropping emitted
+  // `.lean` sidecars into the (submodule) corpus as a side effect.
+  const thales = runCmd(`"${THALES_BIN}" --no-emit "${testFile}"`);
 
   // A timeout in either tool yields no signal — exclude from the agreement
   // tally so cold-start jitter on CI doesn't show up as fake disagreement.
