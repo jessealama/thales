@@ -7,6 +7,7 @@ Each `.ts` file under this directory is one conformance test. They serve as both
 ```
 tests/conformance/
 ├── accept/   tsc and thales both accept; runtime output matches byte-for-byte
+├── mirror/   tsc and thales both reject; TS codes and lines match (no runtime stage)
 ├── reject/   tsc accepts; thales rejects with TH#### (no runtime stage)
 ├── throws/   both type-check; both runtimes must throw (throw-iff equivalence)
 └── future/   parked: design intent only, not visited by the harness
@@ -32,6 +33,10 @@ Directory membership _is_ the test specification — the harness routes each fil
 ### `accept/`
 
 Both `tsc` and `thales` accept the file; both runtimes produce byte-identical output.
+
+### `mirror/`
+
+`tsc --strict` and `thales --no-emit` must both reject the file with the same `TSXXXX` codes at the same lines. No `@thales-expect-error` directives (these are mirror-of-tsc errors, not subset violations). The runtime stage is skipped — files do not emit. Used for the read-only / non-lvalue family (TS2540, TS2588, TS2364) and other tsc-error mirrors. Filename convention: descriptive slug; no TH prefix.
 
 ### `reject/`
 

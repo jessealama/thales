@@ -689,7 +689,7 @@ function evaluateCase(inputPath) {
 function collectCases(rootDir, mode) {
   const cases = [];
   if (mode === 'flat') {
-    const buckets = ['accept', 'reject', 'throws'];
+    const buckets = ['accept', 'mirror', 'reject', 'throws'];
     for (const bucket of buckets) {
       const bucketDir = path.join(rootDir, bucket);
       if (!fs.existsSync(bucketDir)) continue;

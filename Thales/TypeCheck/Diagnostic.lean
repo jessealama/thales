@@ -211,6 +211,9 @@ inductive DiagnosticKind where
   | constraintNotSatisfied (typeArg : TSType) (constraint : TSType) (paramName : String)
   | wrongTypeArgCount (name : String) (expected : Nat) (got : Nat)
   | variableUsedBeforeAssignment (name : String)
+  | cannotAssignToConstant (name : String)
+  | cannotAssignToReadOnlyProperty (name : String)
+  | invalidAssignmentTarget
   | thales (t : ThalesKind)
 
 /-- Map diagnostic kind to tsc error code -/
@@ -225,6 +228,9 @@ def DiagnosticKind.tscCode : DiagnosticKind → Nat
   | .constraintNotSatisfied .. => 2344
   | .wrongTypeArgCount .. => 2558
   | .variableUsedBeforeAssignment .. => 2454
+  | .cannotAssignToConstant _ => 2588
+  | .cannotAssignToReadOnlyProperty _ => 2540
+  | .invalidAssignmentTarget => 2364
   | .thales _ => 0
 
 /-- Format a human-readable message for the diagnostic -/
@@ -249,6 +255,12 @@ def DiagnosticKind.message : DiagnosticKind → String
     s!"Expected {expected} type arguments, but got {got} for type '{name}'"
   | .variableUsedBeforeAssignment name =>
     s!"Variable '{name}' is used before being assigned"
+  | .cannotAssignToConstant name =>
+    s!"Cannot assign to '{name}' because it is a constant"
+  | .cannotAssignToReadOnlyProperty name =>
+    s!"Cannot assign to '{name}' because it is a read-only property"
+  | .invalidAssignmentTarget =>
+    "The left-hand side of an assignment expression must be a variable or a property access"
   | .thales t => t.message
 
 /-- A diagnostic with source location -/

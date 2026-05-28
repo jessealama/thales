@@ -13,6 +13,7 @@ import Thales.TypeCheck.Assignability
 import Thales.TypeCheck.TypedExpression
 import Thales.TypeCheck.Narrowing
 import Thales.TypeCheck.Builtins
+import Thales.TypeCheck.AssignTarget
 
 namespace Thales.TypeCheck
 
@@ -414,6 +415,10 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
   -- Assignment expressions
   | .assignmentExpr _ _ left right =>
     let rightTyped ← synthJSExpr right
+    -- LHS legality (TS2540 / TS2588 / TS2364) — emit before RHS-vs-declared check.
+    match ← classifyAssignTarget synthJSExpr left with
+    | some kind => emitDiagnostic kind (exprLoc left)
+    | none => pure ()
     match left with
     | .identifier _ name =>
       markAssigned name
@@ -424,6 +429,14 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       | none => pure ()
     | _ => pure ()
     return { expr := .js expr, type := rightTyped.type, children := #[rightTyped] }
+
+  -- Update expressions (++ and --)
+  | .updateExpr _ _ arg _ =>
+    let argTyped ← synthJSExpr arg
+    match ← classifyAssignTarget synthJSExpr arg with
+    | some kind => emitDiagnostic kind (exprLoc arg)
+    | none => pure ()
+    return { expr := .js expr, type := .number, children := #[argTyped] }
 
   -- Conditional (ternary)
   | .conditionalExpr _ test consequent alternate =>
