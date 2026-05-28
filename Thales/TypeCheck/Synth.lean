@@ -430,6 +430,14 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
     | _ => pure ()
     return { expr := .js expr, type := rightTyped.type, children := #[rightTyped] }
 
+  -- Update expressions (++ and --)
+  | .updateExpr _ _ arg _ =>
+    let argTyped ← synthJSExpr arg
+    match ← classifyAssignTarget synthJSExpr arg with
+    | some kind => emitDiagnostic kind (exprLoc arg)
+    | none => pure ()
+    return { expr := .js expr, type := .number, children := #[argTyped] }
+
   -- Conditional (ternary)
   | .conditionalExpr _ test consequent alternate =>
     let testTyped ← synthJSExpr test
