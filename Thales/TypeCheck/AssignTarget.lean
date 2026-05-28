@@ -9,18 +9,27 @@
 import Thales.TypeCheck.Context
 import Thales.TypeCheck.Diagnostic
 import Thales.TypeCheck.TypedExpression
+import Thales.TypeCheck.TSAST
 import Thales.AST
 
 namespace Thales.TypeCheck
 
 open Thales.AST
 
+/-- True if `propName` is a `readonly` property of an `InterfaceDef`. -/
+private def interfaceHasReadonlyProp (def_ : InterfaceDef) (propName : String) : Bool :=
+  def_.members.any fun
+    | .property n _ _ readonly => n == propName && readonly
+    | _ => false
+
 /-- True if `propName` is a `readonly` property on every applicable face of `ty`.
     For unions, requires every face to mark the property readonly (matching tsc:
     a property writable via any union face is legally assignable on the union).
-    Walks `.paren` and follows alias/enum/class refs via `resolveType`. -/
+    Walks `.paren`, follows alias/enum/class refs via `resolveType`, and looks up
+    interface refs in the `interfaces` map directly. -/
 partial def isReadonlyMember (ty : TSType) (propName : String) : TypeCheckM Bool := do
-  match ← resolveType ty with
+  let resolved ← resolveType ty
+  match resolved with
   | .object members =>
       pure <| members.any fun
         | .property n _ _ readonly => n == propName && readonly
@@ -32,6 +41,12 @@ partial def isReadonlyMember (ty : TSType) (propName : String) : TypeCheckM Bool
           allReadonly := false
       pure allReadonly
   | .paren inner => isReadonlyMember inner propName
+  | .ref name _ => do
+      -- Interface references aren't resolved by `resolveType`; look them up here.
+      let ctx ← read
+      match ctx.interfaces[name]? with
+      | some def_ => pure (interfaceHasReadonlyProp def_ propName)
+      | none => pure false
   | _ => pure false
 
 /-- Classify the LHS of an assignment / update expression.
