@@ -256,8 +256,12 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
       | some _ => markAssigned name
       | none => requireAssignmentCheck name
     | .var => markAssigned name  -- var hoisted as undefined, always "assigned"
-    -- Process remaining statements with the new binding in scope
-    withScope [(name, varTy)] (checkStatements rest)
+    -- Process remaining statements with the new binding in scope.
+    -- Track const-ness separately so the LHS classifier can emit TS2588.
+    let body := withScope [(name, varTy)] (checkStatements rest)
+    match _kind with
+    | .const => withConst name body
+    | _ => body
   | .annotatedFuncDecl _base name typeParams params returnType body _ _ _ _ =>
     -- Allocate type variables for generic type params (constraints are embedded in typeVars)
     let (typeVarIds, _) ← allocTypeVars typeParams
