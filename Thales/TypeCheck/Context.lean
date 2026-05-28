@@ -40,6 +40,7 @@ structure TypeContext where
   interfaces : Std.HashMap String InterfaceDef := {}
   enums : Std.HashMap String TSType := {}
   classes : Std.HashMap String TSType := {}  -- class name → instance object type
+  consts : Std.HashSet String := {}  -- names declared with `const` (for TS2588)
   returnType : Option TSType := none  -- expected return type in current function
   deriving Inhabited
 
@@ -129,6 +130,16 @@ def withScope {α : Type} (extraBindings : List (String × TSType)) (m : TypeChe
     ReaderT.mk fun ctx =>
       let newBindings := extraBindings.foldl (fun map (k, v) => map.insert k v) ctx.bindings
       (m.run s).run { ctx with bindings := newBindings }
+
+/-- Run a computation with `name` marked as a `const` binding (for TS2588). -/
+def withConst {α : Type} (name : String) (m : TypeCheckM α) : TypeCheckM α :=
+  StateT.mk fun s =>
+    ReaderT.mk fun ctx =>
+      (m.run s).run { ctx with consts := ctx.consts.insert name }
+
+/-- Look up whether `name` is bound as a `const` in the current scope chain. -/
+def lookupConst (name : String) : TypeCheckM Bool := do
+  return (← read).consts.contains name
 
 /-- Run a computation with a new variable binding, setting both flow type and declared type -/
 def withBinding {α : Type} (name : String) (declaredTy : TSType)
