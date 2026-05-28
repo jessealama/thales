@@ -53,6 +53,54 @@ def testThalesCodeHelper : IO Unit := do
   unless dTsc.thalesCode? = none do
     throw (IO.userError "expected none for TS diagnostic")
 
+/-- TS2588 formats with the offending name. -/
+def testCannotAssignToConstantFormat : IO Unit := do
+  let loc : SourceLocation := {
+    start := { line := 2, column := 0 }
+    «end» := { line := 2, column := 1 }
+  }
+  let d : Diagnostic := {
+    kind := .cannotAssignToConstant "x"
+    location := some loc
+  }
+  let got := d.format "foo.ts"
+  let want := "foo.ts(2,1): error TS2588: Cannot assign to 'x' because it is a constant"
+  unless got == want do
+    throw (IO.userError s!"\nwant: {want}\ngot:  {got}")
+
+/-- TS2540 formats with the offending property name. -/
+def testCannotAssignToReadOnlyPropertyFormat : IO Unit := do
+  let loc : SourceLocation := {
+    start := { line := 3, column := 0 }
+    «end» := { line := 3, column := 1 }
+  }
+  let d : Diagnostic := {
+    kind := .cannotAssignToReadOnlyProperty "B"
+    location := some loc
+  }
+  let got := d.format "foo.ts"
+  let want := "foo.ts(3,1): error TS2540: Cannot assign to 'B' because it is a read-only property"
+  unless got == want do
+    throw (IO.userError s!"\nwant: {want}\ngot:  {got}")
+
+/-- TS2364 has fixed wording. -/
+def testInvalidAssignmentTargetFormat : IO Unit := do
+  let loc : SourceLocation := {
+    start := { line := 4, column := 0 }
+    «end» := { line := 4, column := 1 }
+  }
+  let d : Diagnostic := {
+    kind := .invalidAssignmentTarget
+    location := some loc
+  }
+  let got := d.format "foo.ts"
+  let want := "foo.ts(4,1): error TS2364: The left-hand side of an assignment expression must be a variable or a property access"
+  unless got == want do
+    throw (IO.userError s!"\nwant: {want}\ngot:  {got}")
+
 #eval testThalesReassignFormat
 #eval testThalesLoopFormat
 #eval testThalesCodeHelper
+#eval testCannotAssignToConstantFormat
+#eval testCannotAssignToReadOnlyPropertyFormat
+#eval testInvalidAssignmentTargetFormat
