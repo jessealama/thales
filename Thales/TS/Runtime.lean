@@ -305,6 +305,74 @@ private def stripTrailingZerosAfterDot (s : String) : String :=
       if fracChars.isEmpty then whole else s!"{whole}.{String.ofList fracChars}"
   | _ => s
 
+/-! ### JS numeric-conversion helpers (#32, used by #24's operators)
+
+ES2023 7.1.6 ToInt32 / 7.1.7 ToUint32, and the `%`, bitwise, and shift
+operators built on them. JS bitwise operates on the 32-bit integer
+truncation of the double; shift counts mask to 5 bits; `%` keeps the
+dividend's sign. -/
+
+/-- ES ToUint32: truncate toward zero, wrap modulo 2^32. NaN/±∞ → 0.
+    `|x| < 2^64` truncates exactly via `toUInt64`; larger magnitudes
+    decompose as m·2^k through `frExp` (53-bit mantissa), so the wrap is
+    exact for every double. -/
+def toUint32 (x : Float) : Nat :=
+  if x.isNaN || x.isInf then 0
+  else
+    let neg := x < 0.0
+    let a := x.abs
+    let n : Nat :=
+      if a < 18446744073709551616.0 then -- 2^64
+        a.toUInt64.toNat
+      else
+        let (frac, exp) := a.frExp
+        -- a = frac·2^exp with frac ∈ [0.5, 1), so frac·2^53 is integral
+        let m : Nat := (frac * 9007199254740992.0).toUInt64.toNat
+        let k : Int := exp - 53
+        if k ≥ 32 then 0
+        else m <<< k.toNat
+    let r := n % 4294967296
+    if neg && r != 0 then 4294967296 - r else r
+
+/-- ES ToInt32: ToUint32 reinterpreted as signed 32-bit. -/
+def toInt32 (x : Float) : Int :=
+  let u := toUint32 x
+  if u ≥ 2147483648 then (u : Int) - 4294967296 else (u : Int)
+
+/-- Reinterpret a Uint32 value as a signed 32-bit quantity, as Float. -/
+private def int32ToFloat (u : Nat) : Float :=
+  if u ≥ 2147483648 then Float.ofInt ((u : Int) - 4294967296) else Float.ofNat u
+
+/-- JS `a & b`. -/
+def jsBitAnd (a b : Float) : Float := int32ToFloat (toUint32 a &&& toUint32 b)
+/-- JS `a | b`. -/
+def jsBitOr (a b : Float) : Float := int32ToFloat (toUint32 a ||| toUint32 b)
+/-- JS `a ^ b`. -/
+def jsBitXor (a b : Float) : Float := int32ToFloat (toUint32 a ^^^ toUint32 b)
+/-- JS `a << b` (count masked to 5 bits, result wraps to Int32). -/
+def jsShl (a b : Float) : Float :=
+  int32ToFloat ((toUint32 a <<< (toUint32 b % 32)) % 4294967296)
+/-- JS `a >> b` (sign-propagating shift on the Int32 value). -/
+def jsShr (a b : Float) : Float :=
+  Float.ofInt (toInt32 a >>> (toUint32 b % 32))
+/-- JS `a >>> b` (zero-fill shift on the Uint32 value; result is Uint32). -/
+def jsUShr (a b : Float) : Float :=
+  Float.ofNat (toUint32 a >>> (toUint32 b % 32))
+
+/-- JS `%` (fmod): result has the dividend's sign. NaN when the divisor is
+    ±0, the dividend is ±∞, or either operand is NaN; `a % ±∞ = a`.
+    Computed as `|a| - |b|·⌊|a|/|b|⌋` with the dividend's sign re-applied;
+    exact for the magnitudes v1 exercises (extreme-ratio rounding is
+    tracked in the test262 baseline). -/
+def jsMod (a b : Float) : Float :=
+  if a.isNaN || b.isNaN || a.isInf || b == 0.0 then (0.0 / 0.0)
+  else if b.isInf then a
+  else if a == 0.0 then a
+  else
+    let q := (a / b).abs.floor
+    let r := a.abs - b.abs * q
+    if a < 0.0 then -r else r
+
 /-- JS `Number.prototype.toString()` for the common cases Thales-TS v1 cares
     about. Whole-valued Floats print without a decimal; fractional Floats
     strip trailing zeros. Does not implement the full ECMA-262 ToString

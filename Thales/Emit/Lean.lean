@@ -27,6 +27,19 @@ structure EmitEnv where
   -- a fresh `h_i` is introduced (e.g. for `is<T>`-narrowing shadow-lets).
   diteBinderCounter : Nat := 0
 
+/-- Binary ops lowered through JS-semantics runtime helpers (#32) instead
+    of bare Lean operators: no Float instances exist for these, and the JS
+    semantics (ToInt32 wrap, dividend-sign `%`) differ anyway. -/
+private def jsBinopHelper : BinaryOperator → Option String
+  | .mod    => some "jsMod"
+  | .bitand => some "jsBitAnd"
+  | .bitor  => some "jsBitOr"
+  | .bitxor => some "jsBitXor"
+  | .shl    => some "jsShl"
+  | .shr    => some "jsShr"
+  | .ushr   => some "jsUShr"
+  | _ => none
+
 /-- Resolve a TSType through one level of type-alias references. -/
 private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
   | .ref name _ =>
@@ -579,14 +592,20 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
       .proj (.var varName) "isSome"
   -- General binary expressions: when the op is arithmetic, relational, or
   -- equality, project `.val` off any refinement-typed identifier operands
-  -- so the operation elaborates on plain `Float`.
+  -- so the operation elaborates on plain `Float`. `%`, bitwise, and shift
+  -- ops route through JS-semantics runtime helpers (#32) — bare Lean
+  -- operators have no Float instances (and the wrong semantics anyway).
   | .binaryExpr _ op left right =>
       let lExpr := emitExprEnv env left
       let rExpr := emitExprEnv env right
-      if arithBinaryOp op || eqBinaryOp op then
-        .binOp (binaryOpStr op) (coerceToFloat env left lExpr) (coerceToFloat env right rExpr)
-      else
-        .binOp (binaryOpStr op) lExpr rExpr
+      match jsBinopHelper op with
+      | some helper =>
+          .app (.var helper) [coerceToFloat env left lExpr, coerceToFloat env right rExpr]
+      | none =>
+        if arithBinaryOp op || eqBinaryOp op then
+          .binOp (binaryOpStr op) (coerceToFloat env left lExpr) (coerceToFloat env right rExpr)
+        else
+          .binOp (binaryOpStr op) lExpr rExpr
   -- Logical expressions
   | .logicalExpr _ .«and» left right =>
       .binOp "&&" (emitExprEnv env left) (emitExprEnv env right)

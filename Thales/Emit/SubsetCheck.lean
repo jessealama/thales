@@ -60,13 +60,12 @@ private def nestedInfo (params : List FunctionParam) (body : Statement)
   EscapeAnalysis.analyze (funcParamNames params) body
 
 /-- Compound operators whose desugared binary op has a working Float
-    lowering today. `%=`, bitwise and shift compounds stay rejected until
-    their JS-semantics runtime helpers land — their underlying binops
-    (`%`, `&&&`, …) have no Float instances, so accepting them would emit
-    Lean that does not compile. -/
+    lowering. Everything except the (deferred, short-circuit) logical
+    family: the arithmetic ops lower to Lean operators, and `%`/bitwise/
+    shifts route through the JS-semantics runtime helpers (#32). -/
 private def emittableMutationOp : AssignmentOperator → Bool
-  | .assign | .addAssign | .subAssign | .mulAssign | .divAssign | .expAssign => true
-  | _ => false
+  | .orLogicalAssign | .andLogicalAssign | .nullishAssign => false
+  | _ => true
 
 /-- Route a statement-position mutation of identifier `name`.
     Returns the rejection diagnostics; `#[]` means the mutation is allowed.

@@ -68,10 +68,10 @@ def testEligibleCompoundAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 0; n += 1; return n; }" 1
 def testEligibleUpdateAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 0; n++; return n; }" 1
--- `%=` and bitwise compounds stay TH0001 until their runtime lowering lands
-def testModAssignStillTH1 : IO Unit := expectCode
+-- `%=` and the bitwise compounds lower through the JS-semantics helpers
+def testModAssignAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 7; n %= 3; return n; }" 1
-def testBitAndAssignStillTH1 : IO Unit := expectCode
+def testBitAndAssignAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 7; n &= 3; return n; }" 1
 -- Arrow bodies don't lower through emitFuncDecl: their own-local mutation
 -- stays TH0001 in v1 even though the eligibility analysis would allow it
@@ -101,8 +101,8 @@ def testLogicalAssignStaysTH1 : IO Unit := expectCode
 #eval testEligiblePlainAssignAllowed
 #eval testEligibleCompoundAllowed
 #eval testEligibleUpdateAllowed
-#eval testModAssignStillTH1
-#eval testBitAndAssignStillTH1
+#eval testModAssignAllowed
+#eval testBitAndAssignAllowed
 #eval testArrowOwnLocalStillTH1
 #eval testUninitializedLet
 #eval testLogicalAssignStaysTH1
