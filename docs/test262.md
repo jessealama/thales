@@ -50,7 +50,7 @@ on demand).
 
 ## Baseline
 
-thales `98610ec`, test262 `fc32f3e8`, 2026-06-10:
+thales `3f11f4a` (after #24 mutation widening), test262 `fc32f3e8`, 2026-06-10:
 
 ```
 Slice                                             Total  Skip   OoS  Pass  Fail  InSubset   Pass%
@@ -78,28 +78,44 @@ Skip reasons (all slices):
 Top blocking diagnostics (tests blocked, by attribution):
 Code              Shim   Body  Unknown
 TS2339            1179    895        0
-TH0001            1179    451        0
+TH0001            1179    213        0
 TS2304            1179     77        0
 TH0030            1179     48        0
+TH0007            1179     18        0
 TH0063            1179      2        0
 TH0021            1179      0        0
 TH0031            1179      0        0
 TH0060            1179      0        0
+TS2322            1179      0        0
 TS2349            1179      0        0
 TH0010               0    765        0
+TH0005               0    171        0
 TH0002               0    150        0
 parse-error          0      0      142
+TH0006               0     78        0
 TH0003               0     36        0
 TS2364               0     12        0
 TH0004               0      5        0
 ```
 
-Reading the baseline: every runnable test is blocked at minimum by the
-shim (1,179 tests; classes/namespaces — TH0030/TH0031 et al., plus the
-spurious TS2304s of #31). The dominant body blockers are loops (TH0010,
-765 tests) and mutation (TH0001, 451) — precisely the #24–#26 widening
-targets. `parse-error` counts tests where thales hard-fails without a
-structured diagnostic (e.g. multi-declarator `var x, y;`).
+Reading the baseline: every runnable test is still blocked at minimum by
+the shim (1,179 tests; classes/namespaces — TH0030/TH0031 et al., plus
+the spurious TS2304s of #31), which is why Pass% stays n/a — #24 alone
+cannot move it. The #24 movement is in the body attribution: **TH0001
+dropped 451 → 213**, with the remainder reclassified into the new precise
+codes — TH0005 (captured mutation, 171), TH0006 (expression-position
+assignment, 78), TH0007 (mutation under throws/try, 18) — and the truly
+in-subset mutations absorbed into tests still blocked by other constructs.
+Loops (TH0010, 765) remain the dominant body blocker, next up in #25/#26.
+`parse-error` counts tests where thales hard-fails without a structured
+diagnostic (e.g. multi-declarator `var x, y;`).
+
+New shim-attribution row vs the pre-#24 baseline: TS2322 — #24's
+declared-type precision (unannotated/const bindings are no longer `any`)
+exposes a pre-existing truthy-narrowing gap at `harness/assert.ts:34`
+(`if (basic) return basic;` on a nullable: tsc narrows, thales doesn't
+strip the null arm). Tracked with the flow-fidelity follow-ups (#38);
+shim-compilation blockers overall are #31.
 
 This table is updated manually when a feature lands; the per-directory
 numbers are the metric quoted in #24–#29.
