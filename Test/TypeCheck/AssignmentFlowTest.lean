@@ -63,6 +63,29 @@ def t5 : IO Unit := expectNoTS
 def t6 : IO Unit := expectNoTS
   "function f(): number { let n = 0; n = 5; return n; }" 2322
 
+-- ── if/else joins (cross-checked against tsc --strict) ──
+
+-- both branches assign a string: join is string — tsc clean, no
+-- possibly-null surrogate TS2339
+def j1 : IO Unit := expectNoTS
+  "function f(c: boolean, x: string | null): number { if (c) { x = \"a\"; } else { x = \"b\"; } return x.length; }" 2339
+-- early-return branch contributes nothing: continuation gets the negated
+-- guard (x non-null) — tsc clean
+def j2 : IO Unit := expectNoTS
+  "function f(x: string | null): number { if (x === null) { return 0; } return x.length; }" 2339
+-- assignment in a nested branch invalidates narrowing: after the inner
+-- if, x is string|null again — tsc flags x.length (TS18047); thales's
+-- surrogate is TS2339, which must now fire
+def j3 : IO Unit := expectTS
+  "function f(c: boolean, x: string | null): number { if (x !== null) { if (c) { x = null; } return x.length; } return 0; }" 2339
+-- no-else assignment joins with the fall-through path: x stays possibly
+-- null after `if (c) { x = \"a\"; }` — tsc flags x.length
+def j4 : IO Unit := expectTS
+  "function f(c: boolean, x: string | null): number { if (c) { x = \"a\"; } return x.length; }" 2339
+-- assignment before the if, then both paths keep it: still clean
+def j5 : IO Unit := expectNoTS
+  "function f(c: boolean, x: string | null): number { x = \"a\"; if (c) { x = \"b\"; } return x.length; }" 2339
+
 #eval t0
 #eval t1
 #eval t2
@@ -70,3 +93,8 @@ def t6 : IO Unit := expectNoTS
 #eval t4
 #eval t5
 #eval t6
+#eval j1
+#eval j2
+#eval j3
+#eval j4
+#eval j5
