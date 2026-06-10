@@ -2,6 +2,7 @@ import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Context
 import Thales.TypeCheck.Generic
 import Thales.Emit.LeanSyntax
+import Thales.Emit.EscapeAnalysis
 import Std.Data.HashMap
 
 namespace Thales.Emit
@@ -979,6 +980,58 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
 partial def emitBody : List Statement → LExpr :=
   emitBodyEnv {}
 
+/-- #24 do-mode lowering: the body of a function with an eligible
+    statement-position mutation, as a list of `Id.run do` statements.
+    Only shapes SubsetCheck admits into do-mode arrive here — straight-line
+    mutation, declarations, and `return`; anything else was rejected
+    upstream (TH0001/TH0005/TH0006/TH0007/TH0010 …) and the fall-through
+    arms simply skip. -/
+partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
+    : List Statement → List LDoStmt
+  | .returnStmt _ (some e) :: _ =>
+      let emitted :=
+        ((emitRefinementLiteral env.aliasEnv env.retTy e)
+          <|> (emitLiteralAsCtor env.aliasEnv env.retTy e))
+          |>.getD (emitExprEnv env e)
+      [.ret (wrapReturn env.retTy emitted)]
+  | .returnStmt _ none :: _ => [.ret (.var "()")]
+  | .variableDecl (.mk _ decls _) :: rest =>
+      emitVarDeclDo env info decls rest
+  | .exprStmt _ (.assignmentExpr _ .assign (.identifier _ name) rhs) :: rest =>
+      .assign name (emitExprEnv env rhs) :: emitBodyDo env info rest
+  | .blockStmt _ inner :: rest => emitBodyDo env info (inner ++ rest)
+  | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
+  | [] => [.ret (.var "()")]
+  | _ :: rest => emitBodyDo env info rest
+
+/-- Declarator lowering inside do-mode: mutated names become `let mut`,
+    everything else stays an immutable `let`. Mirrors `emitVarDecl`'s
+    refinement-literal wrapping and bindingEnv threading. -/
+partial def emitVarDeclDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
+    (decls : List VariableDeclarator) (rest : List Statement) : List LDoStmt :=
+  match decls with
+  | [] => emitBodyDo env info rest
+  | d :: moreDecls =>
+      match d with
+      | .mk _ (.identifier id) init typeAnnotation =>
+          let ty := typeAnnotation.map emitType
+          let targetTy : Option TSType := typeAnnotation
+          let initExpr := match init with
+            | some e =>
+                ((emitRefinementLiteral env.aliasEnv targetTy e)
+                  <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
+                  |>.getD (emitExprEnv env e)
+            | none   => .var "()"
+          let env' :=
+            match typeAnnotation with
+            | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
+            | none   => env
+          let bind := if info.mutated.contains id.name
+            then LDoStmt.letMut id.name ty initExpr
+            else LDoStmt.letPure id.name ty initExpr
+          bind :: emitVarDeclDo env' info moreDecls rest
+      | _ => emitVarDeclDo env info moreDecls rest
+
 end
 
 /-- Lower a top-level `console.log(...)` call to its IO action, or `none`
@@ -1101,9 +1154,19 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     normalizedParams.foldl (fun m (n, t) => m.insert n t) {}
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
                          throwTypes := throws, funcThrowsEnv, funcParamTypes }
-  let bodyExpr := match body with
-    | .blockStmt _ stmts => emitBodyEnv env stmts
-    | other              => emitBodyEnv env [other]
+  let stmts := match body with
+    | .blockStmt _ ss => ss
+    | other           => [other]
+  -- #24: a body with an eligible statement-position mutation lowers to
+  -- `Id.run do` with `let mut`; everything else keeps the pure path
+  -- untouched. `@throws` functions never reach do-mode (TH0007 upstream).
+  let info := EscapeAnalysis.analyze (params.map (·.1)) body
+  let hasEligibleMutation := info.mutated.toList.any info.eligible
+  let bodyExpr :=
+    if hasEligibleMutation && throws.isEmpty then
+      .idRunDo (emitBodyDo env info stmts)
+    else
+      emitBodyEnv env stmts
   let leanParams := normalizedParams.map fun (n, t) => (n, emitType t)
   let leanRetTy :=
     if throws.isEmpty then emitType normalizedRetTy

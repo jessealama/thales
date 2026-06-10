@@ -61,10 +61,18 @@ def testMutationInTry : IO Unit := expectCode
 def testMutationInThrowsFn : IO Unit := expectCode
   "/** @throws RangeError */\nfunction f(x: number): number { let n = 0; n = x; if (x === 0) { throw new RangeError(\"z\"); } return n; }" 7
 
--- Eligible function-local mutation: still TH0001 until do-mode emission
--- lands (flipped to expectNoCode in the do-mode task).
-def testEligibleStillTH1ForNow : IO Unit := expectCode
+-- Eligible function-local plain `=`: in subset since do-mode emission
+def testEligiblePlainAssignAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 0; n = 1; return n; }" 1
+-- Compound/update forms flip in their own task; still TH0001 for now
+def testEligibleCompoundStillTH1 : IO Unit := expectCode
+  "function f(): number { let n = 0; n += 1; return n; }" 1
+def testEligibleUpdateStillTH1 : IO Unit := expectCode
+  "function f(): number { let n = 0; n++; return n; }" 1
+-- Arrow bodies don't lower through emitFuncDecl: their own-local mutation
+-- stays TH0001 in v1 even though the eligibility analysis would allow it
+def testArrowOwnLocalStillTH1 : IO Unit := expectCode
+  "const g = (): number => { let n = 0; n = 1; return n; };" 1
 
 -- Still-rejected forms keep TH0001
 def testUninitializedLet : IO Unit := expectCode
@@ -86,6 +94,9 @@ def testLogicalAssignStaysTH1 : IO Unit := expectCode
 #eval testExprPositionUpdate
 #eval testMutationInTry
 #eval testMutationInThrowsFn
-#eval testEligibleStillTH1ForNow
+#eval testEligiblePlainAssignAllowed
+#eval testEligibleCompoundStillTH1
+#eval testEligibleUpdateStillTH1
+#eval testArrowOwnLocalStillTH1
 #eval testUninitializedLet
 #eval testLogicalAssignStaysTH1
