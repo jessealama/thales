@@ -50,7 +50,7 @@ Progress is measured against per-feature **test262** directory slices
 - **Classes with single inheritance.** Instance and static methods,
   getters, setters, `extends`, method override, `super`. `class C`
   becomes Lean `structure C`; `class D extends C` becomes `structure D
-  extends C`, with a closures-as-fields encoding for the cases that
+extends C`, with a closures-as-fields encoding for the cases that
   need polymorphic dispatch through a base-class parameter.
 
 - **Generators.** `function* gen() { yield x; … }` translated to a Lean
@@ -75,7 +75,7 @@ ecosystem (bundlers, editors, linters) sees ordinary TS.
   `@thales/prelude` bounded numerics (`Integer`, `Natural`, `Byte`,
   `Bit`) with compile-time-enforced subtyping and guard/constructor
   functions. The next layer is user-defined refinements — `/** @refine
-  x => x > 0 */ type PosInt = number;` becomes a subtype in Lean, with
+x => x > 0 */ type PosInt = number;` becomes a subtype in Lean, with
   call-site obligations discharged by the same pipeline. Encodes
   non-empty arrays, in-range indices, sorted lists, validated strings
   without hand-rolling a runtime guard for each.
@@ -83,7 +83,7 @@ ecosystem (bundlers, editors, linters) sees ordinary TS.
 - **Executable specifications.** `@requires`/`@ensures` on functions
   and properties stated as ordinary boolean-returning TS functions,
   with **dual discharge**: every spec can be run as a generated
-  property-based test (fast-check), and specs you want *proved* rather
+  property-based test (fast-check), and specs you want _proved_ rather
   than tested escalate to Lean, where a single curated tactic attempts
   the proof automatically. No manual proof syntax to start — when the
   automation fails, the user gets a counterexample (when one exists)

@@ -1,2 +1,4 @@
-enum E { A }
+enum E {
+  A,
+}
 E.A = 1;
