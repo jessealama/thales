@@ -92,9 +92,11 @@ private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
     else if info.capturedRefs.contains name then
       #[mkThalesDiag (.cannotMutateCapturedVariable name) loc]
     else if info.uninitializedLets.contains name
-            || info.narrowTested.contains name then
-      -- Still-rejected forms: `let` without initializer, and variables
-      -- whose narrowing the emitter relies on.
+            || info.narrowTested.contains name
+            || info.hasUnloweredSwitchShape then
+      -- Still-rejected forms: `let` without initializer, variables whose
+      -- narrowing the emitter relies on, and functions containing a
+      -- switch shape do-mode can't lower (non-returning arm / default).
       #[mkThalesDiag (.cannotReassignVariable name) loc]
     else if ctx.allowEligible && emittable then
       -- Eligible mutation (`=`, arithmetic `OP=`, `++`/`--`) in a declared

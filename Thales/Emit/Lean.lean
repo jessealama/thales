@@ -304,6 +304,10 @@ private partial def substMemberAccessExpr (scrutName : String) : Expression → 
                   (args.map (substMemberAccessExpr scrutName)) opt
   | .arrayExpr b elems =>
       .arrayExpr b (elems.map (Option.map (substMemberAccessExpr scrutName)))
+  -- #24: switch arms may contain mutation; substitute inside the RHS
+  -- (the target identifier is a local, never `scrutName.field`).
+  | .assignmentExpr b op target rhs =>
+      .assignmentExpr b op target (substMemberAccessExpr scrutName rhs)
   | other => other
 
 /-- Rewrite `scrutName.field` in all expressions within a statement. -/
@@ -1050,6 +1054,37 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
         | none => []
       .ifDo (emitExprEnv env cond) thnDo elsDo :: emitBodyDo env info rest
   | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
+  -- Discriminated-union switch, do-mode twin of `emitBodyEnv`'s arm.
+  -- EscapeAnalysis guarantees every arm returns and there is no `default`
+  -- (`hasUnloweredSwitchShape` keeps anything else out of do-mode), so
+  -- `rest` after the switch is dead code and is dropped.
+  | .switchStmt _ discriminant cases :: rest =>
+      match discriminant with
+      | .memberExpr _ (.identifier _ scrutName) (.identifier _ _fieldName) false _ =>
+          (match env.bindingEnv.get? scrutName with
+          | some rawTy =>
+            (match resolveTypeAlias env rawTy with
+            | .union branches =>
+              (match asDiscriminated branches with
+              | some ctors =>
+                  let arms : List (LPattern × List LDoStmt) := cases.filterMap fun
+                    | .mk _ (some (.literal _ (.string caseLit) _)) caseBody =>
+                        (match ctors.find? (fun (ctorName, _) => ctorName == caseLit) with
+                        | some (_ctorName, fields) =>
+                            let fieldNames := fields.map (·.1)
+                            let pat : LPattern := .ctor caseLit (fieldNames.map .var)
+                            let substBody := caseBody.map (substMemberAccessStmt scrutName)
+                            some (pat, emitBodyDo env info substBody)
+                        | none => none)
+                    | _ => none
+                  let allArms :=
+                    if arms.length >= ctors.length then arms
+                    else arms ++ [(.wildcard, [.ret (.var "unreachable!")])]
+                  [.matchDo (.var scrutName) allArms]
+              | none => emitBodyDo env info rest)
+            | _ => emitBodyDo env info rest)
+          | none => emitBodyDo env info rest)
+      | _ => emitBodyDo env info rest
   -- A list that ends without `return` is a branch falling through to the
   -- code after its `if` — emit nothing. The function-level trailing
   -- `return ()` (for void bodies) is appended by `emitFuncDecl`.

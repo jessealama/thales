@@ -78,6 +78,11 @@ def testBitAndAssignAllowed : IO Unit := expectNoCode
 def testArrowOwnLocalStillTH1 : IO Unit := expectCode
   "const g = (): number => { let n = 0; n = 1; return n; };" 1
 
+-- A switch with a `break`-style (non-returning) arm or a `default` keeps
+-- the function's mutation rejected: do-mode lowers all-arms-return only
+def testSwitchBreakArmStillTH1 : IO Unit := expectCode
+  "function f(x: string): number { let n = 0; switch (x) { case \"a\": n = 1; break; case \"b\": return 2; } return n; }" 1
+
 -- Still-rejected forms keep TH0001
 def testUninitializedLet : IO Unit := expectCode
   "function f(): number { let n: number; n = 1; return n; }" 1
@@ -104,5 +109,6 @@ def testLogicalAssignStaysTH1 : IO Unit := expectCode
 #eval testModAssignAllowed
 #eval testBitAndAssignAllowed
 #eval testArrowOwnLocalStillTH1
+#eval testSwitchBreakArmStillTH1
 #eval testUninitializedLet
 #eval testLogicalAssignStaysTH1

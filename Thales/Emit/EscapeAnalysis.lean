@@ -35,6 +35,11 @@ structure MutationInfo where
   params : Std.HashSet String := {}
   /-- Vars null-tested or refinement-predicate-tested in a condition. -/
   narrowTested : Std.HashSet String := {}
+  /-- The own body contains a `switch` that do-mode cannot lower: an arm
+      that does not return on every path (`break`-style fall-through would
+      need post-switch join emission) or a `default` arm. Mutation in such
+      a function stays rejected. -/
+  hasUnloweredSwitchShape : Bool := false
 
 def MutationInfo.eligible (info : MutationInfo) (name : String) : Bool :=
   (info.params.contains name || info.initializedLets.contains name)
@@ -112,6 +117,18 @@ partial def identsStmt : Statement → List String
   | .functionDecl _ _ _ b _ _ => identsStmt b
   | _ => []
 end
+
+/-- Whether a statement list returns or throws on every control path.
+    Conservative (false when unsure); the do-mode twin of the checker's
+    `alwaysReturns`. -/
+partial def stmtsReturn (stmts : List Statement) : Bool :=
+  stmts.any fun s =>
+    match s with
+    | .returnStmt _ _ => true
+    | .throwStmt _ _ => true
+    | .blockStmt _ ss => stmtsReturn ss
+    | .ifStmt _ _ c (some a) => stmtsReturn [c] && stmtsReturn [a]
+    | _ => false
 
 /-- Vars that a condition expression null-tests or predicate-tests. -/
 private partial def narrowTestVars : Expression → List String
@@ -202,6 +219,8 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
         | .inr vd => walkStmt acc (.variableDecl vd)
       walkStmt (walkExpr acc r) b
   | .switchStmt _ d cases =>
+      let unlowered := cases.any fun (.mk _ t ss) => t.isNone || !stmtsReturn ss
+      let acc := if unlowered then { acc with hasUnloweredSwitchShape := true } else acc
       cases.foldl (fun a (.mk _ t ss) =>
         let a := match t with | some e => walkExpr a e | none => a
         ss.foldl walkStmt a) (walkExpr acc d)

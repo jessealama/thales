@@ -68,6 +68,23 @@ def t9 : IO Unit := do
   unless info.consts.contains "c" do throw (IO.userError "c not in consts")
   if info.initializedLets.contains "c" then throw (IO.userError "c wrongly in initializedLets")
 
+-- switch shapes: all-arms-return is lowerable; a non-returning arm or a
+-- `default` arm is not (do-mode would need post-switch join emission)
+def expectUnloweredSwitch (src : String) (expected : Bool) : IO Unit := do
+  let info ← analyzeFirstFunc src
+  unless info.hasUnloweredSwitchShape == expected do
+    throw (IO.userError s!"hasUnloweredSwitchShape = {!expected}, expected {expected}")
+
+def t10 : IO Unit := expectUnloweredSwitch
+  "function f(x: string): number { let n = 0; switch (x) { case \"a\": n = 1; return n; case \"b\": return 2; } return n; }"
+  false
+def t11 : IO Unit := expectUnloweredSwitch
+  "function f(x: string): number { let n = 0; switch (x) { case \"a\": n = 1; break; case \"b\": return 2; } return n; }"
+  true
+def t12 : IO Unit := expectUnloweredSwitch
+  "function f(x: string): number { let n = 0; switch (x) { case \"a\": return 1; default: return 2; } }"
+  true
+
 #eval t1
 #eval t2
 #eval t3
@@ -79,3 +96,6 @@ def t9 : IO Unit := do
 #eval t7c
 #eval t8
 #eval t9
+#eval t10
+#eval t11
+#eval t12
