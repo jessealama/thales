@@ -73,8 +73,30 @@ console.log(f());"
      "m := (m / 8.000000)",
      "m := (m ^ 2.000000)"]
 
+-- mutated parameters self-shadow as `let mut x := x` (JS param mutation
+-- never affects the caller, so a local mutable copy is exact)
+def testParamSelfShadow : IO Unit :=
+  expectEmit
+    "function pad(n: number): number { n = n + 1; return n; }
+console.log(pad(2));"
+    ["def pad (n : Float) : Float :=",
+     "Id.run do",
+     "let mut n := n",
+     "n := (n + 1.000000)",
+     "return n"]
+
+-- unmutated parameters get no shadow
+def testUnmutatedParamNoShadow : IO Unit :=
+  expectEmit
+    "function f(x: number, y: number): number { x += y; return x; }
+console.log(f(1, 2));"
+    ["let mut x := x"]
+    (forbidden := ["let mut y"])
+
 #eval testStraightLineDo
 #eval testPureStaysPure
 #eval testMixedLets
 #eval testUpdateDesugar
 #eval testCompoundDesugar
+#eval testParamSelfShadow
+#eval testUnmutatedParamNoShadow

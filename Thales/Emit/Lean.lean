@@ -1198,7 +1198,13 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
   let hasEligibleMutation := info.mutated.toList.any info.eligible
   let bodyExpr :=
     if hasEligibleMutation && throws.isEmpty then
-      .idRunDo (emitBodyDo env info stmts)
+      -- Mutated parameters self-shadow as `let mut x := x`: JS parameters
+      -- are mutable locals whose mutation never affects the caller.
+      let prologue : List LDoStmt := normalizedParams.filterMap fun (n, _) =>
+        if info.mutated.contains n && info.eligible n
+        then some (.letMut n none (.var n))
+        else none
+      .idRunDo (prologue ++ emitBodyDo env info stmts)
     else
       emitBodyEnv env stmts
   let leanParams := normalizedParams.map fun (n, t) => (n, emitType t)
