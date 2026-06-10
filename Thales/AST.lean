@@ -136,6 +136,29 @@ inductive AssignmentOperator where
   | nullishAssign     -- ??=
   deriving Repr, Inhabited
 
+/-- Map a compound assignment operator to its underlying binary operator
+    (`x OP= y` desugars to `x = x OP y`). `none` for plain `=` and the
+    (deferred) logical assignment family. -/
+def AssignmentOperator.compoundToBinary : AssignmentOperator → Option BinaryOperator
+  | .addAssign  => some .add
+  | .subAssign  => some .sub
+  | .mulAssign  => some .mul
+  | .divAssign  => some .div
+  | .modAssign  => some .mod
+  | .expAssign  => some .exp
+  | .shlAssign  => some .shl
+  | .shrAssign  => some .shr
+  | .ushrAssign => some .ushr
+  | .orAssign   => some .bitor
+  | .xorAssign  => some .bitxor
+  | .andAssign  => some .bitand
+  | _ => none
+
+/-- The short-circuit logical assignment operators (`&&=`, `||=`, `??=`). -/
+def AssignmentOperator.isLogical : AssignmentOperator → Bool
+  | .orLogicalAssign | .andLogicalAssign | .nullishAssign => true
+  | _ => false
+
 /-- Template literal element (string part between interpolations) -/
 structure TemplateElement where
   value : String  -- cooked value (escape sequences resolved)
