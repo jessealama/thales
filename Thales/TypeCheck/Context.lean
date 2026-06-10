@@ -163,13 +163,17 @@ def withScopeAndDeclaredTypes {α : Type} (extraBindings : List (String × TSTyp
 def lookupDeclaredType (name : String) : TypeCheckM (Option TSType) := do
   return (← read).declaredTypes[name]?
 
-/-- Run a computation in a function scope (with params and return type) -/
+/-- Run a computation in a function scope (with params and return type).
+    Parameters seed both the flow type and the declared type — assignment
+    checking and post-assignment flow updates (#24) treat parameters
+    exactly like initialized `let` bindings. -/
 def withFunctionScope {α : Type} (params : List (String × TSType)) (retTy : Option TSType)
     (m : TypeCheckM α) : TypeCheckM α :=
   StateT.mk fun s =>
     ReaderT.mk fun ctx =>
       let newBindings := params.foldl (fun map (k, v) => map.insert k v) ctx.bindings
-      (m.run s).run { ctx with bindings := newBindings, returnType := retTy }
+      let newDeclared := params.foldl (fun map (k, v) => map.insert k v) ctx.declaredTypes
+      (m.run s).run { ctx with bindings := newBindings, declaredTypes := newDeclared, returnType := retTy }
 
 /-- Run a computation with a registered type alias -/
 def withTypeAlias {α : Type} (name : String) (def_ : TypeAliasDef) (m : TypeCheckM α) : TypeCheckM α :=

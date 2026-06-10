@@ -24,6 +24,20 @@ private def collectDeclaredBindings : Statement → List (String × TSType)
   | .blockStmt _ stmts => stmts.flatMap collectDeclaredBindings
   | _ => []
 
+/-- tsc-style literal widening for mutable positions (#24): a fresh literal
+    type widens to its base primitive when it seeds a mutable binding's
+    declared type or a variable's post-assignment flow type. -/
+partial def widenLiteralType : TSType → TSType
+  | .numberLit _ => .number
+  | .stringLit _ => .string
+  | .booleanLit _ => .boolean
+  | .paren inner => widenLiteralType inner
+  | .union members =>
+    match (members.map widenLiteralType).eraseDups with
+    | [single] => single
+    | ms => .union ms
+  | t => t
+
 /-- Collect all `var`-declared names from a JS statement, recursing into
     blocks/if/for/while/try but stopping at function boundaries. -/
 private partial def collectHoistedVarsJS : Statement → List String
@@ -548,11 +562,83 @@ partial def checkStatements (stmts : List TSStatement) : TypeCheckM Unit := do
 
 /-- Process a list of JS statements, pre-seeding scope with declared variable names -/
 partial def checkJSStatements (stmts : List Statement) : TypeCheckM Unit := do
-  -- Pre-seed scope with all variable declarations using annotation types where available
+  -- Pre-seed scope with all variable declarations using annotation types
+  -- where available (hoisting/forward refs); the sequential walker then
+  -- refines unannotated declarations and assignments as it goes (#24).
   let extraBindings := stmts.flatMap collectDeclaredBindings
-  withScopeAndDeclaredTypes extraBindings (do
-    for stmt in stmts do
-      checkJSStatementRaw stmt)
+  withScopeAndDeclaredTypes extraBindings (checkJSStatementsSeq stmts)
+
+/-- Check a declarator list, returning scope updates for unannotated
+    initialized declarations: the declared type is the widened initializer
+    type for mutable kinds (`let`/`var`), the exact synthesized type for
+    `const` (tsc keeps literal types on consts). Mirrors the checking that
+    `checkJSStatementRaw`'s `variableDecl` arm performs — callers must use
+    one or the other, never both, or initializers get double-synthesized. -/
+partial def checkDeclaratorsSeq (declarators : List VariableDeclarator)
+    (kind : VariableKind) : TypeCheckM (List (String × TSType)) := do
+  let mut updates : List (String × TSType) := []
+  for decl in declarators do
+    let (.mk _ pat init typeAnn) := decl
+    match pat with
+    | .identifier id =>
+      match typeAnn, init with
+      | some annTy, some expr =>
+        let initTyped ← synthJSExpr expr (some annTy)
+        checkAssignable initTyped.type annTy (exprLoc expr) (exprSourceName expr)
+        markAssigned id.name
+      | _, none =>
+        match kind with
+        | .let_ | .const => requireAssignmentCheck id.name
+        | .var => markAssigned id.name
+      | none, some expr =>
+        let initTyped ← synthJSExpr expr
+        markAssigned id.name
+        match kind with
+        | .let_ | .var => updates := updates ++ [(id.name, widenLiteralType initTyped.type)]
+        | .const => updates := updates ++ [(id.name, initTyped.type)]
+    | _ => pure ()
+  return updates
+
+/-- The flow type of `name` after an assignment whose RHS synthesized to
+    `rhsTy` (#24): the widened RHS if it is assignable to the declared type,
+    else the declared type (the assignment is ill-typed — TS2322 was already
+    emitted — and flow degrades to declared). `none` when nothing is known. -/
+partial def assignmentFlowType (name : String) (rhsTy : TSType) : TypeCheckM (Option TSType) := do
+  match ← lookupDeclaredType name with
+  | none => return none
+  | some declared =>
+    if declared == .any then return none
+    let widened := widenLiteralType rhsTy
+    if ← isSubtype widened declared then
+      return some widened
+    else
+      return some declared
+
+/-- Statement-list walker with sequential scope threading (#24), mirroring
+    the continuation style of the top-level `checkStatements`: unannotated
+    `let` initializers install their widened type, and assignment/update
+    statements refine the variable's flow type for the rest of the list. -/
+partial def checkJSStatementsSeq : List Statement → TypeCheckM Unit
+  | [] => pure ()
+  | stmt :: rest =>
+    match stmt with
+    | .variableDecl (.mk _ declarators kind) => do
+      let updates ← checkDeclaratorsSeq declarators kind
+      withScopeAndDeclaredTypes updates (checkJSStatementsSeq rest)
+    | .exprStmt _ expr@(.assignmentExpr _ _ (.identifier _ name) _) => do
+      let typed ← synthJSExpr expr
+      match ← assignmentFlowType name typed.type with
+      | some ty => withScope [(name, ty)] (checkJSStatementsSeq rest)
+      | none => checkJSStatementsSeq rest
+    | .exprStmt _ expr@(.updateExpr _ _ (.identifier _ name) _) => do
+      let _ ← synthJSExpr expr
+      -- `x++` preserves the declared (numeric) type; flow resets to declared.
+      match ← lookupDeclaredType name with
+      | some d => withScope [(name, d)] (checkJSStatementsSeq rest)
+      | none => checkJSStatementsSeq rest
+    | _ => do
+      checkJSStatementRaw stmt
+      checkJSStatementsSeq rest
 
 end
 
