@@ -61,14 +61,18 @@ def testMutationInTry : IO Unit := expectCode
 def testMutationInThrowsFn : IO Unit := expectCode
   "/** @throws RangeError */\nfunction f(x: number): number { let n = 0; n = x; if (x === 0) { throw new RangeError(\"z\"); } return n; }" 7
 
--- Eligible function-local plain `=`: in subset since do-mode emission
+-- Eligible function-local mutation: in subset since do-mode emission
 def testEligiblePlainAssignAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 0; n = 1; return n; }" 1
--- Compound/update forms flip in their own task; still TH0001 for now
-def testEligibleCompoundStillTH1 : IO Unit := expectCode
+def testEligibleCompoundAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 0; n += 1; return n; }" 1
-def testEligibleUpdateStillTH1 : IO Unit := expectCode
+def testEligibleUpdateAllowed : IO Unit := expectNoCode
   "function f(): number { let n = 0; n++; return n; }" 1
+-- `%=` and bitwise compounds stay TH0001 until their runtime lowering lands
+def testModAssignStillTH1 : IO Unit := expectCode
+  "function f(): number { let n = 7; n %= 3; return n; }" 1
+def testBitAndAssignStillTH1 : IO Unit := expectCode
+  "function f(): number { let n = 7; n &= 3; return n; }" 1
 -- Arrow bodies don't lower through emitFuncDecl: their own-local mutation
 -- stays TH0001 in v1 even though the eligibility analysis would allow it
 def testArrowOwnLocalStillTH1 : IO Unit := expectCode
@@ -95,8 +99,10 @@ def testLogicalAssignStaysTH1 : IO Unit := expectCode
 #eval testMutationInTry
 #eval testMutationInThrowsFn
 #eval testEligiblePlainAssignAllowed
-#eval testEligibleCompoundStillTH1
-#eval testEligibleUpdateStillTH1
+#eval testEligibleCompoundAllowed
+#eval testEligibleUpdateAllowed
+#eval testModAssignStillTH1
+#eval testBitAndAssignStillTH1
 #eval testArrowOwnLocalStillTH1
 #eval testUninitializedLet
 #eval testLogicalAssignStaysTH1

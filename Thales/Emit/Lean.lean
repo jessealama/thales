@@ -997,8 +997,23 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
   | .returnStmt _ none :: _ => [.ret (.var "()")]
   | .variableDecl (.mk _ decls _) :: rest =>
       emitVarDeclDo env info decls rest
-  | .exprStmt _ (.assignmentExpr _ .assign (.identifier _ name) rhs) :: rest =>
-      .assign name (emitExprEnv env rhs) :: emitBodyDo env info rest
+  -- `x = e` / `x OP= e`: compound forms desugar to `x := x OP e` so emission
+  -- reuses the binary-op lowering (refinement projection, string concat, …).
+  | .exprStmt _ (.assignmentExpr b op (.identifier _ name) rhs) :: rest =>
+      let value : LExpr :=
+        match op.compoundToBinary with
+        | some binOp =>
+            emitExprEnv env (.binaryExpr b binOp (.identifier b name) rhs)
+        | none => emitExprEnv env rhs   -- plain `=` (logical never reaches do-mode)
+      .assign name value :: emitBodyDo env info rest
+  -- `x++` / `x--` desugar to `x := x ± 1`.
+  | .exprStmt _ (.updateExpr b op (.identifier _ name) _) :: rest =>
+      let one : Expression := .literal b (.number 1) "1"
+      let binOp : BinaryOperator := match op with
+        | .inc => .add
+        | .dec => .sub
+      .assign name (emitExprEnv env (.binaryExpr b binOp (.identifier b name) one))
+        :: emitBodyDo env info rest
   | .blockStmt _ inner :: rest => emitBodyDo env info (inner ++ rest)
   | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
   | [] => [.ret (.var "()")]

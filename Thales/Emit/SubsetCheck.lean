@@ -59,12 +59,20 @@ private def nestedInfo (params : List FunctionParam) (body : Statement)
     : EscapeAnalysis.MutationInfo :=
   EscapeAnalysis.analyze (funcParamNames params) body
 
+/-- Compound operators whose desugared binary op has a working Float
+    lowering today. `%=`, bitwise and shift compounds stay rejected until
+    their JS-semantics runtime helpers land — their underlying binops
+    (`%`, `&&&`, …) have no Float instances, so accepting them would emit
+    Lean that does not compile. -/
+private def emittableMutationOp : AssignmentOperator → Bool
+  | .assign | .addAssign | .subAssign | .mulAssign | .divAssign | .expAssign => true
+  | _ => false
+
 /-- Route a statement-position mutation of identifier `name`.
     Returns the rejection diagnostics; `#[]` means the mutation is allowed.
-    `plainAssign` is true only for bare `=` — compound/update forms flip in
-    their own task. -/
+    `emittable` is false for operators whose lowering isn't implemented. -/
 private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
-    (name : String) (logicalOp : Bool) (plainAssign : Bool) : Array Diagnostic :=
+    (name : String) (logicalOp : Bool) (emittable : Bool) : Array Diagnostic :=
   match ctx.info with
   | none =>
     -- Module-level mutation stays out of the subset.
@@ -89,9 +97,9 @@ private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
       -- Still-rejected forms: `let` without initializer, and variables
       -- whose narrowing the emitter relies on.
       #[mkThalesDiag (.cannotReassignVariable name) loc]
-    else if ctx.allowEligible && plainAssign then
-      -- Eligible plain `=` in a declared function body: in subset, lowered
-      -- to `Id.run do` by the emitter. (Compound/update flip in Task 8.)
+    else if ctx.allowEligible && emittable then
+      -- Eligible mutation (`=`, arithmetic `OP=`, `++`/`--`) in a declared
+      -- function body: in subset, lowered to `Id.run do` by the emitter.
       #[]
     else
       #[mkThalesDiag (.cannotReassignVariable name) loc]
@@ -219,11 +227,10 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
   | .exprStmt _ expr =>
     match expr with
     | .assignmentExpr b op (.identifier _ name) right =>
-      let plainAssign := op.compoundToBinary.isNone && !op.isLogical
-      routeIdentMutation ctx b.loc name op.isLogical plainAssign
+      routeIdentMutation ctx b.loc name op.isLogical (emittableMutationOp op)
         ++ checkExpr ctx right
     | .updateExpr b _ (.identifier _ name) _ =>
-      routeIdentMutation ctx b.loc name false false
+      routeIdentMutation ctx b.loc name false true
     | _ => checkExpr ctx expr
   | .blockStmt _ body =>
     body.foldl (fun acc s => acc ++ checkStmt ctx s) #[]

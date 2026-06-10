@@ -52,6 +52,29 @@ console.log(f());"
     ["Id.run do", "let k := 10.000000", "let mut n := 0.000000", "n := (n + k)"]
     (forbidden := ["let mut k"])
 
+-- `n++` / `n--` desugar to plain reassignment on the underlying binop
+def testUpdateDesugar : IO Unit :=
+  expectEmit
+    "function f(): number { let n = 0; n++; n--; return n; }
+console.log(f());"
+    ["Id.run do",
+     "n := (n + 1.000000)",
+     "n := (n - 1.000000)"]
+
+-- compound ops desugar to `n := n OP e`; `**=` lowers through `^`
+def testCompoundDesugar : IO Unit :=
+  expectEmit
+    "function f(): number { let m = 10; m += 2; m -= 1; m *= 4; m /= 8; m **= 2; return m; }
+console.log(f());"
+    ["Id.run do",
+     "m := (m + 2.000000)",
+     "m := (m - 1.000000)",
+     "m := (m * 4.000000)",
+     "m := (m / 8.000000)",
+     "m := (m ^ 2.000000)"]
+
 #eval testStraightLineDo
 #eval testPureStaysPure
 #eval testMixedLets
+#eval testUpdateDesugar
+#eval testCompoundDesugar
