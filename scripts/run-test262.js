@@ -263,4 +263,288 @@ function aggregate(outcomes) {
     throw new Error(`aggregate t: ${JSON.stringify(rep.slices['t'])}`);
 })();
 
-console.log('self-checks passed (driver lands in the next commit)');
+// ---- per-test pipeline ----
+
+/** Prologue + sta.ts + assert.ts, concatenated once per run. Strict-mode
+ *  insertion follows test262's INTERPRETING.md: the prologue makes the
+ *  whole composite strict. */
+function loadShim() {
+  const sta = fs.readFileSync(path.join(shimDir, 'sta.ts'), 'utf8');
+  const assertSrc = fs.readFileSync(path.join(shimDir, 'assert.ts'), 'utf8');
+  return '"use strict";\n' + sta + assertSrc;
+}
+
+/**
+ * Classify one test file. Returns one of:
+ *   {classification: 'skip', reason}
+ *   {classification: 'out-of-subset', codes: ['TH0030@shim', ...]}
+ *   {classification: 'pass'}
+ *   {classification: 'fail', kind: 'compile'|'runtime'|'timeout', detail}
+ * ('crash' is assigned by the driver's catch-all.)
+ */
+function evaluateTest(filePath, shim, shimLineCount) {
+  const body = fs.readFileSync(filePath, 'utf8');
+  const meta = parseFrontmatter(body);
+  const skip = skipReason(meta);
+  if (skip !== null) return { classification: 'skip', reason: skip };
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'test262-'));
+  try {
+    // The verbatim test body lands after the shim; its frontmatter block
+    // rides along as a plain comment.
+    const compositePath = path.join(tmp, 'case.ts');
+    fs.writeFileSync(compositePath, shim + body);
+
+    const thc = runCapture(thalesBin, ['--no-emit', compositePath], {
+      timeout: TYPECHECK_TIMEOUT_MS,
+    });
+    if (thc.timedOut) {
+      return {
+        classification: 'fail',
+        kind: 'timeout',
+        detail: 'thales --no-emit timed out',
+      };
+    }
+    const diags = parseDiagnostics(thc.stdout);
+    if (diags.length > 0 || thc.code !== 0) {
+      // Dedup (code, attribution) per test so one repeated code counts once.
+      const codes = [
+        ...new Set(
+          diags.map((d) => `${d.code}@${attributeDiag(d.line, shimLineCount)}`),
+        ),
+      ];
+      if (codes.length === 0) {
+        // Nonzero exit but nothing in diagnostic format (e.g. a hard
+        // "Parse error:" report) — still honestly out-of-subset.
+        codes.push('parse-error@unknown');
+      }
+      return { classification: 'out-of-subset', codes };
+    }
+
+    const tsx = runTsx(compositePath, { timeout: TSX_TIMEOUT_MS });
+    const ours = runThcThenLean(compositePath, { timeout: LEAN_TIMEOUT_MS });
+    if (tsx.timedOut || ours.timedOut) {
+      return {
+        classification: 'fail',
+        kind: 'timeout',
+        detail: `timeout (tsx=${tsx.timedOut}, lean=${ours.timedOut})`,
+      };
+    }
+    if (ours.stage === 'emit' || ours.stage === 'nosorry') {
+      // thales accepted the program but couldn't deliver a runnable
+      // sidecar — a thales bug by the subset contract.
+      return {
+        classification: 'fail',
+        kind: 'compile',
+        detail: `${ours.stage} failed:\n${ours.stdout}${ours.stderr}`,
+      };
+    }
+    const diff = diffRuns(tsx, ours);
+    if (diff === null) return { classification: 'pass' };
+    // Lean elaboration errors print `<path>:<line>:<col>: error`; bucket
+    // those as compile failures (heuristic — either way it's a fail).
+    const kind =
+      ours.code !== 0 && /:\d+:\d+: error/.test(ours.stdout + ours.stderr)
+        ? 'compile'
+        : 'runtime';
+    return { classification: 'fail', kind, detail: diff };
+  } finally {
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+// ---- reporting ----
+
+function failTotal(b) {
+  return Object.values(b.fail).reduce((x, y) => x + y, 0);
+}
+
+function skipTotal(b) {
+  return Object.values(b.skipped).reduce((x, y) => x + y, 0);
+}
+
+function pct(x) {
+  return x === null ? 'n/a' : (x * 100).toFixed(1) + '%';
+}
+
+function renderReport(report) {
+  const rows = [...Object.entries(report.slices), ['TOTAL', report.totals]];
+  console.log('');
+  console.log(
+    'Slice'.padEnd(48) +
+      'Total'.padStart(7) +
+      'Skip'.padStart(6) +
+      'OoS'.padStart(6) +
+      'Pass'.padStart(6) +
+      'Fail'.padStart(6) +
+      'InSubset'.padStart(10) +
+      'Pass%'.padStart(8),
+  );
+  console.log('-'.repeat(97));
+  for (const [name, b] of rows) {
+    console.log(
+      name.padEnd(48) +
+        String(b.total).padStart(7) +
+        String(skipTotal(b)).padStart(6) +
+        String(b.outOfSubset).padStart(6) +
+        String(b.pass).padStart(6) +
+        String(failTotal(b)).padStart(6) +
+        String(b.inSubset).padStart(10) +
+        pct(b.passRate).padStart(8),
+    );
+  }
+
+  console.log('\nSkip reasons (all slices):');
+  for (const [reason, n] of Object.entries(report.totals.skipped).sort(
+    (a, b) => b[1] - a[1],
+  )) {
+    console.log(`  ${reason}: ${n}`);
+  }
+
+  const fails = Object.entries(report.totals.fail);
+  if (fails.length > 0) {
+    console.log('\nFail kinds (all slices):');
+    for (const [kind, n] of fails.sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${kind}: ${n}`);
+    }
+  }
+
+  if (report.histogram.length > 0) {
+    console.log('\nTop blocking diagnostics (tests blocked, by attribution):');
+    console.log(
+      'Code'.padEnd(16) +
+        'Shim'.padStart(6) +
+        'Body'.padStart(7) +
+        'Unknown'.padStart(9),
+    );
+    for (const h of report.histogram.slice(0, 20)) {
+      console.log(
+        h.code.padEnd(16) +
+          String(h.shim).padStart(6) +
+          String(h.body).padStart(7) +
+          String(h.unknown).padStart(9),
+      );
+    }
+  }
+}
+
+// ---- driver ----
+
+/** Recursively collect .js test files under dir, sorted for determinism.
+ *  *_FIXTURE.js files are not tests (INTERPRETING.md) and are excluded
+ *  from enumeration entirely. */
+function collectJsFiles(dir) {
+  const results = [];
+  for (const entry of fs
+    .readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...collectJsFiles(full));
+    } else if (
+      entry.name.endsWith('.js') &&
+      !entry.name.endsWith('_FIXTURE.js')
+    ) {
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+const args = process.argv.slice(2);
+let dirFilter = null;
+let jsonOut = false;
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === '--dir' && args[i + 1]) dirFilter = args[++i];
+  else if (args[i] === '--json') jsonOut = true;
+  else {
+    console.error(`unknown argument: ${args[i]}`);
+    console.error(
+      'usage: node scripts/run-test262.js [--dir <slice>] [--json]',
+    );
+    process.exit(2);
+  }
+}
+
+const problems = preflight();
+if (!fs.existsSync(path.join(test262Root, 'harness', 'assert.js'))) {
+  problems.push(
+    `test262 submodule not materialized (${test262Root}/harness/assert.js missing); ` +
+      `run 'npm run setup:test262'`,
+  );
+}
+if (problems.length > 0) {
+  console.error('Preflight failed:');
+  for (const p of problems) console.error('  - ' + p);
+  process.exit(2);
+}
+
+const { slices } = JSON.parse(fs.readFileSync(slicesPath, 'utf8'));
+const selected = dirFilter
+  ? slices.filter((s) => s.includes(dirFilter))
+  : slices;
+if (selected.length === 0) {
+  console.error(`--dir '${dirFilter}' matches no slice in ${slicesPath}`);
+  process.exit(2);
+}
+
+const shim = loadShim();
+const shimLineCount = countLines(shim);
+
+const outcomes = [];
+for (const slice of selected) {
+  const files = collectJsFiles(path.join(test262Root, slice));
+  let done = 0;
+  for (const f of files) {
+    let outcome;
+    try {
+      outcome = evaluateTest(f, shim, shimLineCount);
+    } catch (e) {
+      // A per-test crash is a runner bug, but it must not abort the run.
+      outcome = {
+        classification: 'fail',
+        kind: 'crash',
+        detail: e.stack || String(e),
+      };
+    }
+    outcomes.push({
+      slice,
+      file: path.relative(test262Root, f),
+      ...outcome,
+    });
+    done++;
+    if (!jsonOut && done % 25 === 0) {
+      process.stdout.write(`\r${slice}: ${done}/${files.length}`);
+    }
+  }
+  if (!jsonOut) {
+    process.stdout.write(`\r${slice}: ${done}/${files.length} done\n`);
+  }
+}
+
+const report = aggregate(outcomes);
+if (jsonOut) {
+  console.log(
+    JSON.stringify(
+      {
+        slices: report.slices,
+        totals: report.totals,
+        histogram: report.histogram,
+        outcomes,
+      },
+      null,
+      2,
+    ),
+  );
+} else {
+  renderReport(report);
+  const crashes = outcomes.filter((o) => o.kind === 'crash');
+  for (const c of crashes.slice(0, 5)) {
+    console.log(`\ncrash in ${c.file}:\n  ${c.detail.replace(/\n/g, '\n  ')}`);
+  }
+}
+// The metric is informational: any completed reporting run exits 0
+// (preflight failures exited 2 above). No threshold to enforce in v1.
+process.exit(0);
