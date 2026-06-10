@@ -67,6 +67,8 @@ inductive ThalesKind where
   | cannotAssignObjectProperty
   | cannotCallMutatingMethod (name : String)
   | cannotMutateCapturedVariable (name : String)
+  | assignmentInExpressionPosition
+  | mutationInThrowsContext (name : String)
   | loopNotSupported
   | asyncNotSupported
   | anyNotPermitted
@@ -110,6 +112,8 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .cannotAssignObjectProperty => 3
   | .cannotCallMutatingMethod _ => 4
   | .cannotMutateCapturedVariable _ => 5
+  | .assignmentInExpressionPosition => 6
+  | .mutationInThrowsContext _ => 7
   | .loopNotSupported => 10
   | .asyncNotSupported => 12
   | .anyNotPermitted => 20
@@ -148,6 +152,10 @@ def ThalesKind.message : ThalesKind → String
   | .cannotAssignObjectProperty => "Cannot assign to object property; construct a new object"
   | .cannotCallMutatingMethod name => s!"Cannot call mutating method '{name}'"
   | .cannotMutateCapturedVariable name => s!"Cannot mutate variable '{name}' captured by enclosing scope"
+  | .assignmentInExpressionPosition =>
+    "Assignment and update expressions are only supported as statements; assign in a separate statement"
+  | .mutationInThrowsContext name =>
+    s!"Cannot mutate variable '{name}' inside a `@throws` function or `try`/`catch`"
   | .loopNotSupported => "Loop not supported; use recursion or array methods"
   | .asyncNotSupported => "async/await not supported"
   | .anyNotPermitted => "'any' is not permitted"
