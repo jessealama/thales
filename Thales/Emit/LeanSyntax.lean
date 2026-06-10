@@ -87,6 +87,19 @@ end
 instance : Inhabited LExpr := ⟨.var ""⟩
 instance : Inhabited LDoStmt := ⟨.ret (.var "")⟩
 
+/-- Whether a do-statement list `return`s on every control path — i.e. an
+    `idRunDo` built from it never falls off the end. Conservative (false
+    when unsure). -/
+partial def doStmtsTerminate (stmts : List LDoStmt) : Bool :=
+  match stmts.getLast? with
+  | none => false
+  | some (.ret _) => true
+  | some (.ifDo _ thn els) =>
+      !els.isEmpty && doStmtsTerminate thn && doStmtsTerminate els
+  | some (.matchDo _ arms) =>
+      !arms.isEmpty && arms.all fun (_, ss) => doStmtsTerminate ss
+  | some _ => false
+
 /-- Top-level declaration. -/
 inductive LDecl where
   | def_ (name : String)

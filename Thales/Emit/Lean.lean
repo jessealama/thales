@@ -1034,8 +1034,26 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
       .assign name (emitExprEnv env (.binaryExpr b binOp (.identifier b name) one))
         :: emitBodyDo env info rest
   | .blockStmt _ inner :: rest => emitBodyDo env info (inner ++ rest)
+  -- `if`/`else` in statement position: branches lower WITHOUT the
+  -- continuation appended (do-notation gives statement semantics — the
+  -- pure path's continuation-into-branches trick at `emitBodyEnv` does
+  -- not apply), so mutation inside a branch stays visible after it and
+  -- `return` inside a branch is do-notation's native early return.
+  | .ifStmt _ cond thn elsOpt :: rest =>
+      let stmtsOf : Statement → List Statement := fun s =>
+        match s with
+        | .blockStmt _ ss => ss
+        | other => [other]
+      let thnDo := emitBodyDo env info (stmtsOf thn)
+      let elsDo := match elsOpt with
+        | some els => emitBodyDo env info (stmtsOf els)
+        | none => []
+      .ifDo (emitExprEnv env cond) thnDo elsDo :: emitBodyDo env info rest
   | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
-  | [] => [.ret (.var "()")]
+  -- A list that ends without `return` is a branch falling through to the
+  -- code after its `if` — emit nothing. The function-level trailing
+  -- `return ()` (for void bodies) is appended by `emitFuncDecl`.
+  | [] => []
   | _ :: rest => emitBodyDo env info rest
 
 /-- Declarator lowering inside do-mode: mutated names become `let mut`,
@@ -1204,7 +1222,12 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
         if info.mutated.contains n && info.eligible n
         then some (.letMut n none (.var n))
         else none
-      .idRunDo (prologue ++ emitBodyDo env info stmts)
+      let core := prologue ++ emitBodyDo env info stmts
+      -- A body that can fall off the end (void function) needs an explicit
+      -- unit return; appending one after an always-returning body would be
+      -- dead code at the wrong type.
+      let core := if doStmtsTerminate core then core else core ++ [.ret (.var "()")]
+      .idRunDo core
     else
       emitBodyEnv env stmts
   let leanParams := normalizedParams.map fun (n, t) => (n, emitType t)

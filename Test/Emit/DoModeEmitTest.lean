@@ -93,6 +93,33 @@ console.log(f(1, 2));"
     ["let mut x := x"]
     (forbidden := ["let mut y"])
 
+-- no-else `if` with mutation: the branch lowers WITHOUT the continuation
+-- appended (do-notation has statement semantics), so the post-branch
+-- mutation stays visible after the `if`
+def testBranchMutationDo : IO Unit :=
+  expectEmit
+    "function f(c: boolean): number { let n = 0; if (c) { n += 5; } n += 1; return n; }
+console.log(f(true));"
+    ["Id.run do", "if c then", "n := (n + 5.000000)",
+     "n := (n + 1.000000)", "return n"]
+
+-- early return inside a branch is do-notation's native `return`
+def testEarlyReturnDo : IO Unit :=
+  expectEmit
+    "function g(n: number): number { let m = n; if (m > 10) { return 100; } m += 1; return m; }
+console.log(g(20));
+console.log(g(1));"
+    ["let mut m := n", "if (m > 10.000000) then", "return 100.000000",
+     "m := (m + 1.000000)", "return m"]
+
+-- if/else where both branches return: no dead trailing `return ()`
+def testIfElseBothReturn : IO Unit :=
+  expectEmit
+    "function h(c: boolean): number { let n = 1; if (c) { n += 1; return n; } else { return 0; } }
+console.log(h(true));"
+    ["if c then", "n := (n + 1.000000)", "return n", "else", "return 0.000000"]
+    (forbidden := ["return ()"])
+
 #eval testStraightLineDo
 #eval testPureStaysPure
 #eval testMixedLets
@@ -100,3 +127,6 @@ console.log(f(1, 2));"
 #eval testCompoundDesugar
 #eval testParamSelfShadow
 #eval testUnmutatedParamNoShadow
+#eval testBranchMutationDo
+#eval testEarlyReturnDo
+#eval testIfElseBothReturn
