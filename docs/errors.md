@@ -100,7 +100,11 @@ forms:
 - reassignment of a `let` declared without an initializer
   (`let x: number; x = 1;` — give it an initializer instead);
 - reassignment of a variable whose narrowing the emitter relies on
-  (null-tested or refinement-predicate-tested in a condition).
+  (null-tested or refinement-predicate-tested in a condition);
+- mutation inside arrow/function-expression bodies (only declared
+  functions lower through the do-mode path in v1);
+- mutation in a function containing a `switch` shape do-mode cannot lower
+  (an arm that falls through via `break`, or a `default` arm).
 
 [Details in subset.md#th0001--cannot-reassign-variable](./subset.md#th0001--cannot-reassign-variable)
 
