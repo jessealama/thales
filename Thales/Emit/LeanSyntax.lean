@@ -26,6 +26,8 @@ inductive LPattern where
   | ctor (name : String) (args : List LPattern) -- .circle r
   deriving Inhabited
 
+mutual
+
 /-- Lean term. Only the subset the emitter uses. -/
 inductive LExpr where
   | var (name : String)
@@ -62,7 +64,28 @@ inductive LExpr where
   -- a singleton is degenerate. All current call sites are guarded by
   -- `stmtsHaveIO`, which ensures the tail is non-empty before wrapping.
   | doSeq (stmts : List LExpr)
-  deriving Inhabited
+  -- An `Id.run do` block with mutable locals (#24). MUST be constructed
+  -- with ≥ 1 statement, and every control path through the statements must
+  -- end in a `ret` (the emitter guarantees this; a fall-through path would
+  -- render a do-block with no value).
+  | idRunDo (stmts : List LDoStmt)
+
+/-- A statement inside an `Id.run do` block (#24). Only what do-mode
+    emission needs: mutable/immutable lets, reassignment, early return,
+    statement-position `if`, and `match` with statement-list arms. -/
+inductive LDoStmt where
+  | letMut (name : String) (ty : Option LType) (value : LExpr)   -- let mut n := e
+  | letPure (name : String) (ty : Option LType) (value : LExpr)  -- let n := e
+  | assign (name : String) (value : LExpr)                       -- n := e
+  | ret (value : LExpr)                                          -- return e
+  -- `if c then …` / `if c then … else …`; an empty branch renders `pure ()`
+  | ifDo (cond : LExpr) (thn : List LDoStmt) (els : List LDoStmt)
+  | matchDo (scrutinee : LExpr) (arms : List (LPattern × List LDoStmt))
+
+end
+
+instance : Inhabited LExpr := ⟨.var ""⟩
+instance : Inhabited LDoStmt := ⟨.ret (.var "")⟩
 
 /-- Top-level declaration. -/
 inductive LDecl where
@@ -218,6 +241,35 @@ mutual
         -- `app`s like `consoleLog x` are wrapped harmlessly as `(consoleLog x)`.
         let body := lines (stmts.map renderExprAtom)
         s!"(do\n{indent body})"
+    | .idRunDo stmts =>
+        s!"Id.run do\n{indent (renderDoStmts stmts)}"
+
+  /-- Render a do-statement list; an empty list renders `pure ()` so empty
+      `if` branches stay valid Lean. -/
+  partial def renderDoStmts (stmts : List LDoStmt) : String :=
+    if stmts.isEmpty then "pure ()" else lines (stmts.map renderDoStmt)
+
+  partial def renderDoStmt : LDoStmt → String
+    | .letMut n tyOpt v =>
+        let annot := match tyOpt with
+          | some t => s!" : {renderType t}"
+          | none   => ""
+        s!"let mut {n}{annot} := {renderExpr v}"
+    | .letPure n tyOpt v =>
+        let annot := match tyOpt with
+          | some t => s!" : {renderType t}"
+          | none   => ""
+        s!"let {n}{annot} := {renderExpr v}"
+    | .assign n v => s!"{n} := {renderExpr v}"
+    | .ret v => s!"return {renderExpr v}"
+    | .ifDo c thn [] =>
+        s!"if {renderExpr c} then\n{indent (renderDoStmts thn)}"
+    | .ifDo c thn els =>
+        s!"if {renderExpr c} then\n{indent (renderDoStmts thn)}\nelse\n{indent (renderDoStmts els)}"
+    | .matchDo scrut arms =>
+        let armsS := arms.map fun (p, stmts) =>
+          s!"| {renderPattern p} =>\n{indent (renderDoStmts stmts)}"
+        s!"match {renderExpr scrut} with\n{lines armsS}"
 
   partial def renderExprAtom : LExpr → String
     | .var n      => n
