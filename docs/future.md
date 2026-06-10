@@ -22,10 +22,11 @@ The current slate, tracked in issues
 widens the executable subset in dependency order:
 
 1. **Local variable mutation** — reassignment, `++`/`--`, the `+=`
-   family on non-escaping locals, emitted as `Id.run do` with `let mut`
-   bindings. Mutation of parameters and captured variables stays out
-   until a concrete pattern demands an escape (then: `StateM`, or a
-   fuller heap model).
+   family on non-escaping locals and parameters, emitted as `Id.run do`
+   with `let mut` bindings (parameters via self-shadowing,
+   `let mut x := x`). Mutation of captured variables stays out until a
+   concrete pattern demands an escape (then: `StateM`, or a fuller heap
+   model).
 2. **`for` / `for-of`** — `for x in arr do`; lands before `while`
    because folds over finite structures keep totality available.
 3. **`while` / `do-while`** — Lean's do-notation `while`, which is
