@@ -77,3 +77,24 @@ jobs:
         with:
           name: conformance-report-${{ github.run_id }}
           path: conformance-report.txt
+
+      - name: test262 run
+        run: |
+          set -o pipefail
+          node scripts/run-test262.js | tee test262-report.txt
+
+      - name: Post test262 report to job summary
+        run: |
+          {
+            echo "## test262 — sliced corpus"
+            echo
+            echo '```'
+            cat test262-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test262 report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test262-report-${{ github.run_id }}
+          path: test262-report.txt
