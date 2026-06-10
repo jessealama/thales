@@ -89,6 +89,24 @@ def testUninitializedLet : IO Unit := expectCode
 def testLogicalAssignStaysTH1 : IO Unit := expectCode
   "function f(x: boolean): boolean { let b = x; b &&= x; return b; }" 1
 
+-- Function-level lowerability (#40/#41): mutation OUTSIDE a try, in a
+-- function whose body contains one, is TH0001 (do-mode can't thread the
+-- exception path; TH0007 covers only mutation inside the try)
+def testMutationBesideTryTH1 : IO Unit := expectCode
+  "function f(x: number): number { let n = 0; n = 5; try { return x; } catch (e) { return n; } }" 1
+-- Mutation in a function that reads a null-tested variable outside its
+-- test: TH0001 (#40 — do-mode's plain `if` carries no narrowing evidence)
+def testNarrowedReadMutationTH1 : IO Unit := expectCode
+  "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }" 1
+-- Mutating an undefined-tested variable: TH0001 (#42 — undefined tests
+-- count the same as null tests)
+def testUndefinedTestedMutationTH1 : IO Unit := expectCode
+  "function f(x: string | undefined): number { if (x === undefined) { x = \"d\"; } return x.length; }" 1
+-- A plain-identifier switch scrutinee has no do-mode lowering, even with
+-- all-return arms: the function's mutation stays TH0001
+def testPlainIdentSwitchTH1 : IO Unit := expectCode
+  "function f(x: string): number { let n = 0; n = 1; switch (x) { case \"a\": return 1; case \"b\": return 2; } return n; }" 1
+
 #eval testReassignment
 #eval testCompoundAssignment
 #eval testIncrement
@@ -112,3 +130,7 @@ def testLogicalAssignStaysTH1 : IO Unit := expectCode
 #eval testSwitchBreakArmStillTH1
 #eval testUninitializedLet
 #eval testLogicalAssignStaysTH1
+#eval testMutationBesideTryTH1
+#eval testNarrowedReadMutationTH1
+#eval testUndefinedTestedMutationTH1
+#eval testPlainIdentSwitchTH1

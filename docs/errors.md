@@ -100,11 +100,20 @@ forms:
 - reassignment of a `let` declared without an initializer
   (`let x: number; x = 1;` — give it an initializer instead);
 - reassignment of a variable whose narrowing the emitter relies on
-  (null-tested or refinement-predicate-tested in a condition);
+  (null- or undefined-tested, or refinement-predicate-tested, in a
+  condition);
 - mutation inside arrow/function-expression bodies (only declared
   functions lower through the do-mode path in v1);
 - mutation in a function containing a `switch` shape do-mode cannot lower
-  (an arm that falls through via `break`, or a `default` arm).
+  (an arm that falls through via `break`, a `default` arm, or a scrutinee
+  that is not a discriminated-union field access);
+- mutation in a function whose body contains `try`/`catch` — the exception
+  path emits pure `Except` match-chains do-mode cannot thread through
+  (mutation _inside_ the `try` is the separate TH0007);
+- mutation in a function that reads a null/undefined-tested or
+  predicate-tested variable outside its test: the pure path bakes that
+  narrowing into its `match`/`dite` lowering, and do-mode carries no such
+  evidence, so the whole function stays on the pure path.
 
 [Details in subset.md#th0001--cannot-reassign-variable](./subset.md#th0001--cannot-reassign-variable)
 
@@ -177,7 +186,7 @@ return n - 1; // instead of `return n++;`
 
 ### TH0007 — Cannot mutate inside `@throws` or `try`/`catch`
 
-**Message:** `Cannot mutate variable inside a \`@throws\` function or \`try\`/\`catch\``
+**Message:** ``Cannot mutate variable inside a `@throws` function or `try`/`catch` ``
 
 Rejected: mutation in the body of a `@throws`-annotated function, or
 anywhere under a `try`/`catch`.

@@ -3,14 +3,19 @@
   Per-function mutation-eligibility analysis (issue #24).
   A binding is mutable-eligible iff every reference to it (read or write)
   occurs in the declaring function's own body — no reference from any
-  nested function/arrow. Conservative on two axes, both safe (they only
+  nested function/arrow. Conservative on several axes, all safe (they only
   reject, never accept):
     * any identifier occurrence inside a nested function counts as a
       capture, even if the inner function shadows the name;
-    * a mutated variable that is null-tested (`x === null`) or appears as
-      the sole argument of a call in an `if`/ternary condition (the
+    * a mutated variable that is null/undefined-tested or appears as the
+      sole argument of a call in an `if`/ternary condition (the
       refinement-predicate shape) is ineligible — assignment would
       invalidate narrowing evidence the emitter bakes into `dite`/`match`.
+  Beyond per-variable eligibility, `doModeLowerable` is the function-level
+  gate (#40/#41): bodies containing a `try`/`catch`, a switch shape the
+  do-mode emitter cannot lower, or a read of a narrow-tested variable
+  outside its test positions stay on the pure emission path entirely, so
+  their mutation is rejected wholesale.
 -/
 import Thales.AST
 import Std.Data.HashSet
@@ -33,18 +38,46 @@ structure MutationInfo where
   consts : Std.HashSet String := {}
   /-- Parameter names. -/
   params : Std.HashSet String := {}
-  /-- Vars null-tested or refinement-predicate-tested in a condition. -/
+  /-- Vars null/undefined-tested or refinement-predicate-tested in a
+      condition. -/
   narrowTested : Std.HashSet String := {}
+  /-- Identifiers referenced in the own body outside narrow-test positions:
+      the subject occurrence of `x === null` / `pred(x)` does not count,
+      every other occurrence does. Mutation targets are not references. -/
+  nonTestRefs : Std.HashSet String := {}
   /-- The own body contains a `switch` that do-mode cannot lower: an arm
       that does not return on every path (`break`-style fall-through would
-      need post-switch join emission) or a `default` arm. Mutation in such
-      a function stays rejected. -/
+      need post-switch join emission), a `default` arm, or a scrutinee that
+      is not the `ident.field` shape of a discriminated-union dispatch.
+      Mutation in such a function stays rejected. -/
   hasUnloweredSwitchShape : Bool := false
+  /-- The own body contains a `try`/`catch` (#41): the exception path emits
+      pure Except match-chains, which do-mode cannot thread through, so
+      mutation in such a function stays rejected. -/
+  hasTryShape : Bool := false
 
 def MutationInfo.eligible (info : MutationInfo) (name : String) : Bool :=
   (info.params.contains name || info.initializedLets.contains name)
     && !info.capturedRefs.contains name
     && !info.narrowTested.contains name
+
+/-- A narrow-tested variable is referenced outside its test positions —
+    in the own body or from a nested function (#40). The pure path bakes
+    such narrowing into `dite`/`match` rebinding; do-mode's plain `if`
+    carries no evidence, so the read would elaborate at the unnarrowed
+    type. Such a function must stay on the pure emission path. -/
+def MutationInfo.narrowingDependentBody (info : MutationInfo) : Bool :=
+  info.narrowTested.toList.any fun n =>
+    info.nonTestRefs.contains n || info.capturedRefs.contains n
+
+/-- Function-level do-mode admissibility (#40/#41): the single predicate
+    that BOTH SubsetCheck's mutation routing and `emitFuncDecl`'s do-mode
+    entry consult — they must never disagree, or accepted programs get
+    miscompiled. False when the body contains a shape `emitBodyDo` cannot
+    lower. -/
+def MutationInfo.doModeLowerable (info : MutationInfo) : Bool :=
+  !info.hasUnloweredSwitchShape && !info.hasTryShape
+    && !info.narrowingDependentBody
 
 private def insertAll (s : Std.HashSet String) (xs : List String) : Std.HashSet String :=
   xs.foldl (·.insert ·) s
@@ -130,28 +163,19 @@ partial def stmtsReturn (stmts : List Statement) : Bool :=
     | .ifStmt _ _ c (some a) => stmtsReturn [c] && stmtsReturn [a]
     | _ => false
 
-/-- Vars that a condition expression null-tests or predicate-tests. -/
-private partial def narrowTestVars : Expression → List String
-  | .binaryExpr _ op l r =>
-      let isNullLit : Expression → Bool
-        | .literal _ .null _ => true
-        | _ => false
-      match op with
-      | .seq | .sneq | .eq | .neq =>
-        match l, r with
-        | .identifier _ n, e => if isNullLit e then [n] else []
-        | e, .identifier _ n => if isNullLit e then [n] else []
-        | _, _ => []
-      | _ => []
-  | .callExpr _ _ [.identifier _ n] _ => [n]
-  | .unaryExpr _ .not _ a => narrowTestVars a
-  | .logicalExpr _ _ l r => narrowTestVars l ++ narrowTestVars r
-  | _ => []
+/-- A nullish test operand: the `null` literal or the `undefined`
+    identifier (`undefined` is an identifier in the AST, not a literal). -/
+private def isNullishOperand : Expression → Bool
+  | .literal _ .null _ => true
+  | .identifier _ "undefined" => true
+  | _ => false
 
 /- Walk the function's OWN body: nested functions are not descended into —
    every identifier they mention lands in `capturedRefs` wholesale. -/
 mutual
 partial def walkExpr (acc : MutationInfo) : Expression → MutationInfo
+  | .identifier _ n =>
+      { acc with nonTestRefs := acc.nonTestRefs.insert n }
   | .assignmentExpr _ _ (.identifier _ n) r =>
       walkExpr { acc with mutated := acc.mutated.insert n } r
   | .assignmentExpr _ _ l r => walkExpr (walkExpr acc l) r
@@ -164,8 +188,7 @@ partial def walkExpr (acc : MutationInfo) : Expression → MutationInfo
       let ids := match body with | .inl e => identsExpr e | .inr s => identsStmt s
       { acc with capturedRefs := insertAll acc.capturedRefs ids }
   | .conditionalExpr _ t c a =>
-      let acc := { acc with narrowTested := insertAll acc.narrowTested (narrowTestVars t) }
-      walkExpr (walkExpr (walkExpr acc t) c) a
+      walkExpr (walkExpr (walkCond acc t) c) a
   | .unaryExpr _ _ _ a | .spreadElement _ a | .awaitExpr _ a | .chainExpr _ a =>
       walkExpr acc a
   | .binaryExpr _ _ l r | .logicalExpr _ _ l r =>
@@ -185,12 +208,40 @@ partial def walkExpr (acc : MutationInfo) : Expression → MutationInfo
   | .yieldExpr _ a _ => match a with | some e => walkExpr acc e | none => acc
   | _ => acc
 
+/-- Walk an `if`/ternary condition. The narrow-test shapes — nullish
+    equality (`===`/`!==`/`==`/`!=` against `null`/`undefined`, either
+    operand order) and the single-ident-argument predicate call — mark
+    their subject in `narrowTested` WITHOUT recording that occurrence in
+    `nonTestRefs`; every other subtree walks normally. Must stay a
+    superset of the shapes the emitter bakes narrowing for
+    (`nullCheckVar`, `detectRefinementPredicate`). -/
+partial def walkCond (acc : MutationInfo) : Expression → MutationInfo
+  | e@(.binaryExpr _ op l r) =>
+      let nullishEqOp := match op with
+        | .seq | .sneq | .eq | .neq => true
+        | _ => false
+      let subjectOf : Expression → Expression → Option String := fun a b =>
+        match a with
+        | .identifier _ n =>
+            if isNullishOperand b && n != "undefined" then some n else none
+        | _ => none
+      if nullishEqOp then
+        match subjectOf l r <|> subjectOf r l with
+        | some n => { acc with narrowTested := acc.narrowTested.insert n }
+        | none => walkExpr acc e
+      else
+        walkExpr acc e
+  | .callExpr _ f [.identifier _ n] _ =>
+      walkExpr { acc with narrowTested := acc.narrowTested.insert n } f
+  | .unaryExpr _ .not _ a => walkCond acc a
+  | .logicalExpr _ _ l r => walkCond (walkCond acc l) r
+  | e => walkExpr acc e
+
 partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
   | .exprStmt _ e | .throwStmt _ e => walkExpr acc e
   | .blockStmt _ b => b.foldl walkStmt acc
   | .ifStmt _ t c a =>
-      let acc := { acc with narrowTested := insertAll acc.narrowTested (narrowTestVars t) }
-      let acc := walkStmt (walkExpr acc t) c
+      let acc := walkStmt (walkCond acc t) c
       match a with | some s => walkStmt acc s | none => acc
   | .returnStmt _ a => match a with | some e => walkExpr acc e | none => acc
   | .variableDecl (.mk _ decls kind) =>
@@ -219,13 +270,22 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
         | .inr vd => walkStmt acc (.variableDecl vd)
       walkStmt (walkExpr acc r) b
   | .switchStmt _ d cases =>
-      let unlowered := cases.any fun (.mk _ t ss) => t.isNone || !stmtsReturn ss
+      -- Lowerable switch shape: a discriminated-union dispatch
+      -- (`switch (ident.field)`, non-computed) where every arm returns and
+      -- there is no `default`. Anything else — including a plain-identifier
+      -- scrutinee, which the emitter has no lowering for — keeps the
+      -- function out of do-mode.
+      let discriminatedShape := match d with
+        | .memberExpr _ (.identifier _ _) (.identifier _ _) false _ => true
+        | _ => false
+      let unlowered := !discriminatedShape
+        || cases.any fun (.mk _ t ss) => t.isNone || !stmtsReturn ss
       let acc := if unlowered then { acc with hasUnloweredSwitchShape := true } else acc
       cases.foldl (fun a (.mk _ t ss) =>
         let a := match t with | some e => walkExpr a e | none => a
         ss.foldl walkStmt a) (walkExpr acc d)
   | .tryStmt _ b h f =>
-      let acc := walkStmt acc b
+      let acc := walkStmt { acc with hasTryShape := true } b
       let acc := match h with | some (.mk _ _ hb _) => walkStmt acc hb | none => acc
       match f with | some s => walkStmt acc s | none => acc
   | .labeledStmt _ _ b | .withStmt _ _ b => walkStmt acc b

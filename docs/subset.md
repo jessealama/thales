@@ -106,11 +106,20 @@ Also still rejected under TH0001:
 - reassigning a `let` declared without an initializer (`let mut` needs
   one — give the declaration an initial value);
 - reassigning a variable whose narrowing the emitter relies on
-  (null-tested or refinement-predicate-tested in a condition);
+  (null- or undefined-tested, or refinement-predicate-tested, in a
+  condition);
 - mutation inside arrow/function-expression bodies (only declared
   functions lower through the do-mode path in v1);
 - mutation in a function containing a `switch` shape do-mode cannot lower
-  (an arm that falls through via `break`, or a `default` arm).
+  (an arm that falls through via `break`, a `default` arm, or a scrutinee
+  that is not a discriminated-union field access);
+- mutation in a function whose body contains `try`/`catch` (the exception
+  path emits pure `Except` match-chains do-mode cannot thread through;
+  mutation _inside_ the `try` is the separate TH0007);
+- mutation in a function that reads a null/undefined-tested or
+  predicate-tested variable outside its test (the pure path bakes that
+  narrowing into its `match`/`dite` lowering; do-mode carries no such
+  evidence).
 
 Idiomatic replacement where mutation stays rejected:
 

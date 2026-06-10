@@ -120,6 +120,29 @@ console.log(h(true));"
     ["if c then", "n := (n + 1.000000)", "return n", "else", "return 0.000000"]
     (forbidden := ["return ()"])
 
+-- ── function-level lowerability fallback (#40/#41): even with eligible
+-- mutation, an unlowerable body shape must keep the PURE emission path
+-- (SubsetCheck rejects these programs; the emitter gate is the
+-- defense-in-depth that turns a checker regression into a pure-path
+-- emission instead of a miscompile) ──
+
+-- try/catch in the body: no do-mode
+def testTryBodyStaysPure : IO Unit :=
+  expectEmit
+    "function f(x: number): number { let n = 0; n = 5; try { return x; } catch (e) { return n; } }
+console.log(f(3));"
+    ["def f"]
+    (forbidden := ["Id.run do", "let mut"])
+
+-- narrowing-dependent read (null-tested `x` read outside its test): no
+-- do-mode; the pure path lowers the null test to an Option match
+def testNarrowedReadStaysPure : IO Unit :=
+  expectEmit
+    "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }
+console.log(f(\"abc\"));"
+    ["def f", "match x with"]
+    (forbidden := ["Id.run do", "let mut"])
+
 #eval testStraightLineDo
 #eval testPureStaysPure
 #eval testMixedLets
@@ -130,3 +153,5 @@ console.log(h(true));"
 #eval testBranchMutationDo
 #eval testEarlyReturnDo
 #eval testIfElseBothReturn
+#eval testTryBodyStaysPure
+#eval testNarrowedReadStaysPure

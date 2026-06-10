@@ -557,6 +557,14 @@ private def refinementKindPredicate : RefinementKind → String
   | .byte => "isByte"
   | .bit => "isBit"
 
+/-- Loud do-mode failure marker: renders as invalid Lean (same pattern as
+    the pure path's `(unsupported: throw without @throws)`), so a statement
+    `emitBodyDo` cannot lower breaks the build instead of being silently
+    dropped. `SubsetCheck`'s `doModeLowerable` gate should make this
+    unreachable; reaching it means the two have drifted. -/
+private def unloweredDoStmt : List LDoStmt :=
+  [.ret (.var "(unsupported: statement not lowerable in do-mode)")]
+
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
@@ -1006,9 +1014,13 @@ partial def emitBody : List Statement → LExpr :=
 /-- #24 do-mode lowering: the body of a function with an eligible
     statement-position mutation, as a list of `Id.run do` statements.
     Only shapes SubsetCheck admits into do-mode arrive here — straight-line
-    mutation, declarations, and `return`; anything else was rejected
-    upstream (TH0001/TH0005/TH0006/TH0007/TH0010 …) and the fall-through
-    arms simply skip. -/
+    mutation, declarations, `return`, `if`/`else`, and discriminated-union
+    switches; anything else was rejected upstream
+    (TH0001/TH0005/TH0006/TH0007/TH0010 …). A statement this function has
+    no lowering for renders the loud `(unsupported: …)` marker — invalid
+    Lean — rather than being dropped: silent divergence from the TS
+    behavior is the one failure mode the conformance harness can't catch
+    when the emitted file still compiles. -/
 partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
     : List Statement → List LDoStmt
   | .returnStmt _ (some e) :: _ =>
@@ -1058,7 +1070,11 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
   -- EscapeAnalysis guarantees every arm returns and there is no `default`
   -- (`hasUnloweredSwitchShape` keeps anything else out of do-mode), so
   -- `rest` after the switch is dead code and is dropped.
-  | .switchStmt _ discriminant cases :: rest =>
+  | .switchStmt _ discriminant cases :: _ =>
+      -- `hasUnloweredSwitchShape` guarantees the `ident.field` discriminant
+      -- shape with all-return arms and no `default`, so `rest` is dead code
+      -- and a fallback that DROPS the switch is never correct — the
+      -- non-discriminated cases render the loud marker instead.
       match discriminant with
       | .memberExpr _ (.identifier _ scrutName) (.identifier _ _fieldName) false _ =>
           (match env.bindingEnv.get? scrutName with
@@ -1081,15 +1097,19 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
                     if arms.length >= ctors.length then arms
                     else arms ++ [(.wildcard, [.ret (.var "unreachable!")])]
                   [.matchDo (.var scrutName) allArms]
-              | none => emitBodyDo env info rest)
-            | _ => emitBodyDo env info rest)
-          | none => emitBodyDo env info rest)
-      | _ => emitBodyDo env info rest
+              | none => unloweredDoStmt)
+            | _ => unloweredDoStmt)
+          | none => unloweredDoStmt)
+      | _ => unloweredDoStmt
   -- A list that ends without `return` is a branch falling through to the
   -- code after its `if` — emit nothing. The function-level trailing
   -- `return ()` (for void bodies) is appended by `emitFuncDecl`.
   | [] => []
-  | _ :: rest => emitBodyDo env info rest
+  -- Genuinely effect-free statements.
+  | .emptyStmt _ :: rest | .debuggerStmt _ :: rest => emitBodyDo env info rest
+  -- Anything else reaching here is a SubsetCheck/emitter disagreement
+  -- about do-mode lowerability — fail loudly (invalid Lean), never drop.
+  | _ :: _ => unloweredDoStmt
 
 /-- Declarator lowering inside do-mode: mutated names become `let mut`,
     everything else stays an immutable `let`. Mirrors `emitVarDecl`'s
@@ -1246,11 +1266,14 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     | other           => [other]
   -- #24: a body with an eligible statement-position mutation lowers to
   -- `Id.run do` with `let mut`; everything else keeps the pure path
-  -- untouched. `@throws` functions never reach do-mode (TH0007 upstream).
+  -- untouched. `@throws` functions never reach do-mode (TH0007 upstream),
+  -- and `doModeLowerable` is the same function-level gate SubsetCheck's
+  -- mutation routing rejects on (#40/#41) — checked here too so a checker
+  -- regression degrades to the pure path instead of a miscompile.
   let info := EscapeAnalysis.analyze (params.map (·.1)) body
   let hasEligibleMutation := info.mutated.toList.any info.eligible
   let bodyExpr :=
-    if hasEligibleMutation && throws.isEmpty then
+    if hasEligibleMutation && info.doModeLowerable && throws.isEmpty then
       -- Mutated parameters self-shadow as `let mut x := x`: JS parameters
       -- are mutable locals whose mutation never affects the caller.
       let prologue : List LDoStmt := normalizedParams.filterMap fun (n, _) =>

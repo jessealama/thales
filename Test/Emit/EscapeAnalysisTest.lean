@@ -4,6 +4,9 @@
   reference to it occurs in the declaring function's own body — no
   reference from any nested function/arrow — and it is a parameter or an
   initialized `let`, and it is not entangled with narrowing tests.
+  Also pins the function-level `doModeLowerable` gate (#40/#41): bodies
+  with try/catch, unlowerable switch shapes, or narrowing-dependent reads
+  stay on the pure path.
 -/
 import Thales.Emit.EscapeAnalysis
 import Thales.Parser.Native
@@ -68,22 +71,63 @@ def t9 : IO Unit := do
   unless info.consts.contains "c" do throw (IO.userError "c not in consts")
   if info.initializedLets.contains "c" then throw (IO.userError "c wrongly in initializedLets")
 
--- switch shapes: all-arms-return is lowerable; a non-returning arm or a
--- `default` arm is not (do-mode would need post-switch join emission)
+-- switch shapes: a discriminated-shape (`ident.field`) switch with
+-- all-arms-return is lowerable; a non-returning arm, a `default` arm, or
+-- a non-member scrutinee (no do-mode lowering exists for it) is not
 def expectUnloweredSwitch (src : String) (expected : Bool) : IO Unit := do
   let info ← analyzeFirstFunc src
   unless info.hasUnloweredSwitchShape == expected do
     throw (IO.userError s!"hasUnloweredSwitchShape = {!expected}, expected {expected}")
 
 def t10 : IO Unit := expectUnloweredSwitch
-  "function f(x: string): number { let n = 0; switch (x) { case \"a\": n = 1; return n; case \"b\": return 2; } return n; }"
+  "type S = { kind: string };
+function f(s: S): number { let n = 0; switch (s.kind) { case \"a\": n = 1; return n; case \"b\": return 2; } return n; }"
   false
 def t11 : IO Unit := expectUnloweredSwitch
-  "function f(x: string): number { let n = 0; switch (x) { case \"a\": n = 1; break; case \"b\": return 2; } return n; }"
+  "type S = { kind: string };
+function f(s: S): number { let n = 0; switch (s.kind) { case \"a\": n = 1; break; case \"b\": return 2; } return n; }"
   true
 def t12 : IO Unit := expectUnloweredSwitch
-  "function f(x: string): number { let n = 0; switch (x) { case \"a\": return 1; default: return 2; } }"
+  "type S = { kind: string };
+function f(s: S): number { let n = 0; switch (s.kind) { case \"a\": return 1; default: return 2; } }"
   true
+-- plain-identifier scrutinee: no do-mode lowering, even with all-return arms
+def t13 : IO Unit := expectUnloweredSwitch
+  "function f(x: string): number { let n = 0; switch (x) { case \"a\": return 1; case \"b\": return 2; } return n; }"
+  true
+
+-- ── function-level do-mode lowerability (#40/#41) ──
+
+def expectLowerable (src : String) (expected : Bool) : IO Unit := do
+  let info ← analyzeFirstFunc src
+  unless info.doModeLowerable == expected do
+    throw (IO.userError s!"doModeLowerable = {!expected}, expected {expected} in: {src}")
+
+-- try/catch anywhere in the body keeps the function out of do-mode (#41)
+def t14 : IO Unit := expectLowerable
+  "function f(x: number): number { let n = 0; n = 1; try { return x; } catch (e) { return n; } }"
+  false
+-- a narrow-tested variable read outside its test (#40): not lowerable …
+def t15 : IO Unit := expectLowerable
+  "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }"
+  false
+-- … but a var that only ever appears in its test leaves the function
+-- lowerable (the t7b source)
+def t16 : IO Unit := expectLowerable
+  "function f(x: string | null): number { let n = 0; if (x === null) { n = 1; } return n; }"
+  true
+-- a nested arrow reading the narrow-tested var also blocks (#40)
+def t17 : IO Unit := expectLowerable
+  "function f(x: string | null): number { let n = 0; n = 1; if (x === null) { return 0; } const g = () => x; return n; }"
+  false
+
+-- undefined tests count the same as null tests (#42), both operand orders
+def t18 : IO Unit := expectEligible
+  "function f(x: string | undefined): number { let n = 0; if (x === undefined) { n = 1; } return n; }" "x" false
+def t18b : IO Unit := expectEligible
+  "function f(x: string | undefined): number { let n = 0; if (undefined !== x) { n = 1; } return n; }" "x" false
+def t18c : IO Unit := expectEligible
+  "function f(x: string | undefined): number { let n = 0; if (x === undefined) { n = 1; } return n; }" "n" true
 
 #eval t1
 #eval t2
@@ -99,3 +143,11 @@ def t12 : IO Unit := expectUnloweredSwitch
 #eval t10
 #eval t11
 #eval t12
+#eval t13
+#eval t14
+#eval t15
+#eval t16
+#eval t17
+#eval t18
+#eval t18b
+#eval t18c
