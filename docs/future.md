@@ -5,67 +5,93 @@ There are two "story arcs" for Thales:
 1. close the gap with how TS programmers actually write code, and
 2. add the verification work that justifies a Lean sidecar in the first place.
 
+The arcs build off each other — a bit of progress in one, a bit in the
+other — rather than forming a roadmap with distinct version numbers.
+What follows is the canonical statement of where Thales is going; when
+direction changes, this document changes with it.
+
 ## Arc 1: Meet TypeScript halfway
 
-Real TS code does local mutation, uses classes extensively,
-does stateful iteration, and async without ceremony. These
-features are currently not supported by Thales. Closing that
-gap would mean:
+Real TS code does local mutation, uses classes extensively, does
+stateful iteration, and async without ceremony.
 
-- **Local mutation via `Id.run do`.** Accept reassignment,
-  `for` loops, and `arr.push` on locally-constructed
-  arrays. Function bodies that mutate switch from direct
-  shallow embedding to `Id.run do` with `mut`
-  bindings. Mutation of parameters and captured variables
-  stays out, for now.
+### Active now: mutation, loops, stdlib (June 2026)
 
-- **Classes with single inheritance.** Instance and static
-  methods, getters, setters, `extends`, method override,
-  `super`. `class C` becomes Lean `structure C`; `class D
-extends C` becomes `structure D extends C`, with a
-  closures-as-fields encoding for the cases that need
-  polymorphic dispatch through a base-class parameter.
+The current slate, tracked in issues
+[#23](https://github.com/jessealama/thales/issues/23)–[#29](https://github.com/jessealama/thales/issues/29),
+widens the executable subset in dependency order:
 
-- **Generators.** `function* gen() { yield x; … }`
-  translated to a Lean `Stream` (or perhaps `List` when
-  bounds are known). Restricted to clean coalgebraic cases:
-  no two-way communication via `.next(value)`, no `yield*`
-  delegation, no bidirectional generators.
+1. **Local variable mutation** — reassignment, `++`/`--`, the `+=`
+   family on non-escaping locals, emitted as `Id.run do` with `let mut`
+   bindings. Mutation of parameters and captured variables stays out
+   until a concrete pattern demands an escape (then: `StateM`, or a
+   fuller heap model).
+2. **`for` / `for-of`** — `for x in arr do`; lands before `while`
+   because folds over finite structures keep totality available.
+3. **`while` / `do-while`** — Lean's do-notation `while`, which is
+   backed by a `partial` combinator: fine for evaluation (the
+   byte-match contract is unaffected), opaque to proofs. `@total` and
+   `while` are therefore mutually exclusive, mirroring the
+   `@throws`/`@total` design. Verification of while-bodies arrives
+   later via loop invariants (see Arc 2).
+4. **Local array mutation** — `.push`/`.pop`/element assignment on
+   non-escaping `let` locals.
+5. **Stdlib breadth** — array methods (`join`, `indexOf`, `includes`,
+   …), `padStart`/`padEnd`, `Number.*`/`Math.*` gaps, one method at a
+   time.
+
+Progress is measured against per-feature **test262** directory slices
+(pass rate within the declared subset), with **left-pad** — ported to
+`tsc --strict`, compiled whole, byte-exact — as the end-to-end target.
+
+### Later in Arc 1
+
+- **Classes with single inheritance.** Instance and static methods,
+  getters, setters, `extends`, method override, `super`. `class C`
+  becomes Lean `structure C`; `class D extends C` becomes `structure D
+  extends C`, with a closures-as-fields encoding for the cases that
+  need polymorphic dispatch through a base-class parameter.
+
+- **Generators.** `function* gen() { yield x; … }` translated to a Lean
+  `Stream` (or perhaps `List` when bounds are known). Restricted to
+  clean coalgebraic cases: no two-way communication via `.next(value)`,
+  no `yield*` delegation, no bidirectional generators.
 
 - **async/await.** Modelled as `IO` (or a tailored `Async`/`Task`
-  monad), with `await` lowering to monadic bind. This captures the
-  type discipline of async TS but not faithful event-loop semantics,
+  monad), with `await` lowering to monadic bind. This captures the type
+  discipline of async TS but not faithful event-loop semantics,
   microtask ordering, or cancellation — same modelling philosophy as
   `@throws`.
 
 ## Arc 2: Bring proofs to TypeScript
 
-Once the subset is wide enough for realistic programs, we're
-going to build out program verification for TypeScript.
+This is the destination: Thales as a **verification layer over
+TypeScript**. Source files stay valid `tsc --strict` TypeScript;
+Thales-specific meaning rides on JSDoc tags, so the rest of the
+ecosystem (bundlers, editors, linters) sees ordinary TS.
 
-- **Proof annotations.** Support basic function and
-  method-level verification conditions via` @requires`,
-  `@ensures`, loop invariants via `@invariant`, translated
-  to Lean preconditions, postconditions, loop invariants,
-  and inline tactic blocks. TS runtime guards like `if (n <
-0n) throw new RangeError(…)` hoist into compile-time
-  obligations.
+- **Refinement types.** The first installment shipped in 0.6: the
+  `@thales/prelude` bounded numerics (`Integer`, `Natural`, `Byte`,
+  `Bit`) with compile-time-enforced subtyping and guard/constructor
+  functions. The next layer is user-defined refinements — `/** @refine
+  x => x > 0 */ type PosInt = number;` becomes a subtype in Lean, with
+  call-site obligations discharged by the same pipeline. Encodes
+  non-empty arrays, in-range indices, sorted lists, validated strings
+  without hand-rolling a runtime guard for each.
 
-- **Refinement types.** A predicate-subtype layer on the
-  proof-annotation machinery: `/** @refine x => x > 0 */
-type PosInt = number;` becomes a subtype in Lean. Function
-  signatures that take or return refined values introduce
-  obligations at the call site, discharged by the same
-  pipeline. Encodes non-empty arrays, in-range indices,
-  sorted lists, validated strings without hand-rolling a
-  runtime guard for each.
+- **Executable specifications.** `@requires`/`@ensures` on functions
+  and properties stated as ordinary boolean-returning TS functions,
+  with **dual discharge**: every spec can be run as a generated
+  property-based test (fast-check), and specs you want *proved* rather
+  than tested escalate to Lean, where a single curated tactic attempts
+  the proof automatically. No manual proof syntax to start — when the
+  automation fails, the user gets a counterexample (when one exists)
+  and refactors or weakens the spec.
 
-## Interaction of the arcs
-
-The arcs don't constitute a roadmap with distinct version
-numbers. We intend that the arcs build off of each other: a
-bit of progress in one, a bit of progress in the other,
-going back and forth.
+- **Loop invariants.** `@invariant` on `while`/`for-of` closes the loop
+  (literally) between the arcs: the imperative subset from Arc 1
+  becomes verifiable via verification-condition generation over the
+  monadic emission, following Lean's `mvcgen` machinery as it matures.
 
 ## Emit architecture: structured output instead of strings
 
