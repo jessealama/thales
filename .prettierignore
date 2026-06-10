@@ -7,5 +7,8 @@ lake-manifest.json
 # Third-party vendored TypeScript compiler test suite — not ours to format.
 typescript-tests/
 
+# Third-party test262 suite — not ours to format.
+test262/
+
 # Auto-generated / hand-curated files we don't want prettier to touch.
 CHANGELOG.md

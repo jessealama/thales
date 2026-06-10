@@ -1,0 +1,12 @@
+{
+  "comment": "Single source of truth for the test262 directory slices. setup-test262.js sparse-checks-out exactly these (plus harness/); run-test262.js enumerates exactly these.",
+  "slices": [
+    "test/language/expressions/postfix-increment",
+    "test/language/expressions/prefix-increment",
+    "test/language/expressions/compound-assignment",
+    "test/language/statements/for-of",
+    "test/language/statements/for",
+    "test/language/statements/while",
+    "test/language/statements/do-while"
+  ]
+}

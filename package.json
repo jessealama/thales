@@ -6,6 +6,7 @@
   "scripts": {
     "conformance": "node scripts/run-examples.js",
     "conformance:self-test": "node scripts/run-examples.js --self-test",
+    "setup:test262": "node scripts/setup-test262.js",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
