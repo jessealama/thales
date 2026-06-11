@@ -456,6 +456,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
       let preLoopDA ← saveAssignmentState
       let assignedInLoop := collectAssignedVars body
       let widened ← widenAssignedVars assignedInLoop
+      -- test and update are synthed outside the widening scope; they see the declared
+      -- (pre-body) types, matching tsc's treatment of the loop header.
       match test with
       | some e => let _ ← synthJSExpr e
       | none => pure ()
@@ -475,6 +477,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
         let preLoopDA ← saveAssignmentState
         let assignedInLoop := collectAssignedVars body
         let widened ← widenAssignedVars assignedInLoop
+        -- test and update are synthed outside the widening scope; they see the declared
+        -- (pre-body) types, matching tsc's treatment of the loop header.
         match test with
         | some e => let _ ← synthJSExpr e
         | none => pure ()
@@ -487,6 +491,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
       let preLoopDA ← saveAssignmentState
       let assignedInLoop := collectAssignedVars body
       let widened ← widenAssignedVars assignedInLoop
+      -- test and update are synthed outside the widening scope; they see the declared
+      -- (pre-body) types, matching tsc's treatment of the loop header.
       match test with
       | some e => let _ ← synthJSExpr e
       | none => pure ()
@@ -592,15 +598,18 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     let elemTy := match resolved with
       | .array t => t
       | _ => .any  -- graceful degradation; subset check rejects non-array RHS separately
+    -- Save DA state BEFORE binding the head variable so that restoreAssignmentState
+    -- undoes the markAssigned below and the head does not leak into post-loop DA.
+    let preLoopDA ← saveAssignmentState
     -- Bind the head declarator to the element type and mark it assigned.
     -- For a simple-identifier declaration head (.inr varDecl with one .identifier
     -- declarator), bind the element type. Expression head (.inl) gets no extra binding.
     let headBindings : List (String × TSType) ← match left with
       | .inr (.mk _ [.mk _ (.identifier id) none _typeAnn] _kind) => do
+          -- TODO: check annotation against elemTy (TS2322) when annotated heads are admitted
           markAssigned id.name
           pure [(id.name, elemTy)]
       | _ => pure []
-    let preLoopDA ← saveAssignmentState
     let assignedInLoop := collectAssignedVars body
     let widened ← widenAssignedVars assignedInLoop
     withScope (headBindings ++ widened) (checkJSStatementRaw body)

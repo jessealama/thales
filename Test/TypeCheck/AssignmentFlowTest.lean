@@ -86,6 +86,18 @@ def j4 : IO Unit := expectTS
 def j5 : IO Unit := expectNoTS
   "function f(c: boolean, x: string | null): number { x = \"a\"; if (c) { x = \"b\"; } return x.length; }" 2339
 
+-- ── loop checks (cross-checked against tsc --strict) ──
+
+-- for-init var visible inside body: `i` is in scope — no TS2304
+def l1 : IO Unit := expectNoTS
+  "function f(): number { let s = 0; for (let i = 0; i < 3; i++) { s += i; } return s; }" 2304
+-- for-of element type enforced: `x` is number, assigned to string — TS2322
+def l2 : IO Unit := expectTS
+  "function f(xs: number[]): void { for (const x of xs) { const y: string = x; } }" 2322
+-- for-of head visible inside body: `x` is in scope — no TS2304
+def l3 : IO Unit := expectNoTS
+  "function f(xs: number[]): number { let s = 0; for (const x of xs) { s += x; } return s; }" 2304
+
 #eval t0
 #eval t1
 #eval t2
@@ -98,3 +110,6 @@ def j5 : IO Unit := expectNoTS
 #eval j3
 #eval j4
 #eval j5
+#eval l1
+#eval l2
+#eval l3
