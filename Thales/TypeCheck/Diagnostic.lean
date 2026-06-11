@@ -81,6 +81,7 @@ inductive ThalesKind where
   | inheritanceNotSupported
   | switchNotExhaustive (missingKinds : List String)
   | switchNotLowerable
+  | shadowingNotSupported (name : String)
   | cannotVerifyTermination (funcName : String)
   -- @throws / @total diagnostics (TH0060–TH0070)
   -- TH0061 (unusedThrowsAnnotation), TH0062 (untypedCatch), TH0064
@@ -127,6 +128,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .inheritanceNotSupported => 31
   | .switchNotExhaustive _ => 40
   | .switchNotLowerable => 41
+  | .shadowingNotSupported _ => 32
   | .cannotVerifyTermination _ => 50
   | .unannotatedThrow _ => 60
   | .nonRecordThrow => 63
@@ -172,6 +174,8 @@ def ThalesKind.message : ThalesKind → String
     s!"Non-exhaustive switch on discriminated union (missing: {String.intercalate ", " missingKinds})"
   | .switchNotLowerable =>
     "Switch not supported here: dispatch on a discriminated-union field (e.g. `switch (shape.kind)`) with every arm ending in `return`"
+  | .shadowingNotSupported name =>
+    s!"Declaration of '{name}' shadows a binding from an enclosing scope; rename the inner binding"
   | .cannotVerifyTermination funcName =>
     s!"Cannot verify termination of '{funcName}'; add @decreasing hint or restructure"
   | .unannotatedThrow .fromThrow =>

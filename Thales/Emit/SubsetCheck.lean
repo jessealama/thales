@@ -472,6 +472,141 @@ private def bindSwitchDecls (env : SwitchEnv) : Statement → SwitchEnv
         | _ => e) env
   | _ => env
 
+/- ── Shadowing check (#45, TH0032) ──
+   The emitter flattens bare blocks into their enclosing statement list
+   and appends if-continuations into branches, so a block-scoped
+   declaration that shadows a name from an enclosing scope of the same
+   function captures references meant for the outer binding (accepted
+   program, wrong output). tsc allows shadowing; Thales rejects it
+   (subset-on-rejection). `var` declarations are exempt — they are
+   function-scoped, so re-declaration is the same binding and any
+   `var`-vs-`let` conflict is already tsc's TS2451. Nested functions and
+   arrows start fresh scope stacks: Lean lambdas shadow correctly, and a
+   catch parameter lowers to a real match binder, so neither is flagged. -/
+
+private def setUnion (a b : Std.HashSet String) : Std.HashSet String :=
+  b.fold (·.insert ·) a
+
+mutual
+
+/-- Walk one lexical scope's statement list. `outer` holds every name
+    bound in enclosing scopes of the same function (params included); the
+    fold threads the names declared so far in THIS scope. -/
+partial def shadowStmts (outer : Std.HashSet String) (stmts : List Statement)
+    : Array Diagnostic :=
+  (stmts.foldl (fun (st : Array Diagnostic × Std.HashSet String) s =>
+      let (diags, current) := st
+      let (d, current') := shadowStmt outer current s
+      (diags ++ d, current')) (#[], ({} : Std.HashSet String))).1
+
+/-- Check one statement; returns its diagnostics and the current scope's
+    binding set extended with any names this statement declares. -/
+partial def shadowStmt (outer current : Std.HashSet String) (stmt : Statement)
+    : Array Diagnostic × Std.HashSet String :=
+  let enter := setUnion outer current
+  match stmt with
+  | .variableDecl (.mk _ decls kind) =>
+      decls.foldl (fun (st : Array Diagnostic × Std.HashSet String) d =>
+        let (diags, cur) := st
+        let (.mk db pat init _) := d
+        let initDiags := match init with
+          | some e => shadowExpr e
+          | none => #[]
+        match pat with
+        | .identifier id =>
+            let shadowDiag :=
+              if kind != .var && outer.contains id.name then
+                #[mkThalesDiag (.shadowingNotSupported id.name) db.loc]
+              else #[]
+            (diags ++ initDiags ++ shadowDiag, cur.insert id.name)
+        | _ => (diags ++ initDiags, cur)) (#[], current)
+  | .blockStmt _ body => (shadowStmts enter body, current)
+  | .ifStmt _ t c a =>
+      (shadowExpr t
+        ++ shadowStmts enter [c]
+        ++ (match a with | some s => shadowStmts enter [s] | none => #[]), current)
+  | .switchStmt _ d cases =>
+      -- the entire switch body is ONE block scope shared by all arms
+      let testDiags := cases.foldl (fun acc c =>
+        let (SwitchCase.mk _ t _) := c
+        acc ++ (match t with | some e => shadowExpr e | none => #[])) (shadowExpr d)
+      let armStmts := cases.flatMap fun (SwitchCase.mk _ _ ss) => ss
+      (testDiags ++ shadowStmts enter armStmts, current)
+  | .tryStmt _ b h f =>
+      let hDiags := match h with
+        | some (CatchClause.mk _ paramOpt hb _) =>
+            -- the catch param binds (as a real match binder) in the
+            -- handler's enclosing set
+            let enter' := match paramOpt with
+              | some (.identifier id) => enter.insert id.name
+              | _ => enter
+            shadowStmts enter' [hb]
+        | none => #[]
+      (shadowStmts enter [b]
+        ++ hDiags
+        ++ (match f with | some s => shadowStmts enter [s] | none => #[]), current)
+  | .forStmt _ init t u b =>
+      let initDiags := match init with
+        | some (.inl e) => shadowExpr e
+        | some (.inr vd) => (shadowStmt enter {} (.variableDecl vd)).1
+        | none => #[]
+      (initDiags
+        ++ (match t with | some e => shadowExpr e | none => #[])
+        ++ (match u with | some e => shadowExpr e | none => #[])
+        ++ shadowStmts enter [b], current)
+  | .forInStmt _ left r b | .forOfStmt _ left r b _ =>
+      let leftDiags := match left with
+        | .inl e => shadowExpr e
+        | .inr vd => (shadowStmt enter {} (.variableDecl vd)).1
+      (leftDiags ++ shadowExpr r ++ shadowStmts enter [b], current)
+  | .whileStmt _ t b => (shadowExpr t ++ shadowStmts enter [b], current)
+  | .doWhileStmt _ b t => (shadowStmts enter [b] ++ shadowExpr t, current)
+  | .exprStmt _ e | .throwStmt _ e => (shadowExpr e, current)
+  | .returnStmt _ a =>
+      ((match a with | some e => shadowExpr e | none => #[]), current)
+  | .functionDecl _ _ params body _ _ =>
+      -- nested function: fresh scope stack seeded with its params
+      (shadowFunc (funcParamNames params) body, current)
+  | .labeledStmt _ _ b | .withStmt _ _ b => (shadowStmts enter [b], current)
+  | _ => (#[], current)
+
+/-- Find nested function/arrow bodies inside an expression and shadow-check
+    each with a fresh scope stack. -/
+partial def shadowExpr : Expression → Array Diagnostic
+  | .functionExpr _ _ params body _ _ => shadowFunc (funcParamNames params) body
+  | .arrowFunctionExpr _ params body _ _ _ =>
+      (match body with
+        | .inl e => shadowExpr e
+        | .inr s => shadowFunc (funcParamNames params) s)
+  | .unaryExpr _ _ _ a | .updateExpr _ _ a _ | .spreadElement _ a
+  | .awaitExpr _ a | .chainExpr _ a | .privateMemberExpr _ a _ => shadowExpr a
+  | .binaryExpr _ _ l r | .assignmentExpr _ _ l r | .logicalExpr _ _ l r
+  | .taggedTemplate _ l r => shadowExpr l ++ shadowExpr r
+  | .memberExpr _ o p _ _ => shadowExpr o ++ shadowExpr p
+  | .conditionalExpr _ t c a => shadowExpr t ++ shadowExpr c ++ shadowExpr a
+  | .callExpr _ f args _ | .newExpr _ f args =>
+      args.foldl (fun acc a => acc ++ shadowExpr a) (shadowExpr f)
+  | .arrayExpr _ els =>
+      els.foldl (fun acc oe => match oe with
+        | some e => acc ++ shadowExpr e
+        | none => acc) #[]
+  | .objectExpr _ props =>
+      props.foldl (fun acc p => match p with
+        | .regular _ k v _ _ _ => acc ++ shadowExpr k ++ shadowExpr v
+        | .spread _ a => acc ++ shadowExpr a) #[]
+  | .sequenceExpr _ es | .templateLiteral _ _ es =>
+      es.foldl (fun acc e => acc ++ shadowExpr e) #[]
+  | .yieldExpr _ a _ =>
+      (match a with | some e => shadowExpr e | none => #[])
+  | _ => #[]
+
+/-- Shadow-check a function: its parameters form the outermost scope. -/
+partial def shadowFunc (paramNames : List String) (body : Statement)
+    : Array Diagnostic :=
+  shadowStmts (paramNames.foldl (·.insert ·) ({} : Std.HashSet String)) [body]
+
+end
+
 /-- Walk a statement body checking for switch exhaustiveness violations.
     Uses the provided SwitchEnv for identifier lookups. -/
 partial def checkSwitchStmt (env : SwitchEnv) (stmt : Statement) : Array Diagnostic :=
@@ -585,11 +720,11 @@ private def buildParamEnv
 /-- Check a TS-level statement for mutation violations. -/
 def checkTSStmt (ts : TSStatement) : Array Diagnostic :=
   match ts with
-  | .js s => checkStmt {} s
+  | .js s => checkStmt {} s ++ shadowStmts {} [s]
   | .annotatedVarDecl b _ _ typeAnn initOpt =>
     checkAnn b.loc typeAnn
       ++ (match initOpt with
-          | some e => checkExpr {} e
+          | some e => checkExpr {} e ++ shadowExpr e
           | none => #[])
   -- TH0012: async annotated function declarations — emit diagnostic, still recurse body.
   -- TH0060 is no longer SubsetCheck's responsibility, so no suppression filter is needed.
@@ -605,6 +740,7 @@ def checkTSStmt (ts : TSStatement) : Array Diagnostic :=
       ++ paramTypeDiags
       ++ checkAnn b.loc returnType
       ++ bodyDiags
+      ++ shadowFunc (params.map (·.1)) body
   | .interfaceDecl b _ _ _ members =>
     members.foldl (fun acc m =>
       match m with
