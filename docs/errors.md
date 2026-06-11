@@ -62,6 +62,7 @@ soundness check).
 | TH0030 | Declarations | `class` not supported                               |
 | TH0031 | Declarations | Inheritance (`extends`) not supported               |
 | TH0040 | Matching     | Non-exhaustive switch on discriminated union        |
+| TH0041 | Matching     | Switch shape not lowerable                          |
 | TH0050 | Recursion    | Cannot verify termination                           |
 | TH0066 | Totality     | `@total` and `@throws` declared together            |
 | TH0067 | Totality     | `@total` function has uncaught throw                |
@@ -349,6 +350,26 @@ Rejected: `switch (u.kind) { case "a": ...; /* missing "b" */ }`
 [Details in subset.md#th0040--non-exhaustive-switch-on-discriminated-union](./subset.md#th0040--non-exhaustive-switch-on-discriminated-union)
 
 Permanent — all variants must be covered.
+
+---
+
+### TH0041 — Switch shape not lowerable
+
+**Message:** ``Switch not supported here: dispatch on a discriminated-union field (e.g. `switch (shape.kind)`) with every arm ending in `return` ``
+
+The emitter lowers exactly one switch shape: a non-computed
+`ident.field` scrutinee whose binding resolves to a discriminated union
+keyed on that field, with every arm (including `default`) returning on
+every control path. Anything else — a plain-identifier scrutinee
+(`switch (x)` on a `string`), an unannotated or unresolvable scrutinee
+binding, a non-union scrutinee type, a switch on a non-discriminator
+field, or an arm that falls through (`break`, empty grouped `case`
+labels) — is rejected. Previously these switches were silently dropped
+from the emitted Lean, producing wrong output. A `default` arm whose
+body returns is fine: it lowers as the wildcard match arm.
+
+Rejected: `switch (x) { case "a": return 1; case "b": return 2; }` on
+`x: string`.
 
 ---
 

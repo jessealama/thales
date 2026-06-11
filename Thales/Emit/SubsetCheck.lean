@@ -17,10 +17,14 @@ open Thales.TypeCheck
 
 /-- Environment for switch exhaustiveness checking.
     aliasEnv maps type alias names to their resolved TSType.
-    bindingEnv maps identifier names to their declared TSType. -/
+    bindingEnv maps identifier names to their declared TSType.
+    voidReturn is true inside a function with no value to return — its
+    switch arms may legitimately fall through (`break`), since the unit
+    arm the emitter produces is the correct value. -/
 structure SwitchEnv where
   aliasEnv   : Std.HashMap String TSType := {}
   bindingEnv : Std.HashMap String TSType := {}
+  voidReturn : Bool := false
 
 /-- Method names that mutate their receiver. -/
 private def mutatingMethodNames : List String :=
@@ -404,30 +408,43 @@ private def discriminatorInfo (branches : List TSType) : Option (String × List 
       if allValues.length != branches.length then return none
       return some (discField, allValues)
 
-/-- Check a single switch statement for TH0040 exhaustiveness.
-    Returns a diagnostic if the switch on a discriminated union is non-exhaustive. -/
-private def checkSwitchExhaustive
+/-- Classify a switch statement (#44). Returns TH0041 when the emitter has
+    no lowering for its shape: the scrutinee must be a non-computed
+    `ident.field` access whose binding resolves to a discriminated union
+    keyed on that field, and every arm (including `default`) must return
+    on every control path — the lowering turns arms into match-arm
+    expressions with no continuation, so anything else used to be silently
+    dropped or miscompiled. Returns TH0040 for a well-shaped but
+    non-exhaustive switch; `none` means the switch is lowerable. -/
+private def classifySwitch
     (env : SwitchEnv) (loc : Option SourceLocation)
     (discriminant : Expression) (cases : List SwitchCase) : Option Diagnostic :=
-  -- Pattern: switch (ident.field) where computed=false
+  let notLowerable := some (mkThalesDiag .switchNotLowerable loc)
+  -- In a value-returning function every arm must return (the lowering
+  -- turns arms into match-arm expressions with no continuation); in a
+  -- void function a fall-through arm's unit value is already correct.
+  if !env.voidReturn
+      && cases.any (fun (SwitchCase.mk _ _ ss) => !EscapeAnalysis.stmtsReturn ss) then
+    notLowerable
+  else
   match discriminant with
   | .memberExpr _ (.identifier _ scrutName) (.identifier _ fieldName) false _ =>
     -- Look up the type of scrutName in the binding environment
     match env.bindingEnv.get? scrutName with
-    | none => none
+    | none => notLowerable
     | some rawTy =>
       -- Resolve through aliases
-      let resolvedTy := resolveType env.aliasEnv rawTy
-      match resolvedTy with
+      match resolveType env.aliasEnv rawTy with
       | .union branches =>
         -- Get discriminator info
         match discriminatorInfo branches with
-        | none => none
+        | none => notLowerable
         | some (discField, expectedLiterals) =>
           -- The switch must be on the discriminator field
-          if discField != fieldName then none
+          if discField != fieldName then notLowerable
           else
-            -- Check for a default arm (exhaustive by definition)
+            -- A `default` arm makes the switch exhaustive by definition
+            -- (the emitter lowers its body as the wildcard arm).
             let hasDefault := cases.any fun (SwitchCase.mk _ test _) => test.isNone
             if hasDefault then none
             else
@@ -440,21 +457,37 @@ private def checkSwitchExhaustive
               let missing := expectedLiterals.filter fun s => !coveredLiterals.contains s
               if missing.isEmpty then none
               else some (mkThalesDiag (.switchNotExhaustive missing) loc)
-      | _ => none
-  | _ => none
+      | _ => notLowerable
+  | _ => notLowerable
+
+/-- Thread annotated `let`/`const`/`var` declarations into the switch
+    checker's binding environment so a switch on an annotated local
+    resolves (the emitter threads the same annotations). -/
+private def bindSwitchDecls (env : SwitchEnv) : Statement → SwitchEnv
+  | .variableDecl (.mk _ decls _) =>
+      decls.foldl (fun e d =>
+        match d with
+        | .mk _ (.identifier id) _ (some ty) =>
+            { e with bindingEnv := e.bindingEnv.insert id.name ty }
+        | _ => e) env
+  | _ => env
 
 /-- Walk a statement body checking for switch exhaustiveness violations.
     Uses the provided SwitchEnv for identifier lookups. -/
 partial def checkSwitchStmt (env : SwitchEnv) (stmt : Statement) : Array Diagnostic :=
   match stmt with
   | .blockStmt _ body =>
-    body.foldl (fun acc s => acc ++ checkSwitchStmt env s) #[]
+    -- Thread annotated declarations through the statement list so later
+    -- switches on annotated locals resolve.
+    (body.foldl (fun (st : Array Diagnostic × SwitchEnv) s =>
+      let (acc, env) := st
+      (acc ++ checkSwitchStmt env s, bindSwitchDecls env s)) (#[], env)).1
   | .ifStmt _ _ consequent alternate =>
     checkSwitchStmt env consequent
       ++ (match alternate with | some s => checkSwitchStmt env s | none => #[])
   | .switchStmt b discriminant cases =>
     let switchDiag : Array Diagnostic :=
-      match checkSwitchExhaustive env b.loc discriminant cases with
+      match classifySwitch env b.loc discriminant cases with
       | some d => #[d]
       | none => #[]
     -- Also recurse into case bodies for nested switches
@@ -584,14 +617,18 @@ def checkTSStmt (ts : TSStatement) : Array Diagnostic :=
   | .declareStmt _ inner => checkTSStmt inner
   | .importDecl _ _ _ => #[]
 
-/-- Check a TS-level statement for switch exhaustiveness (TH0040).
-    Requires a SwitchEnv with type alias and binding information. -/
+/-- Check a TS-level statement for switch lowerability and exhaustiveness
+    (TH0041/TH0040). Requires a SwitchEnv with type alias and binding
+    information. -/
 def checkTSStmtSwitch (aliasEnv : Std.HashMap String TSType) (ts : TSStatement)
     : Array Diagnostic :=
   match ts with
-  | .annotatedFuncDecl _ _ _ params _ body _ _ _ _ =>
+  | .annotatedFuncDecl _ _ _ params returnType body _ _ _ _ =>
     let bindingEnv := buildParamEnv params
-    let env : SwitchEnv := { aliasEnv, bindingEnv }
+    let voidReturn := match returnType with
+      | none => true
+      | some ann => ann.type == .void_
+    let env : SwitchEnv := { aliasEnv, bindingEnv, voidReturn }
     checkSwitchStmt env body
   | .js s => checkSwitchStmt { aliasEnv, bindingEnv := {} } s
   | _ => #[]
