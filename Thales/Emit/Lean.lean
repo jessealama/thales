@@ -1146,6 +1146,71 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
             | _ => unloweredDoStmt)
           | none => unloweredDoStmt)
       | _ => unloweredDoStmt
+  -- #25 loop lowering: `for (const x of rhs)` / `for (let i = 0; i < B; i++)`.
+  -- These arms MUST appear before the catch-all.  EscapeAnalysis guarantees
+  -- only lowerable loop shapes reach here; `notLowerable` still falls through
+  -- to the loud marker as a defence-in-depth measure.
+  | s@(.forOfStmt _ _ _ _ _) :: rest | s@(.forStmt _ _ _ _ _) :: rest =>
+      let bodyStmtsOf : Statement → List Statement := fun b =>
+        match b with
+        | .blockStmt _ ss => ss
+        | other => [other]
+      match LoopShape.classifyLoop s with
+      -- for-of: `for (const x of rhs) { … }` → `for x in rhs do …`.
+      -- Thread the element type into the body's binding environment so that
+      -- sub-expressions involving `x` elaborate at the right type (e.g. string
+      -- indexing, array element arithmetic). For an ident RHS whose declared
+      -- type is `Array et`, we insert `x ↦ et`; for array literals or unknown
+      -- shapes the body env is left unchanged (conservative but sound — the
+      -- element is only untyped in env, which affects refinement projection,
+      -- not correctness of basic arithmetic).
+      | .forOf x rhs rhsExpr body =>
+          let env' : EmitEnv :=
+            match rhs with
+            | .ident arrName =>
+                match env.bindingEnv.get? arrName with
+                | some rawTy =>
+                    (match resolveTypeAlias env rawTy with
+                    | .array et =>
+                        { env with bindingEnv := env.bindingEnv.insert x et }
+                    | _ => env)
+                | none => env
+            | .arrayLit _ => env  -- element type unknown without inference; leave env
+          .forDo x (emitExprEnv env rhsExpr) (emitBodyDo env' info (bodyStmtsOf body))
+            :: emitBodyDo env info rest
+      -- canonical-for: `for (let i = 0; i < B; i++) { … }` →
+      -- `for i in [0:B] do … `.
+      -- The Lean range-loop binder `i` is a `Nat`; TS uses `number` (Float),
+      -- so the body needs a shim `let i : Float := i.toFloat` inserted first.
+      -- The shim shadows the Nat `i` with a Float for all downstream uses.
+      -- The bound is either a Nat literal (`.inl n`) or `arr.length` (`.inr
+      -- arrName`); the latter is the same Nat-valued `arr.length` as in the
+      -- `arr.length` lowering, NOT the `.toFloat`-suffixed form used for
+      -- arithmetic — range bounds are Nat, so no coercion is needed there.
+      | .canonicalFor i bound body =>
+          let iterExpr : LExpr :=
+            match bound with
+            | .inl n    => .rangeTo (.int (Int.ofNat n))
+            | .inr arrName =>
+                -- `arr.length` as a Nat — matches Array.size, which is what
+                -- the range loop expects.
+                .rangeTo (.proj (.var arrName) "length")
+          -- The shim inserts a Float-typed `i` that shadows the Nat binder.
+          let shim : LDoStmt :=
+            .letPure i (some (.const "Float")) (.proj (.var i) "toFloat")
+          -- Body env: `i` is `number` (Float) for the rest of the body.
+          let env' : EmitEnv :=
+            { env with bindingEnv := env.bindingEnv.insert i .number }
+          let bodyDo := shim :: emitBodyDo env' info (bodyStmtsOf body)
+          .forDo i iterExpr bodyDo :: emitBodyDo env info rest
+      | .notLowerable => unloweredDoStmt  -- defence-in-depth; EscapeAnalysis should prevent this
+  -- #25 break/continue: unlabeled forms map 1:1 to do-notation's `break` /
+  -- `continue`.  Any remaining statements after the break/continue are dead
+  -- code and are dropped (same convention as `return`).  Labeled forms are
+  -- not handled by the do-mode emitter (EscapeAnalysis poisons such loops),
+  -- so they fall through to the loud marker.
+  | .breakStmt _ none :: _ => [.breakDo]
+  | .continueStmt _ none :: _ => [.continueDo]
   -- A list that ends without `return` is a branch falling through to the
   -- code after its `if` — emit nothing. The function-level trailing
   -- `return ()` (for void bodies) is appended by `emitFuncDecl`.
@@ -1309,16 +1374,18 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
   let stmts := match body with
     | .blockStmt _ ss => ss
     | other           => [other]
-  -- #24: a body with an eligible statement-position mutation lowers to
-  -- `Id.run do` with `let mut`; everything else keeps the pure path
-  -- untouched. `@throws` functions never reach do-mode (TH0007 upstream),
-  -- and `doModeLowerable` is the same function-level gate SubsetCheck's
-  -- mutation routing rejects on (#40/#41) — checked here too so a checker
-  -- regression degrades to the pure path instead of a miscompile.
+  -- #24/#25: a body with an eligible statement-position mutation (#24) OR a
+  -- lowerable loop (#25) lowers to `Id.run do`; everything else keeps the
+  -- pure path untouched.  `@throws` functions never reach do-mode (TH0007
+  -- upstream), and `doModeLowerable` is the same function-level gate
+  -- SubsetCheck's mutation routing rejects on (#40/#41) — checked here too
+  -- so a checker regression degrades to the pure path instead of a
+  -- miscompile.  Loop-triggered entry is needed because the pure expression
+  -- path has no host for a `for … in … do` statement (#25).
   let info := EscapeAnalysis.analyze (params.map (·.1)) body
   let hasEligibleMutation := info.mutated.toList.any info.eligible
   let bodyExpr :=
-    if hasEligibleMutation && info.doModeLowerable && throws.isEmpty then
+    if (hasEligibleMutation || info.hasLowerableLoop) && info.doModeLowerable && throws.isEmpty then
       -- Mutated parameters self-shadow as `let mut x := x`: JS parameters
       -- are mutable locals whose mutation never affects the caller.
       let prologue : List LDoStmt := normalizedParams.filterMap fun (n, _) =>
