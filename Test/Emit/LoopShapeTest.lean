@@ -148,6 +148,18 @@ def t_labeledBreak_negative : IO Unit := do
   if hasLabeledBreakOrContinue s then
     throw (IO.userError "unlabeled break should not be flagged")
 
+-- negative: a labeled break inside a nested function declaration is not flagged
+-- (traversal stops at function boundaries via the catch-all)
+def t_labeledBreak_nestedFunction : IO Unit := do
+  let nestedBody : Statement :=
+    .blockStmt {} [.breakStmt {} (some { name := "outer" })]
+  let s : Statement :=
+    .blockStmt {} [
+      .functionDecl {} { name := "inner" } [] nestedBody false false
+    ]
+  if hasLabeledBreakOrContinue s then
+    throw (IO.userError "labeled break inside nested function should not be flagged")
+
 -- ── eval ──────────────────────────────────────────────────────────────────
 
 #eval t_forOf_const
@@ -168,3 +180,4 @@ def t_labeledBreak_negative : IO Unit := do
 #eval t_canonicalFor_fields_length
 #eval t_labeledBreak_positive
 #eval t_labeledBreak_negative
+#eval t_labeledBreak_nestedFunction
