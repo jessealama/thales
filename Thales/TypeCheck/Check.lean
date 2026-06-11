@@ -447,21 +447,54 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     let _ ← synthJSExpr test
     restoreAssignmentState preLoopDA
   | .forStmt _ init test update body =>
+    -- Synth the init expression or bind the init declaration into scope for
+    -- the test/update/body. Declaration bindings use the widened initializer
+    -- type for let/var (tsc-style literal widening) or the annotation type.
     match init with
-    | some (.inl expr) => let _ ← synthJSExpr expr
-    | some (.inr _varDecl) => pure ()
-    | none => pure ()
-    match test with
-    | some expr => let _ ← synthJSExpr expr
-    | none => pure ()
-    let preLoopDA ← saveAssignmentState
-    let assignedInLoop := collectAssignedVars body
-    let widened ← widenAssignedVars assignedInLoop
-    match update with
-    | some expr => let _ ← synthJSExpr expr
-    | none => pure ()
-    withScope widened (checkJSStatementRaw body)
-    restoreAssignmentState preLoopDA
+    | some (.inl expr) =>
+      let _ ← synthJSExpr expr
+      let preLoopDA ← saveAssignmentState
+      let assignedInLoop := collectAssignedVars body
+      let widened ← widenAssignedVars assignedInLoop
+      match test with
+      | some e => let _ ← synthJSExpr e
+      | none => pure ()
+      match update with
+      | some e => let _ ← synthJSExpr e
+      | none => pure ()
+      withScope widened (checkJSStatementRaw body)
+      restoreAssignmentState preLoopDA
+    | some (.inr (.mk _ declarators kind)) =>
+      -- Check declarators and get their widened/annotated types for scope.
+      -- checkDeclaratorsSeq handles annotation checking, DA marking, and
+      -- returns scope updates for unannotated initialized let/var bindings.
+      let initUpdates ← checkDeclaratorsSeq declarators kind
+      -- The declaration's types must also be available as declared types so
+      -- widenAssignedVars can widen them back. Use withScopeAndDeclaredTypes.
+      withScopeAndDeclaredTypes initUpdates (do
+        let preLoopDA ← saveAssignmentState
+        let assignedInLoop := collectAssignedVars body
+        let widened ← widenAssignedVars assignedInLoop
+        match test with
+        | some e => let _ ← synthJSExpr e
+        | none => pure ()
+        match update with
+        | some e => let _ ← synthJSExpr e
+        | none => pure ()
+        withScope widened (checkJSStatementRaw body)
+        restoreAssignmentState preLoopDA)
+    | none =>
+      let preLoopDA ← saveAssignmentState
+      let assignedInLoop := collectAssignedVars body
+      let widened ← widenAssignedVars assignedInLoop
+      match test with
+      | some e => let _ ← synthJSExpr e
+      | none => pure ()
+      match update with
+      | some e => let _ ← synthJSExpr e
+      | none => pure ()
+      withScope widened (checkJSStatementRaw body)
+      restoreAssignmentState preLoopDA
   | .variableDecl (.mk _base declarators kind) =>
     -- Process each declarator (synth init expressions, check against annotation, DA tracking)
     -- Note: declared types and bindings are pre-seeded by checkJSStatements/withScopeAndDeclaredTypes
@@ -551,6 +584,26 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     let preLoopDA ← saveAssignmentState
     -- Check the body for DA and type errors; no widening since we don't infer iteration type
     checkJSStatementRaw body
+    restoreAssignmentState preLoopDA
+  | .forOfStmt _ left right body _await =>
+    -- Synth the RHS to determine the element type.
+    let rhsTyped ← synthJSExpr right
+    let resolved ← resolveTypeGeneric rhsTyped.type
+    let elemTy := match resolved with
+      | .array t => t
+      | _ => .any  -- graceful degradation; subset check rejects non-array RHS separately
+    -- Bind the head declarator to the element type and mark it assigned.
+    -- For a simple-identifier declaration head (.inr varDecl with one .identifier
+    -- declarator), bind the element type. Expression head (.inl) gets no extra binding.
+    let headBindings : List (String × TSType) ← match left with
+      | .inr (.mk _ [.mk _ (.identifier id) none _typeAnn] _kind) => do
+          markAssigned id.name
+          pure [(id.name, elemTy)]
+      | _ => pure []
+    let preLoopDA ← saveAssignmentState
+    let assignedInLoop := collectAssignedVars body
+    let widened ← widenAssignedVars assignedInLoop
+    withScope (headBindings ++ widened) (checkJSStatementRaw body)
     restoreAssignmentState preLoopDA
   | _ => pure ()  -- Graceful degradation for unhandled statements
 
