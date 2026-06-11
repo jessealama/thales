@@ -42,11 +42,13 @@ def classifyLoop : Statement → LoopClass
       if await then .notLowerable
       else
         match left with
-        | .inr (.mk _ [.mk _ (.identifier id) none _] _) =>
-            (match right with
-             | .identifier _ n => .forOf id.name (.ident n) right body
-             | .arrayExpr _ _  => .forOf id.name (.arrayLit right) right body
-             | _ => .notLowerable)
+        | .inr (.mk _ [.mk _ (.identifier id) none _] kind) =>
+            if kind == .var then .notLowerable
+            else
+              (match right with
+               | .identifier _ n => .forOf id.name (.ident n) right body
+               | .arrayExpr _ _  => .forOf id.name (.arrayLit right) right body
+               | _ => .notLowerable)
         | _ => .notLowerable
   | .forStmt _ init test update body =>
       match init, test, update with

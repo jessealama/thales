@@ -42,12 +42,18 @@ private def assertCanonicalFor (loop : String) : IO Unit := do
   | .canonicalFor _ _ _ => return
   | _ => throw (IO.userError s!"expected canonicalFor for: {loop}")
 
+/-- Short tag name for a LoopClass, for error messages. -/
+private def tagOf : LoopClass → String
+  | .forOf _ _ _ _    => "forOf"
+  | .canonicalFor _ _ _ => "canonicalFor"
+  | .notLowerable     => "notLowerable"
+
 /-- Assert a loop is classified as `notLowerable`. -/
 private def assertNotLowerable (loop : String) : IO Unit := do
   let cls ← classifyFirst loop
   match cls with
   | .notLowerable => return
-  | _ => throw (IO.userError s!"expected notLowerable for: {loop}")
+  | _ => throw (IO.userError s!"expected notLowerable, got {tagOf cls} for: {loop}")
 
 -- ── for-of cases ──────────────────────────────────────────────────────────
 
@@ -77,6 +83,10 @@ def t_forOf_exprHead : IO Unit := do
 -- `for (const x of f())`: call-expression RHS → notLowerable
 def t_forOf_callRhs : IO Unit :=
   assertNotLowerable "for (const x of f()) { }"
+
+-- `for (var x of xs)`: var declaration → notLowerable (only const|let allowed)
+def t_forOf_var : IO Unit :=
+  assertNotLowerable "for (var x of xs) { }"
 
 -- ── canonical C-style for cases ──────────────────────────────────────────
 
@@ -117,8 +127,10 @@ def t_canonicalFor_fields_lit : IO Unit := do
   let cls ← classifyFirst "for (let i = 0; i < 5; i++) { }"
   match cls with
   | .canonicalFor "i" (.inl 5) _ => return
+  | .canonicalFor "i" _ _ =>
+      throw (IO.userError "wrong bound: expected .inl 5")
   | .canonicalFor vn _ _ =>
-      throw (IO.userError s!"wrong fields: varName={vn}, bound tag mismatch")
+      throw (IO.userError s!"wrong varName: expected \"i\", got \"{vn}\"")
   | _ => throw (IO.userError "not canonicalFor")
 
 -- canonicalFor with array-length bound must expose `.inr "xs"` and varName `"i"`
@@ -126,9 +138,31 @@ def t_canonicalFor_fields_length : IO Unit := do
   let cls ← classifyFirst "for (let i = 0; i < xs.length; i++) { }"
   match cls with
   | .canonicalFor "i" (.inr "xs") _ => return
+  | .canonicalFor "i" _ _ =>
+      throw (IO.userError "wrong bound: expected .inr \"xs\"")
   | .canonicalFor vn _ _ =>
-      throw (IO.userError s!"wrong fields: varName={vn}, bound tag mismatch")
+      throw (IO.userError s!"wrong varName: expected \"i\", got \"{vn}\"")
   | _ => throw (IO.userError "not canonicalFor")
+
+-- forOf with identifier RHS must expose varName `"x"` and `.ident "xs"`
+def t_forOf_fields_ident : IO Unit := do
+  let cls ← classifyFirst "for (const x of xs) { }"
+  match cls with
+  | .forOf "x" (.ident "xs") _ _ => return
+  | .forOf vn rhs _ _ =>
+      let rhsTag := match rhs with | .ident n => s!"ident {n}" | .arrayLit _ => "arrayLit"
+      throw (IO.userError s!"wrong fields: varName={vn}, rhs={rhsTag}; expected varName=x rhs=ident xs")
+  | _ => throw (IO.userError "not forOf")
+
+-- forOf with array-literal RHS must expose varName `"y"` and `.arrayLit _`
+def t_forOf_fields_arrayLit : IO Unit := do
+  let cls ← classifyFirst "for (const y of [1, 2]) { }"
+  match cls with
+  | .forOf "y" (.arrayLit _) _ _ => return
+  | .forOf vn rhs _ _ =>
+      let rhsTag := match rhs with | .ident n => s!"ident {n}" | .arrayLit _ => "arrayLit"
+      throw (IO.userError s!"wrong fields: varName={vn}, rhs={rhsTag}; expected varName=y rhs=arrayLit")
+  | _ => throw (IO.userError "not forOf")
 
 -- ── hasLabeledBreakOrContinue ─────────────────────────────────────────────
 
@@ -168,6 +202,7 @@ def t_labeledBreak_nestedFunction : IO Unit := do
 #eval t_forOf_destructuring
 #eval t_forOf_exprHead
 #eval t_forOf_callRhs
+#eval t_forOf_var
 #eval t_canonicalFor_litBound
 #eval t_canonicalFor_lengthBound
 #eval t_canonicalFor_nonzeroStart
@@ -178,6 +213,8 @@ def t_labeledBreak_nestedFunction : IO Unit := do
 #eval t_forIn
 #eval t_canonicalFor_fields_lit
 #eval t_canonicalFor_fields_length
+#eval t_forOf_fields_ident
+#eval t_forOf_fields_arrayLit
 #eval t_labeledBreak_positive
 #eval t_labeledBreak_negative
 #eval t_labeledBreak_nestedFunction
