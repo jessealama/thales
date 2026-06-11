@@ -22,21 +22,22 @@ workflow is:
 3. Run the harness: `timeout 1200 npm run conformance`.
 4. Make sure prettier is happy: `timeout 60 npm run format -- tests/conformance/`.
 
-## What's currently parked (v0.6)
+## What's currently parked
 
-- `indexing-foreach.ts` — forEach-callback indexing (P3). Needs
-  arrow-function type-checking, contextual bound threading, an
-  `arr.forEach` emit lowering, and a witness derivation from the
-  iteration framework. Targeting 0.8.
-- `indexing-literal-tuple.ts` — tuple indexing as a provably-total
-  access. Needs the existing tuple lowering to admit `tup[k]` form.
-- `indexing-multiple-bounds.ts`, `indexing-recursion.ts` — exercise
-  `noUncheckedIndexedAccess` patterns that Thales' type-checker does
-  not yet reproduce.
-- `indexing-out-of-bounds.ts` — uses a top-level `if` statement with
-  an out-of-bounds index; the indexing subset check is not yet implemented.
+- `loop-forof-sum.ts`, `loop-forof-find.ts`, `loop-break-continue.ts`,
+  `loop-for-literal-bound.ts`, `loop-for-length-bound.ts`,
+  `loop-nested-forof.ts`, `loop-forof-ifelse.ts`, `loop-total-forof.ts` —
+  the accept-bucket targets for #25 (for-of and canonical C-style for
+  loops via do-mode). All eight pass `tsc --strict` and run under `tsx`;
+  thales currently rejects each with TH0010 (the two C-style fixtures
+  additionally draw spurious TS2304 for the loop variable — the checker
+  drops `for`-init declarations, fixed as part of #25). Design:
+  `.claude/superpowers/specs/2026-06-11-for-of-loops-design.md` (local).
 - `0081-default-value.ts`, `0081-generic-arg.ts`,
   `0081-class-property.ts`, `0081-spread-arg.ts` — additional contexts
   in which a plain `number` should be rejected as unassignable to a
   refinement type. v0.6 fires TH0081 at variable declarations, function
   parameters, and return statements only.
+- `prelude-math-abs.ts` — `Math.abs` overloaded to return `Natural` for an
+  `Integer` argument; needs Subtype-construction and narrowing-branch emit
+  (see the fixture's header).
