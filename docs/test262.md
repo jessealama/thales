@@ -50,7 +50,8 @@ on demand).
 
 ## Baseline
 
-thales `3f11f4a` (after #24 mutation widening), test262 `fc32f3e8`, 2026-06-10:
+thales `4177bd1` (after #24 mutation widening and the #40–#45 emitter
+hardening), test262 `fc32f3e8`, 2026-06-11:
 
 ```
 Slice                                             Total  Skip   OoS  Pass  Fail  InSubset   Pass%
@@ -85,6 +86,7 @@ TH0007            1179     18        0
 TH0063            1179      2        0
 TH0021            1179      0        0
 TH0031            1179      0        0
+TH0041            1179      0        0
 TH0060            1179      0        0
 TS2322            1179      0        0
 TS2349            1179      0        0
@@ -110,12 +112,15 @@ Loops (TH0010, 765) remain the dominant body blocker, next up in #25/#26.
 `parse-error` counts tests where thales hard-fails without a structured
 diagnostic (e.g. multi-declarator `var x, y;`).
 
-New shim-attribution row vs the pre-#24 baseline: TS2322 — #24's
+New shim-attribution rows vs the pre-#24 baseline: TS2322 — #24's
 declared-type precision (unannotated/const bindings are no longer `any`)
 exposes a pre-existing truthy-narrowing gap at `harness/assert.ts:34`
 (`if (basic) return basic;` on a nullable: tsc narrows, thales doesn't
-strip the null arm). Tracked with the flow-fidelity follow-ups (#38);
-shim-compilation blockers overall are #31.
+strip the null arm) — and TH0041, the #44 switch classification firing on
+a shim switch (body attribution 0: no test body is newly blocked). The
+#40–#45 hardening left the body attribution untouched — no slice test
+hits the newly rejected combinations. Tracked with the flow-fidelity
+follow-ups (#38); shim-compilation blockers overall are #31.
 
 This table is updated manually when a feature lands; the per-directory
 numbers are the metric quoted in #24–#29.
