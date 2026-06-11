@@ -61,6 +61,7 @@ soundness check).
 | TH0025 | Types        | null/undefined types not supported                  |
 | TH0030 | Declarations | `class` not supported                               |
 | TH0031 | Declarations | Inheritance (`extends`) not supported               |
+| TH0032 | Declarations | Shadowing declaration not supported                 |
 | TH0040 | Matching     | Non-exhaustive switch on discriminated union        |
 | TH0041 | Matching     | Switch shape not lowerable                          |
 | TH0050 | Recursion    | Cannot verify termination                           |
@@ -336,6 +337,24 @@ Rejected: `class Dog extends Animal { ... }`
 [Details in subset.md#th0031--inheritance-extends-not-supported](./subset.md#th0031--inheritance-extends-not-supported)
 
 6+ adds single-dispatch inheritance via typeclasses.
+
+---
+
+### TH0032 — Shadowing declaration not supported
+
+**Message:** `Declaration of '<name>' shadows a binding from an enclosing scope; rename the inner binding`
+
+Rejected: `const n = 0; { const n = 1; } return n;` inside a function.
+
+The emitter flattens bare blocks into their enclosing statement list and
+appends `if`-continuations into branches, so a block-scoped `let`/`const`
+that shadows a name from an enclosing scope of the same function would
+capture references meant for the outer binding — an accepted program with
+silently wrong output (#45). tsc allows shadowing; Thales rejects it.
+Out of scope by design: `var` re-declaration (function-scoped — the same
+binding; conflicts with `let` are tsc's TS2451), nested function/arrow
+parameters and bodies (fresh scopes — Lean lambdas shadow correctly), and
+`catch` parameters (lowered to real match binders).
 
 ---
 
