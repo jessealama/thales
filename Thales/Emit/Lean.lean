@@ -327,19 +327,29 @@ private partial def substMemberAccessStmt (scrutName : String) : Statement → S
         | d => d) k)
   | other => other
 
-/-- Extract the null-checked variable name from an `x === null` or `x === undefined` condition.
-    Returns `some varName` for `x === null`, `x === undefined`, `null === x`, `undefined === x`.
-    Returns `none` for other conditions. -/
-private def nullCheckVar : Expression → Option String
-  | .binaryExpr _ .seq (.identifier _ varName) (.literal _ .null _)
-  | .binaryExpr _ .eq  (.identifier _ varName) (.literal _ .null _)
-  | .binaryExpr _ .seq (.literal _ .null _)    (.identifier _ varName)
-  | .binaryExpr _ .eq  (.literal _ .null _)    (.identifier _ varName) => some varName
-  | .binaryExpr _ .seq (.identifier _ varName) (.identifier _ "undefined")
-  | .binaryExpr _ .eq  (.identifier _ varName) (.identifier _ "undefined")
-  | .binaryExpr _ .seq (.identifier _ "undefined") (.identifier _ varName)
-  | .binaryExpr _ .eq  (.identifier _ "undefined") (.identifier _ varName) =>
-    if varName != "undefined" then some varName else none
+/-- Extract the null/undefined-checked variable from an equality test
+    against `null` or `undefined` (either operand order). Returns the
+    variable name and the test's polarity: `true` for `===`/`==` (the THEN
+    branch is the nullish side), `false` for `!==`/`!=` (#43 — the THEN
+    branch is the narrowed, non-nullish side). Returns `none` for other
+    conditions. -/
+private def nullCheckVar : Expression → Option (String × Bool)
+  | .binaryExpr _ op l r =>
+    let polarity : Option Bool := match op with
+      | .seq | .eq => some true
+      | .sneq | .neq => some false
+      | _ => none
+    let isNullish : Expression → Bool
+      | .literal _ .null _ => true
+      | .identifier _ "undefined" => true
+      | _ => false
+    let subjectOf : Expression → Expression → Option String := fun a b =>
+      match a with
+      | .identifier _ n => if isNullish b && n != "undefined" then some n else none
+      | _ => none
+    match polarity with
+    | some pos => (subjectOf l r <|> subjectOf r l).map (·, pos)
+    | none => none
   | _ => none
 
 /-- If `targetTy` resolves through `aliasEnv` to a same-primitive literal
@@ -897,12 +907,30 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
           .dite_ hName condExpr shadowed elseBody
       | none =>
         match nullCheckVar cond with
-        | some varName =>
+        | some (varName, positive) =>
             match env.bindingEnv.get? varName with
             | some (.option _) =>
-                let noneArm := (LPattern.ctor "none" [], emitBodyEnv env [thn])
-                let someArm := (LPattern.ctor "some" [.var varName], elseBody)
-                .match_ (.var varName) [noneArm, someArm]
+                -- The THEN branch becomes its own match arm WITHOUT the
+                -- continuation, so it must return on every path (the
+                -- early-return idiom); otherwise control would fall out of
+                -- the arm and the continuation — emitted only into the
+                -- other arm — would be skipped. Non-returning branches keep
+                -- the plain-ite fallback.
+                if EscapeAnalysis.stmtsReturn [thn] then
+                  let thnArm := emitBodyEnv env [thn]
+                  -- Positive test (`x === null`): THEN is the none arm and
+                  -- the continuation flows at the narrowed type via the
+                  -- some-arm rebinding. Negated (`x !== null`, #43): the
+                  -- arms swap — THEN gets the rebinding.
+                  let arms :=
+                    if positive then
+                      [(LPattern.ctor "none" [], thnArm),
+                       (LPattern.ctor "some" [.var varName], elseBody)]
+                    else
+                      [(LPattern.ctor "some" [.var varName], thnArm),
+                       (LPattern.ctor "none" [], elseBody)]
+                  .match_ (.var varName) arms
+                else fallback
             | _ => fallback
         | none => fallback
   | .blockStmt _ inner :: rest => emitBodyEnv env (inner ++ rest)
