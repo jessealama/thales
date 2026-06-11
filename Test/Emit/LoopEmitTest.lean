@@ -55,11 +55,13 @@ def testCanonicalLiteralBound : IO Unit :=
     "function f(): number { let t = 0; for (let i = 0; i < 5; i++) { t += i; } return t; }"
     ["for i in [0:5] do", "let i : Float := i.toFloat"]
 
--- 5. Canonical for bounded by `arr.length`: `i < xs.length` → `[0:xs.length]`.
+-- 5. Canonical for bounded by `arr.length`: `i < xs.length` → `[0:xs.size]`
+--    (Lean `Array` has `.size`; the Float-valued `arr.length` lowering is for
+--    expression positions, not range bounds).
 def testCanonicalLengthBound : IO Unit :=
   expectEmitLoop
     "function f(xs: number[]): number { let t = 0; for (let i = 0; i < xs.length; i++) { t += i; } return t; }"
-    ["for i in [0:xs.length] do"]
+    ["for i in [0:xs.size] do"]
 
 -- 6. Nested for-of: outer and inner `for … in … do` both present.
 def testNestedForOf : IO Unit :=
