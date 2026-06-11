@@ -8,6 +8,7 @@ import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Diagnostic
 import Thales.Emit.DirectiveApply
 import Thales.Emit.EscapeAnalysis
+import Thales.Emit.LoopShape
 import Std.Data.HashMap
 
 namespace Thales.Emit
@@ -246,17 +247,65 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
     checkExpr ctx test
       ++ checkStmt ctx consequent
       ++ (match alternate with | some s => checkStmt ctx s | none => #[])
-  -- TH0010: loop statements — emit once, do NOT recurse into body
+  -- TH0010: loop statements.
+  -- A loop is ADMITTED (no TH0010, recurse into body) iff:
+  --   • ctx.info = some info (we are inside a declared function),
+  --   • info.doModeLowerable (no unlowered switch, no try/catch, no
+  --     unlowered loop shape, no narrowing-dependent body),
+  --   • !ctx.noMutZone (not inside @throws or try/catch),
+  --   • ctx.allowEligible (annotated function declaration body), and
+  --   • LoopShape.classifyLoop classifies this loop as .forOf or .canonicalFor.
+  -- NOT admitted → exactly one TH0010, no recursion into the body.
+  --
+  -- MutationInfo semantics: info.doModeLowerable reflects EscapeAnalysis's own
+  -- loop-shape analysis. A function containing BOTH an admitted-shape loop and a
+  -- `while` has hasUnloweredLoopShape=true, so doModeLowerable=false, meaning the
+  -- admitted-shape loop also gets TH0010 — required for checker/emitter agreement.
   | .whileStmt b _ _ =>
+    -- while is never classifyLoop .forOf or .canonicalFor; always TH0010.
     #[mkThalesDiag .loopNotSupported b.loc]
   | .doWhileStmt b _ _ =>
-    #[mkThalesDiag .loopNotSupported b.loc]
-  | .forStmt b _ _ _ _ =>
+    -- do-while is never lowerable; always TH0010.
     #[mkThalesDiag .loopNotSupported b.loc]
   | .forInStmt b _ _ _ =>
+    -- for-in is never lowerable; always TH0010.
     #[mkThalesDiag .loopNotSupported b.loc]
-  | .forOfStmt b _ _ _ _ =>
-    #[mkThalesDiag .loopNotSupported b.loc]
+  | s@(.forStmt b _ _ _ _) =>
+    let admitted :=
+      match ctx.info with
+      | none => false
+      | some info =>
+        info.doModeLowerable && !ctx.noMutZone && ctx.allowEligible
+          && (match LoopShape.classifyLoop s with
+              | .canonicalFor _ _ _ => true
+              | _ => false)
+    if admitted then
+      -- The test expression (i < B) and update expression (i++) are part of
+      -- the admitted shape: classifyLoop already constrained them to bare
+      -- identifier/literal/length forms with no subexpressions worth checking.
+      -- Routing i++ through checkExpr would draw .assignmentInExpressionPosition;
+      -- the init declaration is not a statement-position child of this function.
+      -- So we check only the body.
+      match s with
+      | .forStmt _ _ _ _ body => checkStmt ctx body
+      | _ => #[mkThalesDiag .loopNotSupported b.loc]  -- unreachable
+    else
+      #[mkThalesDiag .loopNotSupported b.loc]
+  | s@(.forOfStmt b _ right body _) =>
+    let admitted :=
+      match ctx.info with
+      | none => false
+      | some info =>
+        info.doModeLowerable && !ctx.noMutZone && ctx.allowEligible
+          && (match LoopShape.classifyLoop s with
+              | .forOf _ _ _ _ => true
+              | _ => false)
+    if admitted then
+      -- The loop binder (head declaration) is part of the admitted shape; do not
+      -- route it through any statement arm. Check only the RHS expression and body.
+      checkExpr ctx right ++ checkStmt ctx body
+    else
+      #[mkThalesDiag .loopNotSupported b.loc]
   | .breakStmt _ _ => #[]
   | .continueStmt _ _ => #[]
   | .returnStmt _ arg =>
