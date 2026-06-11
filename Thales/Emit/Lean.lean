@@ -1166,6 +1166,21 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
       -- element is only untyped in env, which affects refinement projection,
       -- not correctness of basic arithmetic).
       | .forOf x rhs rhsExpr body =>
+          -- Defence-in-depth: if SubsetCheck admitted a for-of but the RHS is an
+          -- identifier whose binding doesn't resolve to an array type, the phases
+          -- have drifted — emit the loud marker rather than silently miscompiling.
+          -- ArrayLit RHS is always safe (the literal is already an Array in Lean).
+          let rhsOk : Bool :=
+            match rhs with
+            | .arrayLit _ => true
+            | .ident arrName =>
+                match env.bindingEnv.get? arrName with
+                | some rawTy => (match resolveTypeAlias env rawTy with
+                                 | .array _ => true
+                                 | _ => false)
+                | none => false
+          if !rhsOk then unloweredDoStmt
+          else
           let env' : EmitEnv :=
             match rhs with
             | .ident arrName =>

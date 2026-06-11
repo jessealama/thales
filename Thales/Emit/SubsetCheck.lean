@@ -49,6 +49,12 @@ structure MutCtx where
       stays rejected in v1 even when the eligibility analysis would allow
       it. -/
   allowEligible : Bool := false
+  /-- Type alias environment threaded from the enclosing `annotatedFuncDecl`
+      context; used to resolve array types for for-of admission. -/
+  aliasEnv : Std.HashMap String TSType := {}
+  /-- Binding environment for the enclosing function's typed parameters;
+      used to check that for-of RHS resolves to an array type. -/
+  bindingEnv : Std.HashMap String TSType := {}
 
 /-- Parameter names of a JS-level function/arrow (typed params live on
     `annotatedFuncDecl` and are handled separately). -/
@@ -121,6 +127,16 @@ private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
       #[]
     else
       #[mkThalesDiag (.cannotReassignVariable name) loc]
+
+/-- Resolve a TSType through type alias references.
+    Follows at most one level of .ref to avoid infinite loops in v1. -/
+private def resolveType (aliasEnv : Std.HashMap String TSType) : TSType → TSType
+  | .ref name _ =>
+    match aliasEnv.get? name with
+    | some resolved => resolved
+    | none => .ref name []
+  | .paren inner => resolveType aliasEnv inner
+  | other => other
 
 mutual
 
@@ -298,8 +314,26 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
     else
       #[mkThalesDiag .loopNotSupported b.loc]
   | s@(.forOfStmt b _ right body _) =>
+    -- RHS must be an array literal or an identifier whose declared type resolves
+    -- to `.array _` in the enclosing function's parameter environment.
+    -- This is conservative (params-only): for-of over body-declared arrays is
+    -- also rejected here — widening to body-declared arrays is a future task.
+    -- Non-array iterables (string, Map, generator, …) are rejected because the
+    -- TS element type (1-char string for strings) does not correspond to a
+    -- Lean `Char`, and lone-surrogate semantics diverge.
+    let rhsIsArray : Bool :=
+      match right with
+      | .arrayExpr _ _ => true
+      | .identifier _ n =>
+          match ctx.bindingEnv.get? n with
+          | some ty => (match resolveType ctx.aliasEnv ty with
+                        | .array _ => true
+                        | _ => false)
+          | none => false
+      | _ => false
     let admitted :=
-      loopContextAdmitted ctx
+      rhsIsArray
+        && loopContextAdmitted ctx
         && (match LoopShape.classifyLoop s with
             | .forOf _ _ _ _ => true
             | _ => false)
@@ -412,16 +446,6 @@ private partial def isLiteralType : TSType → Bool
 /-- A union of literal types: at least two branches, each one literal. -/
 private def isLiteralUnion (branches : List TSType) : Bool :=
   branches.length ≥ 2 && branches.all isLiteralType
-
-/-- Resolve a TSType through type alias references.
-    Follows at most one level of .ref to avoid infinite loops in v1. -/
-private def resolveType (aliasEnv : Std.HashMap String TSType) : TSType → TSType
-  | .ref name _ =>
-    match aliasEnv.get? name with
-    | some resolved => resolved
-    | none => .ref name []
-  | .paren inner => resolveType aliasEnv inner
-  | other => other
 
 /-- For a discriminated union, find the shared discriminator field and return
     (fieldName, List of expected string-literal values across all branches).
@@ -769,8 +793,9 @@ private def buildParamEnv
     | some ann => env.insert name ann.type
     | none => env) {}
 
-/-- Check a TS-level statement for mutation violations. -/
-def checkTSStmt (ts : TSStatement) : Array Diagnostic :=
+/-- Check a TS-level statement for mutation violations.
+    `aliasEnv` is threaded in for for-of array-type resolution. -/
+def checkTSStmt (aliasEnv : Std.HashMap String TSType) (ts : TSStatement) : Array Diagnostic :=
   match ts with
   | .js s => checkStmt {} s ++ shadowStmts {} [s]
   | .annotatedVarDecl b _ _ typeAnn initOpt =>
@@ -784,7 +809,9 @@ def checkTSStmt (ts : TSStatement) : Array Diagnostic :=
     let ctx : MutCtx :=
       { info := some (EscapeAnalysis.analyze (params.map (·.1)) body),
         noMutZone := throwsAnn != .absent,
-        allowEligible := true }
+        allowEligible := true,
+        aliasEnv := aliasEnv,
+        bindingEnv := buildParamEnv params }
     let paramTypeDiags := params.foldl (fun acc (_, ann, _, _) =>
       acc ++ checkAnn b.loc ann) #[]
     let bodyDiags := checkStmt ctx body
@@ -802,7 +829,7 @@ def checkTSStmt (ts : TSStatement) : Array Diagnostic :=
           acc ++ pd ++ checkType b.loc ret) #[]
   | .typeAliasDecl b _ _ ty => checkType b.loc ty
   | .enumDecl _ _ _ _ => #[]
-  | .declareStmt _ inner => checkTSStmt inner
+  | .declareStmt _ inner => checkTSStmt aliasEnv inner
   | .importDecl _ _ _ => #[]
 
 /-- Check a TS-level statement for switch lowerability and exhaustiveness
@@ -826,7 +853,7 @@ def checkTSStmtSwitch (aliasEnv : Std.HashMap String TSType) (ts : TSStatement)
 def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
   let aliasEnv := buildAliasEnv prog.body
   prog.body.foldl (fun acc ts =>
-    acc ++ checkTSStmt ts ++ checkTSStmtSwitch aliasEnv ts) #[]
+    acc ++ checkTSStmt aliasEnv ts ++ checkTSStmtSwitch aliasEnv ts) #[]
 
 /-- Subset check with `@thales-expect-error` directives applied.
     Suppresses TH diagnostics on lines covered by matching directives and

@@ -142,6 +142,18 @@ def t_shadowedLoopVarCleanBody : IO Unit := do
   if info.doModeLowerable then
     throw (IO.userError "expected !doModeLowerable (conservative: outer same-named mutated var)")
 
+-- ── labeled loop (no labeled break) → poisons do-mode ───────────────────────
+-- A label wrapping a for-of, even with no labeled break/continue in the body,
+-- must set hasUnloweredLoopShape: `emitBodyDo` has no labeledStmt arm, so the
+-- label would fall through to the loud marker on any accepted program.
+def t_labeledLoopNoBreak : IO Unit := do
+  let info ← analyzeFirstFuncLoop
+    "function f(xs: number[]): number { let t = 0; outer: for (const x of xs) { t += x; } return t; }"
+  unless info.hasUnloweredLoopShape do
+    throw (IO.userError "expected hasUnloweredLoopShape (labeled loop, no break), got false")
+  if info.doModeLowerable then
+    throw (IO.userError "expected !doModeLowerable (labeled loop, no break), got true")
+
 #eval t1
 #eval t2
 #eval t3
@@ -153,3 +165,4 @@ def t_shadowedLoopVarCleanBody : IO Unit := do
 #eval t9
 #eval t_shadowedLoopVar
 #eval t_shadowedLoopVarCleanBody
+#eval t_labeledLoopNoBreak

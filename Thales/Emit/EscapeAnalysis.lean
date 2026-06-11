@@ -351,7 +351,20 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
       let acc := walkStmt { acc with hasTryShape := true } b
       let acc := match h with | some (.mk _ _ hb _) => walkStmt acc hb | none => acc
       match f with | some s => walkStmt acc s | none => acc
-  | .labeledStmt _ _ b | .withStmt _ _ b => walkStmt acc b
+  | .withStmt _ _ b => walkStmt acc b
+  | .labeledStmt _ _ b =>
+      -- Labels on loops are rejected wholesale: `emitBodyDo` has no labeledStmt
+      -- lowering, so any label wrapping a loop (directly or transitively through
+      -- another labeledStmt) must poison do-mode.  Labeled break/continue inside
+      -- bodies are already poisoned separately (hasLabeledBreakOrContinue).
+      let acc := walkStmt acc b
+      let rec isLabeledLoop : Statement → Bool
+        | .whileStmt _ _ _ | .doWhileStmt _ _ _ | .forStmt _ _ _ _ _
+        | .forInStmt _ _ _ _ | .forOfStmt _ _ _ _ _ => true
+        | .labeledStmt _ _ inner => isLabeledLoop inner
+        | _ => false
+      if isLabeledLoop b then { acc with hasUnloweredLoopShape := true }
+      else acc
   | .functionDecl _ _ _ body _ _ =>
       -- nested function declaration: everything it references is a capture
       { acc with capturedRefs := insertAll acc.capturedRefs (identsStmt body) }

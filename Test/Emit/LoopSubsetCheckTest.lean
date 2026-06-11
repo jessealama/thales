@@ -117,6 +117,29 @@ def testForOfNestedFunctionTH0010 : IO Unit := expectTH
   "function outer(xs: number[]): number { function inner() { for (const x of xs) { } } return 0; }"
   ["TH0010"]
 
+-- ── Case 13: for-of over a string parameter → TH0010 ──
+-- String is not an array type; for-of over a string admits only 1-char strings
+-- in TS but Lean binds c : Char — semantics diverge (surrogate handling etc.).
+def testForOfStringParamTH0010 : IO Unit := expectTH
+  "function count(s: string): number { let n = 0; for (const c of s) { n += 1; } return n; }"
+  ["TH0010"]
+
+-- ── Case 14: for-of over a body-declared array → TH0010 ──
+-- Conservative params-only admission: the bindingEnv only contains typed
+-- parameters, so a body-declared `const ys: number[] = [1]` does not resolve
+-- to `.array _` in the for-of RHS check, and is rejected. This is sound
+-- (the output would be correct, but we document the limitation conservatively).
+def testForOfBodyDeclArrayTH0010 : IO Unit := expectTH
+  "function f(): number { const ys: number[] = [1, 2, 3]; let t = 0; for (const y of ys) { t += y; } return t; }"
+  ["TH0010"]
+
+-- ── Case 15: labeled for-of without labeled break → TH0010 ──
+-- `emitBodyDo` has no labeledStmt lowering; labels on loops are poisoned
+-- wholesale regardless of whether a labeled break/continue appears in the body.
+def testLabeledForOfNoBreakTH0010 : IO Unit := expectTH
+  "function f(xs: number[]): number { let t = 0; outer: for (const x of xs) { t += x; } return t; }"
+  ["TH0010"]
+
 #eval testForOfAdmitted
 #eval testCanonicalForAdmitted
 #eval testWhileTH0010
@@ -129,3 +152,6 @@ def testForOfNestedFunctionTH0010 : IO Unit := expectTH
 #eval testUnlabeledBreakInForOfOk
 #eval testCanonicalForLengthBound
 #eval testForOfNestedFunctionTH0010
+#eval testForOfStringParamTH0010
+#eval testForOfBodyDeclArrayTH0010
+#eval testLabeledForOfNoBreakTH0010
