@@ -69,10 +69,14 @@ inductive LExpr where
   -- end in a `ret` (the emitter guarantees this; a fall-through path would
   -- render a do-block with no value).
   | idRunDo (stmts : List LDoStmt)
+  -- Integer range `[0:n]` for `for` loops (#25). Renders as `[0:{n}]`.
+  -- Bracket-delimited, so atomic — renderExprAtom must NOT wrap it in parens.
+  | rangeTo (stop : LExpr)
 
 /-- A statement inside an `Id.run do` block (#24). Only what do-mode
     emission needs: mutable/immutable lets, reassignment, early return,
-    statement-position `if`, and `match` with statement-list arms. -/
+    statement-position `if`, `match` with statement-list arms, and for
+    loops with break/continue (#25). -/
 inductive LDoStmt where
   | letMut (name : String) (ty : Option LType) (value : LExpr)   -- let mut n := e
   | letPure (name : String) (ty : Option LType) (value : LExpr)  -- let n := e
@@ -81,6 +85,10 @@ inductive LDoStmt where
   -- `if c then …` / `if c then … else …`; an empty branch renders `pure ()`
   | ifDo (cond : LExpr) (thn : List LDoStmt) (els : List LDoStmt)
   | matchDo (scrutinee : LExpr) (arms : List (LPattern × List LDoStmt))
+  -- `for v in iter do …` (#25); may run zero iterations, so not terminating
+  | forDo (var : String) (iter : LExpr) (body : List LDoStmt)
+  | breakDo                                                       -- break
+  | continueDo                                                    -- continue
 
 end
 
@@ -98,6 +106,8 @@ partial def doStmtsTerminate (stmts : List LDoStmt) : Bool :=
       !els.isEmpty && doStmtsTerminate thn && doStmtsTerminate els
   | some (.matchDo _ arms) =>
       !arms.isEmpty && arms.all fun (_, ss) => doStmtsTerminate ss
+  -- Deliberately covers letMut/letPure/assign/forDo/breakDo/continueDo.
+  -- forDo may run zero iterations and so is never itself terminating (#25).
   | some _ => false
 
 /-- Top-level declaration. -/
@@ -256,6 +266,8 @@ mutual
         s!"(do\n{indent body})"
     | .idRunDo stmts =>
         s!"Id.run do\n{indent (renderDoStmts stmts)}"
+    | .rangeTo stop =>
+        s!"[0:{renderExpr stop}]"
 
   /-- Render a do-statement list; an empty list renders `pure ()` so empty
       `if` branches stay valid Lean. -/
@@ -283,6 +295,10 @@ mutual
         let armsS := arms.map fun (p, stmts) =>
           s!"| {renderPattern p} =>\n{indent (renderDoStmts stmts)}"
         s!"match {renderExpr scrut} with\n{lines armsS}"
+    | .forDo var iter body =>
+        s!"for {var} in {renderExpr iter} do\n{indent (renderDoStmts body)}"
+    | .breakDo    => "break"
+    | .continueDo => "continue"
 
   partial def renderExprAtom : LExpr → String
     | .var n      => n
@@ -293,6 +309,8 @@ mutual
     | .bool false => "false"
     | .ctor n []  => s!".{n}"
     | .proj obj field => s!"{renderExprAtom obj}.{field}"
+    -- rangeTo is bracket-delimited and therefore atomic; no extra parens
+    | .rangeTo stop => s!"[0:{renderExpr stop}]"
     | other       => s!"({renderExpr other})"
 
 end

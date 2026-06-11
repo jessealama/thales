@@ -96,7 +96,86 @@ def matchExpected : String :=
 
 def t4 : IO Unit := expectRender (renderExpr matchBody) matchExpected
 
+-- forDo / breakDo / continueDo / rangeTo (#25) ----------------------------
+
+-- t5: idRunDo with a forDo loop (letMut + for + ret)
+def forLoopBody : LExpr :=
+  .idRunDo [
+    .letMut "t" none (.float 0.0),
+    .forDo "x" (.var "xs") [
+      .assign "t" (.binOp "+" (.var "t") (.var "x"))
+    ],
+    .ret (.var "t")
+  ]
+
+def forLoopExpected : String :=
+  "Id.run do\n" ++
+  "  let mut t := 0.000000\n" ++
+  "  for x in xs do\n" ++
+  "    t := (t + x)\n" ++
+  "  return t"
+
+def t5 : IO Unit := expectRender (renderExpr forLoopBody) forLoopExpected
+
+-- t6: forDo with rangeTo iter and breakDo body
+def rangeBreakStmt : String :=
+  renderDoStmt (.forDo "i" (.rangeTo (.proj (.var "xs") "length")) [.breakDo])
+
+def rangeBreakExpected : String :=
+  "for i in [0:xs.length] do\n" ++
+  "  break"
+
+def t6 : IO Unit := expectRender rangeBreakStmt rangeBreakExpected
+
+-- t7: continueDo renders "continue" inside a forDo body
+def continueStmt : String :=
+  renderDoStmt (.forDo "i" (.var "arr") [.continueDo])
+
+def continueExpected : String :=
+  "for i in arr do\n" ++
+  "  continue"
+
+def t7 : IO Unit := expectRender continueStmt continueExpected
+
+-- t8: nested forDo — indentation doubles
+def nestedForStmt : String :=
+  renderDoStmt (.forDo "i" (.var "outer") [
+    .forDo "j" (.var "inner") [
+      .assign "s" (.var "s")
+    ]
+  ])
+
+def nestedForExpected : String :=
+  "for i in outer do\n" ++
+  "  for j in inner do\n" ++
+  "    s := s"
+
+def t8 : IO Unit := expectRender nestedForStmt nestedForExpected
+
+-- t9: doStmtsTerminate — forDo alone is false; forDo then ret is true
+def t9 : IO Unit := do
+  unless !doStmtsTerminate [.forDo "i" (.var "xs") [.ret (.var "i")]] do
+    throw (IO.userError "forDo alone should not terminate")
+  unless doStmtsTerminate [.forDo "i" (.var "xs") [], .ret (.var "x")] do
+    throw (IO.userError "forDo then ret should terminate")
+
+-- t10: empty forDo body renders "pure ()" as the body
+def emptyForStmt : String :=
+  renderDoStmt (.forDo "i" (.var "xs") [])
+
+def emptyForExpected : String :=
+  "for i in xs do\n" ++
+  "  pure ()"
+
+def t10 : IO Unit := expectRender emptyForStmt emptyForExpected
+
 #eval t1
 #eval t2
 #eval t3
 #eval t4
+#eval t5
+#eval t6
+#eval t7
+#eval t8
+#eval t9
+#eval t10
