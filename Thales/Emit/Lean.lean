@@ -935,17 +935,22 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
         | none => fallback
   | .blockStmt _ inner :: rest => emitBodyEnv env (inner ++ rest)
   | .exprStmt _ _ :: rest      => emitBodyEnv env rest
-  | .switchStmt _ discriminant cases :: rest =>
+  | .switchStmt _ discriminant cases :: _ =>
+      -- SubsetCheck (TH0041) guarantees the discriminated `ident.field`
+      -- shape with all-return arms, so the code after the switch is dead
+      -- and a fallback that DROPS the switch is never correct — the
+      -- unresolved cases render the loud marker instead (#44).
+      let unlowered : LExpr := .var "(unsupported: switch not lowerable)"
       match discriminant with
       | .memberExpr _ (.identifier _ scrutName) (.identifier _ _fieldName) false _ =>
           match env.bindingEnv.get? scrutName with
-          | none => emitBodyEnv env rest
+          | none => unlowered
           | some rawTy =>
               let resolvedTy := resolveTypeAlias env rawTy
               match resolvedTy with
               | .union branches =>
                   match asDiscriminated branches with
-                  | none => emitBodyEnv env rest
+                  | none => unlowered
                   | some ctors =>
                       let arms : List (LPattern × LExpr) := cases.filterMap fun
                         | .mk _ (some (.literal _ (.string caseLit) _)) caseBody =>
@@ -959,12 +964,24 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
                                 let bodyExpr := emitBodyEnv env substBody
                                 some (pat, bodyExpr)
                         | _ => none
+                      -- A `default` arm lowers as the wildcard arm (#44; it
+                      -- used to render `unreachable!`, a runtime panic on
+                      -- any uncovered constructor). Its body gets no field
+                      -- substitution — there is no single-constructor
+                      -- context — so field references in it fail loudly.
+                      let defaultBody? := cases.findSome? fun
+                        | .mk _ none ss => some ss
+                        | _ => none
                       let allArms :=
                         if arms.length >= ctors.length then arms
-                        else arms ++ [(.wildcard, .var "unreachable!")]
+                        else
+                          let wild : LExpr := match defaultBody? with
+                            | some ss => emitBodyEnv env ss
+                            | none => .var "unreachable!"
+                          arms ++ [(.wildcard, wild)]
                       .match_ (.var scrutName) allArms
-              | _ => emitBodyEnv env rest
-      | _ => emitBodyEnv env rest
+              | _ => unlowered
+      | _ => unlowered
   | .throwStmt _ arg :: _ =>
       if env.throwTypes.isEmpty then
         -- SubsetCheck already flagged TH0060.

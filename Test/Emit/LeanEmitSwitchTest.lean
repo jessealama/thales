@@ -48,5 +48,22 @@ function f(t: T): number {
     if (out.splitOn "unreachable!").length ≥ 2 then
       throw (IO.userError s!"unexpected '| _ => unreachable!' tail in:\n{out}")
 
+def testDefaultLowersAsWildcard : IO Unit := do
+  -- A `default` arm becomes the wildcard arm's body (#44), not
+  -- `unreachable!`.
+  let src := "
+type T = {kind: 'a', x: number} | {kind: 'b', y: number};
+function f(t: T): number {
+  switch (t.kind) { case 'a': return t.x; default: return 0; }
+}"
+  expectEmit src "M" ["| .a x =>", "| _ =>", "0.000000"]
+  match parseTSSourceNative src with
+  | .error e => throw (IO.userError s!"parse: {e}")
+  | .ok prog =>
+    let out := emit prog "M"
+    if (out.splitOn "unreachable!").length ≥ 2 then
+      throw (IO.userError s!"unexpected 'unreachable!' in:\n{out}")
+
 #eval testSwitchToMatch
 #eval testNoUnreachableTailWhenExhaustive
+#eval testDefaultLowersAsWildcard

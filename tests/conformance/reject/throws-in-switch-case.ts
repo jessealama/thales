@@ -4,6 +4,8 @@
 // that silently skipped `switchStmt`.
 
 function classify(x: number): string {
+  // Plain-identifier scrutinee: unlowerable switch shape (#44).
+  // @thales-expect-error TH0041
   switch (x) {
     case 0:
       return 'zero';

@@ -80,6 +80,7 @@ inductive ThalesKind where
   | classNotSupported
   | inheritanceNotSupported
   | switchNotExhaustive (missingKinds : List String)
+  | switchNotLowerable
   | cannotVerifyTermination (funcName : String)
   -- @throws / @total diagnostics (TH0060–TH0070)
   -- TH0061 (unusedThrowsAnnotation), TH0062 (untypedCatch), TH0064
@@ -125,6 +126,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .classNotSupported => 30
   | .inheritanceNotSupported => 31
   | .switchNotExhaustive _ => 40
+  | .switchNotLowerable => 41
   | .cannotVerifyTermination _ => 50
   | .unannotatedThrow _ => 60
   | .nonRecordThrow => 63
@@ -168,6 +170,8 @@ def ThalesKind.message : ThalesKind → String
   | .inheritanceNotSupported => "Inheritance ('extends') is not supported"
   | .switchNotExhaustive missingKinds =>
     s!"Non-exhaustive switch on discriminated union (missing: {String.intercalate ", " missingKinds})"
+  | .switchNotLowerable =>
+    "Switch not supported here: dispatch on a discriminated-union field (e.g. `switch (shape.kind)`) with every arm ending in `return`"
   | .cannotVerifyTermination funcName =>
     s!"Cannot verify termination of '{funcName}'; add @decreasing hint or restructure"
   | .unannotatedThrow .fromThrow =>
