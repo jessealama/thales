@@ -1184,18 +1184,18 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
       -- The Lean range-loop binder `i` is a `Nat`; TS uses `number` (Float),
       -- so the body needs a shim `let i : Float := i.toFloat` inserted first.
       -- The shim shadows the Nat `i` with a Float for all downstream uses.
-      -- The bound is either a Nat literal (`.inl n`) or `arr.length` (`.inr
-      -- arrName`); the latter is the same Nat-valued `arr.length` as in the
-      -- `arr.length` lowering, NOT the `.toFloat`-suffixed form used for
-      -- arithmetic — range bounds are Nat, so no coercion is needed there.
+      -- The bound is either a Nat literal (`.inl n`) or `arr.size` (`.inr
+      -- arrName`); the latter emits `arr.size` (a Nat, Lean 4's Array.size),
+      -- NOT the `Array.toNaturalSize`-wrapped form used for arithmetic —
+      -- range bounds are Nat, so no coercion is needed there.
       | .canonicalFor i bound body =>
           let iterExpr : LExpr :=
             match bound with
             | .inl n    => .rangeTo (.int (Int.ofNat n))
             | .inr arrName =>
-                -- `arr.length` as a Nat — matches Array.size, which is what
-                -- the range loop expects.
-                .rangeTo (.proj (.var arrName) "length")
+                -- `arr.size` as a Nat — Array.size is the Lean 4 name for the
+                -- array's length; the range loop expects a Nat.
+                .rangeTo (.proj (.var arrName) "size")
           -- The shim inserts a Float-typed `i` that shadows the Nat binder.
           let shim : LDoStmt :=
             .letPure i (some (.const "Float")) (.proj (.var i) "toFloat")

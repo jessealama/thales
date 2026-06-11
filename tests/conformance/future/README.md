@@ -24,15 +24,6 @@ workflow is:
 
 ## What's currently parked
 
-- `loop-forof-sum.ts`, `loop-forof-find.ts`, `loop-break-continue.ts`,
-  `loop-for-literal-bound.ts`, `loop-for-length-bound.ts`,
-  `loop-nested-forof.ts`, `loop-forof-ifelse.ts`, `loop-total-forof.ts` —
-  the accept-bucket targets for #25 (for-of and canonical C-style for
-  loops via do-mode). All eight pass `tsc --strict` and run under `tsx`;
-  thales currently rejects each with TH0010 (the two C-style fixtures
-  additionally draw spurious TS2304 for the loop variable — the checker
-  drops `for`-init declarations, fixed as part of #25). Design:
-  `.claude/superpowers/specs/2026-06-11-for-of-loops-design.md` (local).
 - `0081-default-value.ts`, `0081-generic-arg.ts`,
   `0081-class-property.ts`, `0081-spread-arg.ts` — additional contexts
   in which a plain `number` should be rejected as unassignable to a
