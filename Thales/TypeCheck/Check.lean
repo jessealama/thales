@@ -24,6 +24,20 @@ private def collectDeclaredBindings : Statement → List (String × TSType)
   | .blockStmt _ stmts => stmts.flatMap collectDeclaredBindings
   | _ => []
 
+/-- tsc-style literal widening for mutable positions (#24): a fresh literal
+    type widens to its base primitive when it seeds a mutable binding's
+    declared type or a variable's post-assignment flow type. -/
+partial def widenLiteralType : TSType → TSType
+  | .numberLit _ => .number
+  | .stringLit _ => .string
+  | .booleanLit _ => .boolean
+  | .paren inner => widenLiteralType inner
+  | .union members =>
+    match (members.map widenLiteralType).eraseDups with
+    | [single] => single
+    | ms => .union ms
+  | t => t
+
 /-- Collect all `var`-declared names from a JS statement, recursing into
     blocks/if/for/while/try but stopping at function boundaries. -/
 private partial def collectHoistedVarsJS : Statement → List String
@@ -548,11 +562,187 @@ partial def checkStatements (stmts : List TSStatement) : TypeCheckM Unit := do
 
 /-- Process a list of JS statements, pre-seeding scope with declared variable names -/
 partial def checkJSStatements (stmts : List Statement) : TypeCheckM Unit := do
-  -- Pre-seed scope with all variable declarations using annotation types where available
+  -- Pre-seed scope with all variable declarations using annotation types
+  -- where available (hoisting/forward refs); the sequential walker then
+  -- refines unannotated declarations and assignments as it goes (#24).
   let extraBindings := stmts.flatMap collectDeclaredBindings
-  withScopeAndDeclaredTypes extraBindings (do
-    for stmt in stmts do
-      checkJSStatementRaw stmt)
+  withScopeAndDeclaredTypes extraBindings (checkJSStatementsSeq stmts)
+
+/-- Check a declarator list, returning scope updates for unannotated
+    initialized declarations: the declared type is the widened initializer
+    type for mutable kinds (`let`/`var`), the exact synthesized type for
+    `const` (tsc keeps literal types on consts). Mirrors the checking that
+    `checkJSStatementRaw`'s `variableDecl` arm performs — callers must use
+    one or the other, never both, or initializers get double-synthesized. -/
+partial def checkDeclaratorsSeq (declarators : List VariableDeclarator)
+    (kind : VariableKind) : TypeCheckM (List (String × TSType)) := do
+  let mut updates : List (String × TSType) := []
+  for decl in declarators do
+    let (.mk _ pat init typeAnn) := decl
+    match pat with
+    | .identifier id =>
+      match typeAnn, init with
+      | some annTy, some expr =>
+        let initTyped ← synthJSExpr expr (some annTy)
+        checkAssignable initTyped.type annTy (exprLoc expr) (exprSourceName expr)
+        markAssigned id.name
+      | _, none =>
+        match kind with
+        | .let_ | .const => requireAssignmentCheck id.name
+        | .var => markAssigned id.name
+      | none, some expr =>
+        let initTyped ← synthJSExpr expr
+        markAssigned id.name
+        match kind with
+        | .let_ | .var => updates := updates ++ [(id.name, widenLiteralType initTyped.type)]
+        | .const => updates := updates ++ [(id.name, initTyped.type)]
+    | _ => pure ()
+  return updates
+
+/-- The flow type of `name` after an assignment whose RHS synthesized to
+    `rhsTy` (#24): the widened RHS if it is assignable to the declared type,
+    else the declared type (the assignment is ill-typed — TS2322 was already
+    emitted — and flow degrades to declared). `none` when nothing is known. -/
+partial def assignmentFlowType (name : String) (rhsTy : TSType) : TypeCheckM (Option TSType) := do
+  match ← lookupDeclaredType name with
+  | none => return none
+  | some declared =>
+    if declared == .any then return none
+    let widened := widenLiteralType rhsTy
+    if ← isSubtype widened declared then
+      return some widened
+    else
+      return some declared
+
+/-- A statement after which control can never reach the next statement in
+    sequence: it returns or throws on every path. Conservative (false when
+    unsure). -/
+partial def alwaysReturns : Statement → Bool
+  | .returnStmt _ _ => true
+  | .throwStmt _ _ => true
+  | .blockStmt _ ss => ss.any alwaysReturns
+  | .ifStmt _ _ c (some a) => alwaysReturns c && alwaysReturns a
+  | _ => false
+
+/-- Syntactic flow type of an assignment RHS: literals only (#24 v1).
+    Non-literal RHS degrades to the declared type at a branch join. -/
+partial def literalFlowType : Expression → Option TSType
+  | .literal _ (.number _) _ => some .number
+  | .literal _ (.string _) _ => some .string
+  | .literal _ (.boolean _) _ => some .boolean
+  | .literal _ .null _ => some .null_
+  | _ => none
+
+/-- Union a list of flow contributions, flattening nested unions and
+    dropping duplicates. -/
+partial def joinTypes (ts : List TSType) : TSType :=
+  let flat := ts.flatMap fun | .union ms => ms | t => [t]
+  match flat.eraseDups with
+  | [] => .any
+  | [single] => single
+  | ms => .union ms
+
+/-- The flow type `name` carries when `branch` falls through to the join:
+    its entry flow updated by the branch's top-level assignments (last one
+    wins; a literal RHS gives a precise widened type, anything else — and
+    any assignment buried in nested constructs — degrades to the declared
+    type, the #24 soundness floor). -/
+partial def branchExitFlow (declared : Std.HashMap String TSType)
+    (entry : Std.HashMap String TSType) (branch : Statement) (name : String)
+    : Option TSType :=
+  let stmts := match branch with
+    | .blockStmt _ ss => ss
+    | s => [s]
+  let declaredTy := declared[name]?
+  stmts.foldl (init := entry[name]?) fun acc s =>
+    match s with
+    | .exprStmt _ (.assignmentExpr _ op (.identifier _ n) rhs) =>
+      if n == name then
+        match op.compoundToBinary, literalFlowType rhs with
+        | none, some t => some (widenLiteralType t)
+        | _, _ => declaredTy <|> acc
+      else acc
+    | .exprStmt _ (.updateExpr _ _ (.identifier _ n) _) =>
+      if n == name then declaredTy <|> acc else acc
+    | _ =>
+      if (collectAssignedVars s).contains name then declaredTy <|> acc else acc
+
+/-- Continuation scope updates after an `if` (#24): joins the flow types of
+    every path that can reach the statement after the `if` — non-returning
+    branches (with their assignments applied) and, when there is no `else`,
+    the (negated-guard) fall-through path. Early-returning branches are
+    excluded, which is what makes `if (x === null) return 0;` narrow the
+    rest of the function. -/
+partial def ifJoinUpdates (test : Expression) (consequent : Statement)
+    (alternate : Option Statement) : TypeCheckM (List (String × TSType)) := do
+  let ctx ← read
+  let (thenEntry, elseEntry) ← (do
+    match Narrowing.extractGuard test with
+    | some guard => do
+      let resolved ← resolveBindingsForNarrowing guard ctx.bindings
+      pure (Narrowing.applyGuard guard resolved, Narrowing.applyNegatedGuard guard resolved)
+    | none => pure (ctx.bindings, ctx.bindings))
+  let mut paths : List (Std.HashMap String TSType × Option Statement) := []
+  if !alwaysReturns consequent then
+    paths := paths ++ [(thenEntry, some consequent)]
+  match alternate with
+  | some alt =>
+    if !alwaysReturns alt then
+      paths := paths ++ [(elseEntry, some alt)]
+  | none =>
+    paths := paths ++ [(elseEntry, none)]
+  if paths.isEmpty then
+    return []  -- continuation unreachable; leave the scope as-is
+  -- Vars whose flow can differ at the join: assigned in a branch, or
+  -- guard-narrowed on a surviving path.
+  let assigned := (collectAssignedVars consequent
+    ++ (match alternate with | some a => collectAssignedVars a | none => [])).eraseDups
+  let narrowed := (Narrowing.bindingsDiff thenEntry ctx.bindings
+    ++ Narrowing.bindingsDiff elseEntry ctx.bindings).map (·.1)
+  let mut updates : List (String × TSType) := []
+  for v in (assigned ++ narrowed).eraseDups do
+    let contributions := paths.filterMap fun (entry, branchOpt) =>
+      match branchOpt with
+      | some branch => branchExitFlow ctx.declaredTypes entry branch v
+      | none => entry[v]?
+    match contributions with
+    | [] => pure ()
+    | cs =>
+      let joined := joinTypes cs
+      if ctx.bindings[v]? != some joined then
+        updates := updates ++ [(v, joined)]
+  return updates
+
+/-- Statement-list walker with sequential scope threading (#24), mirroring
+    the continuation style of the top-level `checkStatements`: unannotated
+    `let` initializers install their widened type, assignment/update
+    statements refine the variable's flow type, and `if` statements join
+    their surviving paths' flows for the rest of the list. -/
+partial def checkJSStatementsSeq : List Statement → TypeCheckM Unit
+  | [] => pure ()
+  | stmt :: rest =>
+    match stmt with
+    | .variableDecl (.mk _ declarators kind) => do
+      let updates ← checkDeclaratorsSeq declarators kind
+      withScopeAndDeclaredTypes updates (checkJSStatementsSeq rest)
+    | .exprStmt _ expr@(.assignmentExpr _ _ (.identifier _ name) _) => do
+      let typed ← synthJSExpr expr
+      match ← assignmentFlowType name typed.type with
+      | some ty => withScope [(name, ty)] (checkJSStatementsSeq rest)
+      | none => checkJSStatementsSeq rest
+    | .exprStmt _ expr@(.updateExpr _ _ (.identifier _ name) _) => do
+      let _ ← synthJSExpr expr
+      -- `x++` preserves the declared (numeric) type; flow resets to declared.
+      match ← lookupDeclaredType name with
+      | some d => withScope [(name, d)] (checkJSStatementsSeq rest)
+      | none => checkJSStatementsSeq rest
+    | .ifStmt _ test consequent alternate => do
+      checkJSStatementRaw stmt
+      let updates ← ifJoinUpdates test consequent alternate
+      withScope updates (checkJSStatementsSeq rest)
+    | _ => do
+      checkJSStatementRaw stmt
+      checkJSStatementsSeq rest
 
 end
 

@@ -7,6 +7,7 @@
 import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Diagnostic
 import Thales.Emit.DirectiveApply
+import Thales.Emit.EscapeAnalysis
 import Std.Data.HashMap
 
 namespace Thales.Emit
@@ -30,32 +31,111 @@ private def mutatingMethodNames : List String :=
 private def mkThalesDiag (kind : ThalesKind) (loc : Option SourceLocation) : Diagnostic :=
   { kind := .thales kind, location := loc }
 
+/-- Mutation-routing context (#24). -/
+structure MutCtx where
+  /-- Eligibility info for the innermost enclosing function; `none` at
+      module level. -/
+  info : Option EscapeAnalysis.MutationInfo := none
+  /-- Inside a `@throws` function body or under `try`/`catch`. -/
+  noMutZone : Bool := false
+  /-- Whether eligible mutation is actually emittable here: true only for
+      `annotatedFuncDecl` bodies (the do-mode path). Arrow and function
+      EXPRESSIONS don't lower through `emitFuncDecl`, so their mutation
+      stays rejected in v1 even when the eligibility analysis would allow
+      it. -/
+  allowEligible : Bool := false
+
+/-- Parameter names of a JS-level function/arrow (typed params live on
+    `annotatedFuncDecl` and are handled separately). -/
+private def funcParamNames (params : List FunctionParam) : List String :=
+  params.filterMap fun
+    | .simple id        => some id.name
+    | .withDefault id _ => some id.name
+    | .rest id          => some id.name
+    | .pattern _        => none
+
+/-- Eligibility info for a nested function/arrow body. -/
+private def nestedInfo (params : List FunctionParam) (body : Statement)
+    : EscapeAnalysis.MutationInfo :=
+  EscapeAnalysis.analyze (funcParamNames params) body
+
+/-- Compound operators whose desugared binary op has a working Float
+    lowering. Everything except the (deferred, short-circuit) logical
+    family: the arithmetic ops lower to Lean operators, and `%`/bitwise/
+    shifts route through the JS-semantics runtime helpers (#32). -/
+private def emittableMutationOp : AssignmentOperator → Bool
+  | .orLogicalAssign | .andLogicalAssign | .nullishAssign => false
+  | _ => true
+
+/-- Route a statement-position mutation of identifier `name`.
+    Returns the rejection diagnostics; `#[]` means the mutation is allowed.
+    `emittable` is false for operators whose lowering isn't implemented. -/
+private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
+    (name : String) (logicalOp : Bool) (emittable : Bool) : Array Diagnostic :=
+  match ctx.info with
+  | none =>
+    -- Module-level mutation stays out of the subset.
+    #[mkThalesDiag (.cannotReassignVariable name) loc]
+  | some info =>
+    if info.consts.contains name then
+      -- Reassigning a `const` is tsc's TS2588; no TH code on top.
+      #[]
+    else if ctx.noMutZone then
+      #[mkThalesDiag (.mutationInThrowsContext name) loc]
+    else if logicalOp then
+      -- `&&=` / `||=` / `??=` are deferred (short-circuit semantics).
+      #[mkThalesDiag (.cannotReassignVariable name) loc]
+    else if !(info.params.contains name || info.initializedLets.contains name
+              || info.uninitializedLets.contains name) then
+      -- Not declared in this function: mutation of an outer-scope binding.
+      #[mkThalesDiag (.cannotMutateCapturedVariable name) loc]
+    else if info.capturedRefs.contains name then
+      #[mkThalesDiag (.cannotMutateCapturedVariable name) loc]
+    else if info.uninitializedLets.contains name
+            || info.narrowTested.contains name
+            || !info.doModeLowerable then
+      -- Still-rejected forms: `let` without initializer, variables whose
+      -- narrowing the emitter relies on, and functions whose body contains
+      -- a shape do-mode can't lower — an unlowerable switch, a
+      -- `try`/`catch` (#41), or a read of a narrow-tested variable outside
+      -- its test (#40). `doModeLowerable` is the same predicate
+      -- `emitFuncDecl` gates on; the two must never disagree.
+      #[mkThalesDiag (.cannotReassignVariable name) loc]
+    else if ctx.allowEligible && emittable then
+      -- Eligible mutation (`=`, arithmetic `OP=`, `++`/`--`) in a declared
+      -- function body: in subset, lowered to `Id.run do` by the emitter.
+      #[]
+    else
+      #[mkThalesDiag (.cannotReassignVariable name) loc]
+
 mutual
 
-/-- Check an expression for mutation violations. -/
-partial def checkExpr (expr : Expression) : Array Diagnostic :=
+/-- Check an expression for mutation violations. Assignment/update
+    expressions reaching this function are in EXPRESSION position
+    (statement-position ones are routed by `checkStmt`). -/
+partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
   match expr with
   | .assignmentExpr b _ left right =>
     let loc := b.loc
     let targetDiags : Array Diagnostic :=
       match left with
-      | .identifier _ name =>
-        #[mkThalesDiag (.cannotReassignVariable name) loc]
+      | .identifier _ _ =>
+        #[mkThalesDiag .assignmentInExpressionPosition loc]
       | .memberExpr _ _ _ computed _ =>
         if computed then
           #[mkThalesDiag .cannotAssignArrayElement loc]
         else
           #[mkThalesDiag .cannotAssignObjectProperty loc]
       | _ => #[]
-    targetDiags ++ checkExpr right
+    targetDiags ++ checkExpr ctx right
   | .updateExpr b _ argument _ =>
     let loc := b.loc
     let targetDiags : Array Diagnostic :=
       match argument with
-      | .identifier _ name =>
-        #[mkThalesDiag (.cannotReassignVariable name) loc]
+      | .identifier _ _ =>
+        #[mkThalesDiag .assignmentInExpressionPosition loc]
       | _ => #[]
-    targetDiags ++ checkExpr argument
+    targetDiags ++ checkExpr ctx argument
   | .callExpr b callee arguments _ =>
     let loc := b.loc
     let calleeDiags : Array Diagnostic :=
@@ -63,64 +143,70 @@ partial def checkExpr (expr : Expression) : Array Diagnostic :=
       | .memberExpr _ obj (.identifier _ propName) false _ =>
         if mutatingMethodNames.elem propName then
           #[mkThalesDiag (.cannotCallMutatingMethod propName) loc]
-            ++ checkExpr obj
+            ++ checkExpr ctx obj
         else
-          checkExpr callee
-      | _ => checkExpr callee
-    calleeDiags ++ (arguments.foldl (fun acc arg => acc ++ checkExpr arg) #[])
+          checkExpr ctx callee
+      | _ => checkExpr ctx callee
+    calleeDiags ++ (arguments.foldl (fun acc arg => acc ++ checkExpr ctx arg) #[])
   | .unaryExpr _ _ _ argument =>
-    checkExpr argument
+    checkExpr ctx argument
   | .binaryExpr _ _ left right =>
-    checkExpr left ++ checkExpr right
+    checkExpr ctx left ++ checkExpr ctx right
   | .logicalExpr _ _ left right =>
-    checkExpr left ++ checkExpr right
+    checkExpr ctx left ++ checkExpr ctx right
   | .memberExpr _ obj prop _ _ =>
-    checkExpr obj ++ checkExpr prop
+    checkExpr ctx obj ++ checkExpr ctx prop
   | .privateMemberExpr _ obj _ =>
-    checkExpr obj
+    checkExpr ctx obj
   | .conditionalExpr _ test consequent alternate =>
-    checkExpr test ++ checkExpr consequent ++ checkExpr alternate
+    checkExpr ctx test ++ checkExpr ctx consequent ++ checkExpr ctx alternate
   | .newExpr _ callee arguments =>
-    checkExpr callee ++ (arguments.foldl (fun acc arg => acc ++ checkExpr arg) #[])
+    checkExpr ctx callee ++ (arguments.foldl (fun acc arg => acc ++ checkExpr ctx arg) #[])
   | .chainExpr _ inner =>
-    checkExpr inner
+    checkExpr ctx inner
   | .sequenceExpr _ exprs =>
-    exprs.foldl (fun acc e => acc ++ checkExpr e) #[]
+    exprs.foldl (fun acc e => acc ++ checkExpr ctx e) #[]
   | .templateLiteral _ _ exprs =>
-    exprs.foldl (fun acc e => acc ++ checkExpr e) #[]
+    exprs.foldl (fun acc e => acc ++ checkExpr ctx e) #[]
   | .taggedTemplate _ tag quasi =>
-    checkExpr tag ++ checkExpr quasi
+    checkExpr ctx tag ++ checkExpr ctx quasi
   | .arrayExpr _ elements =>
     elements.foldl (fun acc optE =>
       match optE with
-      | some e => acc ++ checkExpr e
+      | some e => acc ++ checkExpr ctx e
       | none => acc) #[]
   | .objectExpr _ props =>
     props.foldl (fun acc p =>
       match p with
-      | .regular _ _ v _ _ _ => acc ++ checkExpr v
-      | .spread _ arg => acc ++ checkExpr arg) #[]
+      | .regular _ _ v _ _ _ => acc ++ checkExpr ctx v
+      | .spread _ arg => acc ++ checkExpr ctx arg) #[]
   -- TH0012: async function expressions — emit diagnostic, still recurse body
-  | .functionExpr b _ _ body _ async =>
+  | .functionExpr b _ params body _ async =>
+    let ctx' := { ctx with info := some (nestedInfo params body), allowEligible := false }
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
-      ++ checkStmt body
+      ++ checkStmt ctx' body
   -- TH0012: async arrow functions — emit diagnostic, still recurse body
-  | .arrowFunctionExpr b _ body _ async _ =>
+  | .arrowFunctionExpr b params body _ async _ =>
     let bodyDiags : Array Diagnostic :=
       match body with
-      | .inl e => checkExpr e
-      | .inr s => checkStmt s
+      | .inl e =>
+        -- Expression-bodied arrow: wrap so escape analysis sees one body.
+        let ctx' := { ctx with info := some (nestedInfo params (.exprStmt b e)), allowEligible := false }
+        checkExpr ctx' e
+      | .inr s =>
+        let ctx' := { ctx with info := some (nestedInfo params s), allowEligible := false }
+        checkStmt ctx' s
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
       ++ bodyDiags
   | .spreadElement _ arg =>
-    checkExpr arg
+    checkExpr ctx arg
   | .yieldExpr _ arg _ =>
     match arg with
-    | some e => checkExpr e
+    | some e => checkExpr ctx e
     | none => #[]
   -- TH0012: await expression — emit diagnostic, still recurse argument
   | .awaitExpr b arg =>
-    #[mkThalesDiag .asyncNotSupported b.loc] ++ checkExpr arg
+    #[mkThalesDiag .asyncNotSupported b.loc] ++ checkExpr ctx arg
   -- TH0030: class expressions — emit diagnostic, optionally TH0031 for extends, do NOT recurse
   | .classExpr b _ superClass _ =>
     let baseDiag := #[mkThalesDiag .classNotSupported b.loc]
@@ -135,19 +221,27 @@ partial def checkExpr (expr : Expression) : Array Diagnostic :=
   | .metaProperty _ _ _ => #[]
   | .patternExpr _ _ => #[]
 
-/-- Check a statement for subset violations (mutation + control-flow). -/
-partial def checkStmt (stmt : Statement) : Array Diagnostic :=
+/-- Check a statement for subset violations (mutation + control-flow).
+    Statement-position assignment/update to an identifier is routed through
+    `routeIdentMutation` (#24); everything else delegates to `checkExpr`. -/
+partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
   match stmt with
   | .emptyStmt _ => #[]
   | .debuggerStmt _ => #[]
   | .exprStmt _ expr =>
-    checkExpr expr
+    match expr with
+    | .assignmentExpr b op (.identifier _ name) right =>
+      routeIdentMutation ctx b.loc name op.isLogical (emittableMutationOp op)
+        ++ checkExpr ctx right
+    | .updateExpr b _ (.identifier _ name) _ =>
+      routeIdentMutation ctx b.loc name false true
+    | _ => checkExpr ctx expr
   | .blockStmt _ body =>
-    body.foldl (fun acc s => acc ++ checkStmt s) #[]
+    body.foldl (fun acc s => acc ++ checkStmt ctx s) #[]
   | .ifStmt _ test consequent alternate =>
-    checkExpr test
-      ++ checkStmt consequent
-      ++ (match alternate with | some s => checkStmt s | none => #[])
+    checkExpr ctx test
+      ++ checkStmt ctx consequent
+      ++ (match alternate with | some s => checkStmt ctx s | none => #[])
   -- TH0010: loop statements — emit once, do NOT recurse into body
   | .whileStmt b _ _ =>
     #[mkThalesDiag .loopNotSupported b.loc]
@@ -163,7 +257,7 @@ partial def checkStmt (stmt : Statement) : Array Diagnostic :=
   | .continueStmt _ _ => #[]
   | .returnStmt _ arg =>
     match arg with
-    | some e => checkExpr e
+    | some e => checkExpr ctx e
     | none => #[]
   -- TH0063 (non-record throw) is checked syntactically: primitive literals
   -- are rejected. TH0060 (unannotated throw) is no longer emitted here —
@@ -177,32 +271,36 @@ partial def checkStmt (stmt : Statement) : Array Diagnostic :=
       | .literal _ (.bigint _) _ =>
           #[mkThalesDiag .nonRecordThrow b.loc]
       | _ => #[]
-    nonRecord ++ checkExpr arg
+    nonRecord ++ checkExpr ctx arg
   -- Untyped `catch (e)` is the standard TS form (tsc rejects `catch (e: E)`
   -- with TS1196); thales infers the catch type from the try-body's Except.
+  -- Mutation anywhere under try/catch is TH0007 (#24): the exception path
+  -- emits pure Except match-chains, which do-mode cannot thread through.
   | .tryStmt _ block handler _ =>
-    let blockDiags := checkStmt block
+    let ctx' := { ctx with noMutZone := true }
+    let blockDiags := checkStmt ctx' block
     let handlerDiags := match handler with
-      | some (CatchClause.mk _ _ handlerBody _) => checkStmt handlerBody
+      | some (CatchClause.mk _ _ handlerBody _) => checkStmt ctx' handlerBody
       | none => #[]
     blockDiags ++ handlerDiags
   | .switchStmt _ discriminant cases =>
-    checkExpr discriminant
+    checkExpr ctx discriminant
       ++ cases.foldl (fun acc (SwitchCase.mk _ _ stmts) =>
-           stmts.foldl (fun acc2 s => acc2 ++ checkStmt s) acc) #[]
+           stmts.foldl (fun acc2 s => acc2 ++ checkStmt ctx s) acc) #[]
   | .labeledStmt _ _ body =>
-    checkStmt body
+    checkStmt ctx body
   | .withStmt _ obj body =>
-    checkExpr obj ++ checkStmt body
+    checkExpr ctx obj ++ checkStmt ctx body
   | .variableDecl (VariableDeclaration.mk _ decls _) =>
     decls.foldl (fun acc (VariableDeclarator.mk _ _ initOpt _) =>
       match initOpt with
-      | some e => acc ++ checkExpr e
+      | some e => acc ++ checkExpr ctx e
       | none => acc) #[]
   -- TH0012: async function declarations — emit diagnostic, still recurse body
-  | .functionDecl b _ _ body _ async =>
+  | .functionDecl b _ params body _ async =>
+    let ctx' := { ctx with info := some (nestedInfo params body), allowEligible := false }
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
-      ++ checkStmt body
+      ++ checkStmt ctx' body
   -- TH0030: class declarations — emit diagnostic, optionally TH0031 for extends, do NOT recurse
   | .classDecl b _ superClass _ =>
     let baseDiag := #[mkThalesDiag .classNotSupported b.loc]
@@ -211,15 +309,15 @@ partial def checkStmt (stmt : Statement) : Array Diagnostic :=
     | none => baseDiag
 
 /-- Check class elements for mutation violations. -/
-partial def checkClassElements (elements : List ClassElement) : Array Diagnostic :=
+partial def checkClassElements (ctx : MutCtx) (elements : List ClassElement) : Array Diagnostic :=
   elements.foldl (fun acc elem =>
     match elem with
     | .method (MethodDefinition.mk _ key value _ _ _ ..) =>
-      acc ++ checkExpr key ++ checkExpr value
+      acc ++ checkExpr ctx key ++ checkExpr ctx value
     | .field (FieldDefinition.mk _ key valueOpt _ _ ..) =>
-      acc ++ checkExpr key ++ (match valueOpt with | some v => checkExpr v | none => #[])
+      acc ++ checkExpr ctx key ++ (match valueOpt with | some v => checkExpr ctx v | none => #[])
     | .staticBlock _ body =>
-      body.foldl (fun acc2 s => acc2 ++ checkStmt s) acc) #[]
+      body.foldl (fun acc2 s => acc2 ++ checkStmt ctx s) acc) #[]
 
 end
 
@@ -454,18 +552,22 @@ private def buildParamEnv
 /-- Check a TS-level statement for mutation violations. -/
 def checkTSStmt (ts : TSStatement) : Array Diagnostic :=
   match ts with
-  | .js s => checkStmt s
+  | .js s => checkStmt {} s
   | .annotatedVarDecl b _ _ typeAnn initOpt =>
     checkAnn b.loc typeAnn
       ++ (match initOpt with
-          | some e => checkExpr e
+          | some e => checkExpr {} e
           | none => #[])
   -- TH0012: async annotated function declarations — emit diagnostic, still recurse body.
   -- TH0060 is no longer SubsetCheck's responsibility, so no suppression filter is needed.
-  | .annotatedFuncDecl b _ _ params returnType body _ async _throwsAnn _ =>
+  | .annotatedFuncDecl b _ _ params returnType body _ async throwsAnn _ =>
+    let ctx : MutCtx :=
+      { info := some (EscapeAnalysis.analyze (params.map (·.1)) body),
+        noMutZone := throwsAnn != .absent,
+        allowEligible := true }
     let paramTypeDiags := params.foldl (fun acc (_, ann, _, _) =>
       acc ++ checkAnn b.loc ann) #[]
-    let bodyDiags := checkStmt body
+    let bodyDiags := checkStmt ctx body
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
       ++ paramTypeDiags
       ++ checkAnn b.loc returnType

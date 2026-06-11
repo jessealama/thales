@@ -49,6 +49,8 @@ soundness check).
 | TH0003 | Mutation     | Cannot assign to object property                    |
 | TH0004 | Mutation     | Cannot call mutating method                         |
 | TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope  |
+| TH0006 | Mutation     | Assignment only supported in statement position     |
+| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`     |
 | TH0010 | Control flow | Loop not supported                                  |
 | TH0012 | Control flow | async/await not supported                           |
 | TH0020 | Types        | `any` not permitted                                 |
@@ -89,7 +91,29 @@ will grow over time.
 
 **Message:** `Cannot reassign variable`
 
-Rejected: `let x = 0; x = 1;`
+Since #24, function-local non-escaping mutation is **in subset** (emitted
+as `Id.run do` with `let mut`). TH0001 now covers only the still-rejected
+forms:
+
+- module-level reassignment: `let x = 0; x = 1;` at the top level;
+- logical assignment operators (`&&=`, `||=`, `??=`);
+- reassignment of a `let` declared without an initializer
+  (`let x: number; x = 1;` — give it an initializer instead);
+- reassignment of a variable whose narrowing the emitter relies on
+  (null- or undefined-tested, or refinement-predicate-tested, in a
+  condition);
+- mutation inside arrow/function-expression bodies (only declared
+  functions lower through the do-mode path in v1);
+- mutation in a function containing a `switch` shape do-mode cannot lower
+  (an arm that falls through via `break`, a `default` arm, or a scrutinee
+  that is not a discriminated-union field access);
+- mutation in a function whose body contains `try`/`catch` — the exception
+  path emits pure `Except` match-chains do-mode cannot thread through
+  (mutation _inside_ the `try` is the separate TH0007);
+- mutation in a function that reads a null/undefined-tested or
+  predicate-tested variable outside its test: the pure path bakes that
+  narrowing into its `match`/`dite` lowering, and do-mode carries no such
+  evidence, so the whole function stays on the pure path.
 
 [Details in subset.md#th0001--cannot-reassign-variable](./subset.md#th0001--cannot-reassign-variable)
 
@@ -131,7 +155,47 @@ Rejected: `arr.push(42);`
 
 Rejected: `let sum = 0; arr.forEach(x => { sum += x; });`
 
+A binding is mutable only when every reference to it (read _or_ write)
+occurs in the declaring function's own body. JS closures capture the live
+binding; Lean's `let mut` cannot be captured at all, and a read-only
+capture of a mutated variable would silently snapshot the value. Mutating
+a variable declared in an enclosing scope, or mutating a variable that any
+nested function/arrow mentions, is rejected. Workaround: restructure so
+the nested function takes the value as a parameter or returns the update.
+
 [Details in subset.md#th0005--cannot-mutate-variable-captured-by-enclosing-scope](./subset.md#th0005--cannot-mutate-variable-captured-by-enclosing-scope)
+
+---
+
+### TH0006 — Assignment only supported in statement position
+
+**Message:** `Assignment and update expressions are only supported as statements; assign in a separate statement`
+
+Rejected: `const y = (n = 1);`, `f(n += 1)`, `return n++;`
+
+Assignment and update expressions produce values in JavaScript, but the
+Thales subset treats mutation as a statement-level effect. Split the
+mutation into its own statement:
+
+```ts
+n++;
+return n - 1; // instead of `return n++;`
+```
+
+---
+
+### TH0007 — Cannot mutate inside `@throws` or `try`/`catch`
+
+**Message:** ``Cannot mutate variable inside a `@throws` function or `try`/`catch` ``
+
+Rejected: mutation in the body of a `@throws`-annotated function, or
+anywhere under a `try`/`catch`.
+
+The `@throws` path emits pure `Except` match-chains; the mutation path
+emits `Id.run do` blocks. Unifying them is staged as a follow-up, mirroring
+how `@throws`/`@total` exclusivity was staged. Workaround: hoist the
+mutation into a helper function without `@throws`, or compute the value
+purely.
 
 ---
 

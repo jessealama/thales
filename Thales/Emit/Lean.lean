@@ -2,6 +2,7 @@ import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Context
 import Thales.TypeCheck.Generic
 import Thales.Emit.LeanSyntax
+import Thales.Emit.EscapeAnalysis
 import Std.Data.HashMap
 
 namespace Thales.Emit
@@ -25,6 +26,19 @@ structure EmitEnv where
   -- Counter used to generate unique dite-binder names. Bumped each time
   -- a fresh `h_i` is introduced (e.g. for `is<T>`-narrowing shadow-lets).
   diteBinderCounter : Nat := 0
+
+/-- Binary ops lowered through JS-semantics runtime helpers (#32) instead
+    of bare Lean operators: no Float instances exist for these, and the JS
+    semantics (ToInt32 wrap, dividend-sign `%`) differ anyway. -/
+private def jsBinopHelper : BinaryOperator → Option String
+  | .mod    => some "jsMod"
+  | .bitand => some "jsBitAnd"
+  | .bitor  => some "jsBitOr"
+  | .bitxor => some "jsBitXor"
+  | .shl    => some "jsShl"
+  | .shr    => some "jsShr"
+  | .ushr   => some "jsUShr"
+  | _ => none
 
 /-- Resolve a TSType through one level of type-alias references. -/
 private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
@@ -290,6 +304,10 @@ private partial def substMemberAccessExpr (scrutName : String) : Expression → 
                   (args.map (substMemberAccessExpr scrutName)) opt
   | .arrayExpr b elems =>
       .arrayExpr b (elems.map (Option.map (substMemberAccessExpr scrutName)))
+  -- #24: switch arms may contain mutation; substitute inside the RHS
+  -- (the target identifier is a local, never `scrutName.field`).
+  | .assignmentExpr b op target rhs =>
+      .assignmentExpr b op target (substMemberAccessExpr scrutName rhs)
   | other => other
 
 /-- Rewrite `scrutName.field` in all expressions within a statement. -/
@@ -539,6 +557,14 @@ private def refinementKindPredicate : RefinementKind → String
   | .byte => "isByte"
   | .bit => "isBit"
 
+/-- Loud do-mode failure marker: renders as invalid Lean (same pattern as
+    the pure path's `(unsupported: throw without @throws)`), so a statement
+    `emitBodyDo` cannot lower breaks the build instead of being silently
+    dropped. `SubsetCheck`'s `doModeLowerable` gate should make this
+    unreachable; reaching it means the two have drifted. -/
+private def unloweredDoStmt : List LDoStmt :=
+  [.ret (.var "(unsupported: statement not lowerable in do-mode)")]
+
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
@@ -578,14 +604,20 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
       .proj (.var varName) "isSome"
   -- General binary expressions: when the op is arithmetic, relational, or
   -- equality, project `.val` off any refinement-typed identifier operands
-  -- so the operation elaborates on plain `Float`.
+  -- so the operation elaborates on plain `Float`. `%`, bitwise, and shift
+  -- ops route through JS-semantics runtime helpers (#32) — bare Lean
+  -- operators have no Float instances (and the wrong semantics anyway).
   | .binaryExpr _ op left right =>
       let lExpr := emitExprEnv env left
       let rExpr := emitExprEnv env right
-      if arithBinaryOp op || eqBinaryOp op then
-        .binOp (binaryOpStr op) (coerceToFloat env left lExpr) (coerceToFloat env right rExpr)
-      else
-        .binOp (binaryOpStr op) lExpr rExpr
+      match jsBinopHelper op with
+      | some helper =>
+          .app (.var helper) [coerceToFloat env left lExpr, coerceToFloat env right rExpr]
+      | none =>
+        if arithBinaryOp op || eqBinaryOp op then
+          .binOp (binaryOpStr op) (coerceToFloat env left lExpr) (coerceToFloat env right rExpr)
+        else
+          .binOp (binaryOpStr op) lExpr rExpr
   -- Logical expressions
   | .logicalExpr _ .«and» left right =>
       .binOp "&&" (emitExprEnv env left) (emitExprEnv env right)
@@ -979,6 +1011,134 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
 partial def emitBody : List Statement → LExpr :=
   emitBodyEnv {}
 
+/-- #24 do-mode lowering: the body of a function with an eligible
+    statement-position mutation, as a list of `Id.run do` statements.
+    Only shapes SubsetCheck admits into do-mode arrive here — straight-line
+    mutation, declarations, `return`, `if`/`else`, and discriminated-union
+    switches; anything else was rejected upstream
+    (TH0001/TH0005/TH0006/TH0007/TH0010 …). A statement this function has
+    no lowering for renders the loud `(unsupported: …)` marker — invalid
+    Lean — rather than being dropped: silent divergence from the TS
+    behavior is the one failure mode the conformance harness can't catch
+    when the emitted file still compiles. -/
+partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
+    : List Statement → List LDoStmt
+  | .returnStmt _ (some e) :: _ =>
+      let emitted :=
+        ((emitRefinementLiteral env.aliasEnv env.retTy e)
+          <|> (emitLiteralAsCtor env.aliasEnv env.retTy e))
+          |>.getD (emitExprEnv env e)
+      [.ret (wrapReturn env.retTy emitted)]
+  | .returnStmt _ none :: _ => [.ret (.var "()")]
+  | .variableDecl (.mk _ decls _) :: rest =>
+      emitVarDeclDo env info decls rest
+  -- `x = e` / `x OP= e`: compound forms desugar to `x := x OP e` so emission
+  -- reuses the binary-op lowering (refinement projection, string concat, …).
+  | .exprStmt _ (.assignmentExpr b op (.identifier _ name) rhs) :: rest =>
+      let value : LExpr :=
+        match op.compoundToBinary with
+        | some binOp =>
+            emitExprEnv env (.binaryExpr b binOp (.identifier b name) rhs)
+        | none => emitExprEnv env rhs   -- plain `=` (logical never reaches do-mode)
+      .assign name value :: emitBodyDo env info rest
+  -- `x++` / `x--` desugar to `x := x ± 1`.
+  | .exprStmt _ (.updateExpr b op (.identifier _ name) _) :: rest =>
+      let one : Expression := .literal b (.number 1) "1"
+      let binOp : BinaryOperator := match op with
+        | .inc => .add
+        | .dec => .sub
+      .assign name (emitExprEnv env (.binaryExpr b binOp (.identifier b name) one))
+        :: emitBodyDo env info rest
+  | .blockStmt _ inner :: rest => emitBodyDo env info (inner ++ rest)
+  -- `if`/`else` in statement position: branches lower WITHOUT the
+  -- continuation appended (do-notation gives statement semantics — the
+  -- pure path's continuation-into-branches trick at `emitBodyEnv` does
+  -- not apply), so mutation inside a branch stays visible after it and
+  -- `return` inside a branch is do-notation's native early return.
+  | .ifStmt _ cond thn elsOpt :: rest =>
+      let stmtsOf : Statement → List Statement := fun s =>
+        match s with
+        | .blockStmt _ ss => ss
+        | other => [other]
+      let thnDo := emitBodyDo env info (stmtsOf thn)
+      let elsDo := match elsOpt with
+        | some els => emitBodyDo env info (stmtsOf els)
+        | none => []
+      .ifDo (emitExprEnv env cond) thnDo elsDo :: emitBodyDo env info rest
+  | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
+  -- Discriminated-union switch, do-mode twin of `emitBodyEnv`'s arm.
+  -- EscapeAnalysis guarantees every arm returns and there is no `default`
+  -- (`hasUnloweredSwitchShape` keeps anything else out of do-mode), so
+  -- `rest` after the switch is dead code and is dropped.
+  | .switchStmt _ discriminant cases :: _ =>
+      -- `hasUnloweredSwitchShape` guarantees the `ident.field` discriminant
+      -- shape with all-return arms and no `default`, so `rest` is dead code
+      -- and a fallback that DROPS the switch is never correct — the
+      -- non-discriminated cases render the loud marker instead.
+      match discriminant with
+      | .memberExpr _ (.identifier _ scrutName) (.identifier _ _fieldName) false _ =>
+          (match env.bindingEnv.get? scrutName with
+          | some rawTy =>
+            (match resolveTypeAlias env rawTy with
+            | .union branches =>
+              (match asDiscriminated branches with
+              | some ctors =>
+                  let arms : List (LPattern × List LDoStmt) := cases.filterMap fun
+                    | .mk _ (some (.literal _ (.string caseLit) _)) caseBody =>
+                        (match ctors.find? (fun (ctorName, _) => ctorName == caseLit) with
+                        | some (_ctorName, fields) =>
+                            let fieldNames := fields.map (·.1)
+                            let pat : LPattern := .ctor caseLit (fieldNames.map .var)
+                            let substBody := caseBody.map (substMemberAccessStmt scrutName)
+                            some (pat, emitBodyDo env info substBody)
+                        | none => none)
+                    | _ => none
+                  let allArms :=
+                    if arms.length >= ctors.length then arms
+                    else arms ++ [(.wildcard, [.ret (.var "unreachable!")])]
+                  [.matchDo (.var scrutName) allArms]
+              | none => unloweredDoStmt)
+            | _ => unloweredDoStmt)
+          | none => unloweredDoStmt)
+      | _ => unloweredDoStmt
+  -- A list that ends without `return` is a branch falling through to the
+  -- code after its `if` — emit nothing. The function-level trailing
+  -- `return ()` (for void bodies) is appended by `emitFuncDecl`.
+  | [] => []
+  -- Genuinely effect-free statements.
+  | .emptyStmt _ :: rest | .debuggerStmt _ :: rest => emitBodyDo env info rest
+  -- Anything else reaching here is a SubsetCheck/emitter disagreement
+  -- about do-mode lowerability — fail loudly (invalid Lean), never drop.
+  | _ :: _ => unloweredDoStmt
+
+/-- Declarator lowering inside do-mode: mutated names become `let mut`,
+    everything else stays an immutable `let`. Mirrors `emitVarDecl`'s
+    refinement-literal wrapping and bindingEnv threading. -/
+partial def emitVarDeclDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
+    (decls : List VariableDeclarator) (rest : List Statement) : List LDoStmt :=
+  match decls with
+  | [] => emitBodyDo env info rest
+  | d :: moreDecls =>
+      match d with
+      | .mk _ (.identifier id) init typeAnnotation =>
+          let ty := typeAnnotation.map emitType
+          let targetTy : Option TSType := typeAnnotation
+          let initExpr := match init with
+            | some e =>
+                ((emitRefinementLiteral env.aliasEnv targetTy e)
+                  <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
+                  |>.getD (emitExprEnv env e)
+            | none   => .var "()"
+          let env' :=
+            match typeAnnotation with
+            | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
+            | none   => env
+          let bind := if info.mutated.contains id.name
+            then LDoStmt.letMut id.name ty initExpr
+            else LDoStmt.letPure id.name ty initExpr
+          bind :: emitVarDeclDo env' info moreDecls rest
+      | _ => emitVarDeclDo env info moreDecls rest
+
 end
 
 /-- Lower a top-level `console.log(...)` call to its IO action, or `none`
@@ -1101,9 +1261,33 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     normalizedParams.foldl (fun m (n, t) => m.insert n t) {}
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
                          throwTypes := throws, funcThrowsEnv, funcParamTypes }
-  let bodyExpr := match body with
-    | .blockStmt _ stmts => emitBodyEnv env stmts
-    | other              => emitBodyEnv env [other]
+  let stmts := match body with
+    | .blockStmt _ ss => ss
+    | other           => [other]
+  -- #24: a body with an eligible statement-position mutation lowers to
+  -- `Id.run do` with `let mut`; everything else keeps the pure path
+  -- untouched. `@throws` functions never reach do-mode (TH0007 upstream),
+  -- and `doModeLowerable` is the same function-level gate SubsetCheck's
+  -- mutation routing rejects on (#40/#41) — checked here too so a checker
+  -- regression degrades to the pure path instead of a miscompile.
+  let info := EscapeAnalysis.analyze (params.map (·.1)) body
+  let hasEligibleMutation := info.mutated.toList.any info.eligible
+  let bodyExpr :=
+    if hasEligibleMutation && info.doModeLowerable && throws.isEmpty then
+      -- Mutated parameters self-shadow as `let mut x := x`: JS parameters
+      -- are mutable locals whose mutation never affects the caller.
+      let prologue : List LDoStmt := normalizedParams.filterMap fun (n, _) =>
+        if info.mutated.contains n && info.eligible n
+        then some (.letMut n none (.var n))
+        else none
+      let core := prologue ++ emitBodyDo env info stmts
+      -- A body that can fall off the end (void function) needs an explicit
+      -- unit return; appending one after an always-returning body would be
+      -- dead code at the wrong type.
+      let core := if doStmtsTerminate core then core else core ++ [.ret (.var "()")]
+      .idRunDo core
+    else
+      emitBodyEnv env stmts
   let leanParams := normalizedParams.map fun (n, t) => (n, emitType t)
   let leanRetTy :=
     if throws.isEmpty then emitType normalizedRetTy

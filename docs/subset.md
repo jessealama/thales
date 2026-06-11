@@ -6,7 +6,7 @@ Thales-TS 0.6 is a pure-functional subset of TypeScript with a mechanical shallo
 
 v0.6 adds four built-in bounded number types (`Integer`, `Natural`, `Byte`, `Bit`) shipped via `@thales/prelude`. See the dedicated section below for details.
 
-Thales-TS is **not** full TypeScript. It excludes mutation, exceptions, async I/O, classes, and several advanced type constructs in order to keep every accepted program mechanically translatable to terminating, pure Lean 4 code. If your program compiles under `thales`, it has a Lean 4 image — and the behavior of the two paths is verified by the example corpus.
+Thales-TS is **not** full TypeScript. It excludes escaping mutation (function-local non-escaping mutation is in subset, emitted as `Id.run do`), unannotated exceptions, async I/O, classes, and several advanced type constructs in order to keep every accepted program mechanically translatable to terminating Lean 4 code. If your program compiles under `thales`, it has a Lean 4 image — and the behavior of the two paths is verified by the example corpus.
 
 ## Conformance contract
 
@@ -68,7 +68,7 @@ under `tests/conformance/reject/` for one canonical demonstration per `TH####` c
 | Tuples       | `[A, B]`, `[A, B, C]`, ... → Lean `×` / fixed structures                                                                                         |
 | Unions       | Discriminated unions (shared `kind` field of string-literal type) → Lean inductive; nullable unions (`T \| null`, `T \| undefined`) → `Option T` |
 | Generics     | Parametric only (`<T>`, `<T, U>`)                                                                                                                |
-| Values       | `const`, `let`, `var` — all bound once, never reassigned in 0.5                                                                                  |
+| Values       | `const`, `let`, `var`; function-local non-escaping mutation (`x = e`, `x OP= e`, `x++`/`x--`) emitted as `Id.run do` with `let mut` (#24)        |
 | Functions    | `function` declarations and `const f = (...) => ...` arrows                                                                                      |
 | Recursion    | Structural or with `@decreasing` hint; all functions must terminate in 0.5                                                                       |
 | Control flow | `if`/`else`, ternary, `switch` (exhaustive on a discriminated union)                                                                             |
@@ -86,21 +86,47 @@ Each restriction below is identified by a `TH####` diagnostic code produced by `
 
 **Category:** Mutation
 
-Rejected:
+Function-local non-escaping mutation is **in subset** since #24: a binding
+whose every reference (read or write) stays in the declaring function's own
+body may be reassigned, and the function lowers to `Id.run do` with
+`let mut`. Parameters count as initialized locals (mutating them never
+affects the caller). TH0001 covers the still-rejected forms:
+
+Rejected (module level):
 
 ```typescript
 let count = 0;
-count = count + 1;
+count = count + 1; // TH0001: top-level bindings stay immutable
 ```
 
-Idiomatic replacement:
+Also still rejected under TH0001:
+
+- the logical assignment operators `&&=`, `||=`, `??=` (short-circuit
+  semantics; deferred);
+- reassigning a `let` declared without an initializer (`let mut` needs
+  one — give the declaration an initial value);
+- reassigning a variable whose narrowing the emitter relies on
+  (null- or undefined-tested, or refinement-predicate-tested, in a
+  condition);
+- mutation inside arrow/function-expression bodies (only declared
+  functions lower through the do-mode path in v1);
+- mutation in a function containing a `switch` shape do-mode cannot lower
+  (an arm that falls through via `break`, a `default` arm, or a scrutinee
+  that is not a discriminated-union field access);
+- mutation in a function whose body contains `try`/`catch` (the exception
+  path emits pure `Except` match-chains do-mode cannot thread through;
+  mutation _inside_ the `try` is the separate TH0007);
+- mutation in a function that reads a null/undefined-tested or
+  predicate-tested variable outside its test (the pure path bakes that
+  narrowing into its `match`/`dite` lowering; do-mode carries no such
+  evidence).
+
+Idiomatic replacement where mutation stays rejected:
 
 ```typescript
 const count = 0;
 const nextCount = count + 1;
 ```
-
-Lean 4 bindings (`let` in `do`-notation and top-level `def`) are immutable. There is no direct shallow embedding for mutable locals; introducing one would require wrapping every function body in `Id.run do`, which is deferred to 1.5.
 
 ---
 

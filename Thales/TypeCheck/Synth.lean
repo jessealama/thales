@@ -412,9 +412,16 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       let rightTyped ← synthJSExpr right
       return { expr := .js expr, type := leftTyped.type, children := #[leftTyped, rightTyped] }
 
-  -- Assignment expressions
-  | .assignmentExpr _ _ left right =>
-    let rightTyped ← synthJSExpr right
+  -- Assignment expressions. Compound `x OP= y` types as `x = x OP y`
+  -- (#24): the synthesized RHS is the desugared binary expression, so
+  -- checking reuses the binary-op paths (e.g. `s += 1` on a string is
+  -- string concatenation, not a raw-RHS-vs-declared mismatch).
+  | .assignmentExpr b op left right =>
+    let effectiveRHS : Expression :=
+      match op.compoundToBinary with
+      | some binOp => .binaryExpr b binOp left right
+      | none => right
+    let rightTyped ← synthJSExpr effectiveRHS
     -- LHS legality (TS2540 / TS2588 / TS2364) — emit before RHS-vs-declared check.
     match ← classifyAssignTarget synthJSExpr left with
     | some kind => emitDiagnostic kind (exprLoc left)
