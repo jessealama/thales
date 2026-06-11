@@ -575,6 +575,12 @@ private def refinementKindPredicate : RefinementKind → String
 private def unloweredDoStmt : List LDoStmt :=
   [.ret (.var "(unsupported: statement not lowerable in do-mode)")]
 
+/-- Unwrap a block into its statement list; a single statement becomes a
+    singleton list. -/
+private def blockStmts : Statement → List Statement
+  | .blockStmt _ ss => ss
+  | other => [other]
+
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
@@ -1056,11 +1062,12 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
 partial def emitBody : List Statement → LExpr :=
   emitBodyEnv {}
 
-/-- #24 do-mode lowering: the body of a function with an eligible
+/-- #24/#25 do-mode lowering: the body of a function with an eligible
     statement-position mutation, as a list of `Id.run do` statements.
     Only shapes SubsetCheck admits into do-mode arrive here — straight-line
-    mutation, declarations, `return`, `if`/`else`, and discriminated-union
-    switches; anything else was rejected upstream
+    mutation, declarations, `return`, `if`/`else`, discriminated-union
+    switches, `for-of` and canonical `for` loops, and unlabeled
+    `break`/`continue` (#25); anything else was rejected upstream
     (TH0001/TH0005/TH0006/TH0007/TH0010 …). A statement this function has
     no lowering for renders the loud `(unsupported: …)` marker — invalid
     Lean — rather than being dropped: silent divergence from the TS
@@ -1101,13 +1108,9 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
   -- not apply), so mutation inside a branch stays visible after it and
   -- `return` inside a branch is do-notation's native early return.
   | .ifStmt _ cond thn elsOpt :: rest =>
-      let stmtsOf : Statement → List Statement := fun s =>
-        match s with
-        | .blockStmt _ ss => ss
-        | other => [other]
-      let thnDo := emitBodyDo env info (stmtsOf thn)
+      let thnDo := emitBodyDo env info (blockStmts thn)
       let elsDo := match elsOpt with
-        | some els => emitBodyDo env info (stmtsOf els)
+        | some els => emitBodyDo env info (blockStmts els)
         | none => []
       .ifDo (emitExprEnv env cond) thnDo elsDo :: emitBodyDo env info rest
   | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
@@ -1149,12 +1152,10 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
   -- #25 loop lowering: `for (const x of rhs)` / `for (let i = 0; i < B; i++)`.
   -- These arms MUST appear before the catch-all.  EscapeAnalysis guarantees
   -- only lowerable loop shapes reach here; `notLowerable` still falls through
-  -- to the loud marker as a defence-in-depth measure.
+  -- to the loud marker as a defence-in-depth measure.  The two constructors
+  -- are combined in one arm because both dispatch through `classifyLoop`,
+  -- whose result is structurally disjoint by constructor.
   | s@(.forOfStmt _ _ _ _ _) :: rest | s@(.forStmt _ _ _ _ _) :: rest =>
-      let bodyStmtsOf : Statement → List Statement := fun b =>
-        match b with
-        | .blockStmt _ ss => ss
-        | other => [other]
       match LoopShape.classifyLoop s with
       -- for-of: `for (const x of rhs) { … }` → `for x in rhs do …`.
       -- Thread the element type into the body's binding environment so that
@@ -1176,7 +1177,7 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
                     | _ => env)
                 | none => env
             | .arrayLit _ => env  -- element type unknown without inference; leave env
-          .forDo x (emitExprEnv env rhsExpr) (emitBodyDo env' info (bodyStmtsOf body))
+          .forDo x (emitExprEnv env rhsExpr) (emitBodyDo env' info (blockStmts body))
             :: emitBodyDo env info rest
       -- canonical-for: `for (let i = 0; i < B; i++) { … }` →
       -- `for i in [0:B] do … `.
@@ -1201,7 +1202,7 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
           -- Body env: `i` is `number` (Float) for the rest of the body.
           let env' : EmitEnv :=
             { env with bindingEnv := env.bindingEnv.insert i .number }
-          let bodyDo := shim :: emitBodyDo env' info (bodyStmtsOf body)
+          let bodyDo := shim :: emitBodyDo env' info (blockStmts body)
           .forDo i iterExpr bodyDo :: emitBodyDo env info rest
       | .notLowerable => unloweredDoStmt  -- defence-in-depth; EscapeAnalysis should prevent this
   -- #25 break/continue: unlabeled forms map 1:1 to do-notation's `break` /
