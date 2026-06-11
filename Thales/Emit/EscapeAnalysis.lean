@@ -273,28 +273,21 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
       let acc := walkExpr (walkStmt acc b) t
       { acc with hasUnloweredLoopShape := true }
   | s@(.forStmt _ init t u b) =>
-      -- Walk init and test first, then body (without the update),
-      -- so we can check body-level mutations of v without counting
-      -- the structural `i++` update expression.
+      -- Walk order: init, test, body, THEN the update — `accAfterBody`
+      -- excludes the structural `i++` so it can't poison the loop var.
       let accBeforeBody := match init with
         | some (.inl e) => walkExpr acc e
         | some (.inr vd) => walkStmt acc (.variableDecl vd)
         | none => acc
       let accBeforeBody := match t with | some e => walkExpr accBeforeBody e | none => accBeforeBody
       let accAfterBody := walkStmt accBeforeBody b
-      -- Walk the update last for completeness of ref/capture analysis.
       let accFinal := match u with | some e => walkExpr accAfterBody e | none => accAfterBody
       match LoopShape.classifyLoop s with
       | .canonicalFor v bound _ =>
-          -- Check if the loop BODY (not the structural i++ update) mutates v.
-          -- We use `accAfterBody` (which excludes the update clause) to test
-          -- whether v appears in `mutated`. We deliberately do NOT subtract the
-          -- pre-body state: if an outer variable with the same name `v` was
-          -- already mutated before the loop, the before/after diff is unreliable
-          -- (the shadowing loop var and the outer var share the same string key).
-          -- Poisoning whenever `accAfterBody.mutated.contains v` is conservative
-          -- (a clean canonical-for whose outer scope has a same-named mutated var
-          -- is false-poisoned) but always sound.
+          -- Containment, not a before/after diff: a shadowing loop var shares
+          -- its string key with outer vars, so the diff is unreliable. This
+          -- false-poisons a clean loop under a same-named mutated outer var,
+          -- but is always sound (tested).
           let vMutatedAfterBody := accAfterBody.mutated.contains v
           let boundMutated := match bound with
             | .inr arrName => accAfterBody.mutated.contains arrName
@@ -304,28 +297,22 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
             { accFinal with hasUnloweredLoopShape := true }
           else
             { accFinal with hasLowerableLoop := true }
-      | .notLowerable => { accFinal with hasUnloweredLoopShape := true }
-      | .forOf _ _ _ _ => { accFinal with hasUnloweredLoopShape := true }  -- forOf inside forStmt is impossible but be safe
+      | _ => { accFinal with hasUnloweredLoopShape := true }
   | s@(.forOfStmt _ left r b _) =>
-      -- Walk children first so mutated set is populated, then classify.
+      -- Walk children first so the mutated set is populated, then classify.
       let acc := match left with
         | .inl e => walkExpr acc e
         | .inr vd => walkStmt acc (.variableDecl vd)
       let acc := walkStmt (walkExpr acc r) b
       match LoopShape.classifyLoop s with
       | .forOf v _ _ _ =>
-          -- Deliberate asymmetry with canonicalFor: for-of has no update clause,
-          -- so `acc` already reflects the full walk (left + rhs + body).
-          -- We check `acc.mutated.contains v` directly on the full accumulator
-          -- rather than a before/after diff; this is more conservative than the
-          -- canonicalFor check (pre-loop same-named mutation poisons), which is
-          -- correct here because for-of has no structural update to exclude.
+          -- No update clause to exclude, so the full accumulator is checked;
+          -- same containment conservatism as canonicalFor.
           if acc.mutated.contains v || LoopShape.hasLabeledBreakOrContinue b then
             { acc with hasUnloweredLoopShape := true }
           else
             { acc with hasLowerableLoop := true }
-      | .notLowerable => { acc with hasUnloweredLoopShape := true }
-      | .canonicalFor _ _ _ => { acc with hasUnloweredLoopShape := true }  -- impossible but be safe
+      | _ => { acc with hasUnloweredLoopShape := true }
   | .forInStmt _ left r b =>
       let acc := match left with
         | .inl e => walkExpr acc e
@@ -353,17 +340,11 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
       match f with | some s => walkStmt acc s | none => acc
   | .withStmt _ _ b => walkStmt acc b
   | .labeledStmt _ _ b =>
-      -- Labels on loops are rejected wholesale: `emitBodyDo` has no labeledStmt
-      -- lowering, so any label wrapping a loop (directly or transitively through
-      -- another labeledStmt) must poison do-mode.  Labeled break/continue inside
-      -- bodies are already poisoned separately (hasLabeledBreakOrContinue).
+      -- Labels on loops poison do-mode wholesale (`emitBodyDo` has no
+      -- labeledStmt lowering); labeled break/continue inside bodies is
+      -- poisoned separately via hasLabeledBreakOrContinue.
       let acc := walkStmt acc b
-      let rec isLabeledLoop : Statement → Bool
-        | .whileStmt _ _ _ | .doWhileStmt _ _ _ | .forStmt _ _ _ _ _
-        | .forInStmt _ _ _ _ | .forOfStmt _ _ _ _ _ => true
-        | .labeledStmt _ _ inner => isLabeledLoop inner
-        | _ => false
-      if isLabeledLoop b then { acc with hasUnloweredLoopShape := true }
+      if LoopShape.isLoopStmt b then { acc with hasUnloweredLoopShape := true }
       else acc
   | .functionDecl _ _ _ body _ _ =>
       -- nested function declaration: everything it references is a capture

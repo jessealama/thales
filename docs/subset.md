@@ -262,9 +262,11 @@ function indexWeight(xs: number[]): number {
 ```
 
 Conditions: init is `let i = 0`; test is `i < B` where `B` is a non-negative
-integer literal or `arr.length` for some simple-identifier array `arr`; update
-is `i++`; the bound array (if any) is not reassigned in the body. Lowers to
-`for i in List.range B do` inside `Id.run do`.
+integer literal or `arr.length` for an array-typed parameter `arr` (a
+`string`-typed `.length` bound is rejected — Lean range bounds need
+`Array.size`, and string length semantics diverge); update is `i++`; the
+bound array (if any) is not reassigned in the body. Lowers to a Lean range
+loop (`for i in [0:B] do`) inside `Id.run do`.
 
 **Inside admitted loops:** unlabeled `break`, `continue`, early `return`, and
 mutation following the TH0001–TH0007 rules are all accepted.
@@ -275,7 +277,8 @@ mutation following the TH0001–TH0007 rules are all accepted.
   Workaround: recursive helper or array methods.
 - `for-in`, `for await`.
 - Non-canonical C-style `for` (update other than `i++`, bound other than a
-  non-negative integer literal or `arr.length`, init other than `let i = 0`).
+  non-negative integer literal or an array-typed `arr.length`, init other
+  than `let i = 0`).
 - Destructuring or expression loop-variable heads.
 - `for-of` with a call expression on the right-hand side.
 - Loop variable or bound array reassigned in the body.

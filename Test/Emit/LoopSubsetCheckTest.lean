@@ -140,6 +140,15 @@ def testLabeledForOfNoBreakTH0010 : IO Unit := expectTH
   "function f(xs: number[]): number { let t = 0; outer: for (const x of xs) { t += x; } return t; }"
   ["TH0010"]
 
+-- ── Case 16: canonical-for bounded by a string's .length → TH0010 ──
+-- The length-bound identifier must be array-typed: a Lean range needs
+-- `Array.size` (Nat), and String length semantics diverge (UTF-16 units
+-- vs codepoints). Without the type check this emitted `[0:s.size]`,
+-- which does not compile (String has no `.size`).
+def testForStringLengthBoundTH0010 : IO Unit := expectTH
+  "function f(s: string): number { let t = 0; for (let i = 0; i < s.length; i++) { t += i; } return t; }"
+  ["TH0010"]
+
 #eval testForOfAdmitted
 #eval testCanonicalForAdmitted
 #eval testWhileTH0010
@@ -155,3 +164,4 @@ def testLabeledForOfNoBreakTH0010 : IO Unit := expectTH
 #eval testForOfStringParamTH0010
 #eval testForOfBodyDeclArrayTH0010
 #eval testLabeledForOfNoBreakTH0010
+#eval testForStringLengthBoundTH0010

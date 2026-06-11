@@ -88,6 +88,16 @@ def testTotalForOf : IO Unit :=
     ["def product"]
     (forbidden := ["partial def product"])
 
+-- 9. Defence-in-depth: a canonical-for bounded by a non-array `.length`
+-- (here a string parameter) must render the loud marker, never `[0:s.size]`
+-- (String has no `.size`; length semantics diverge). SubsetCheck rejects
+-- this upstream; the emitter guard covers phase drift.
+def testStringLengthBoundLoudMarker : IO Unit :=
+  expectEmitLoop
+    "function f(s: string): number { let t = 0; for (let i = 0; i < s.length; i++) { t += i; } return t; }"
+    ["(unsupported"]
+    (forbidden := ["[0:s.size]"])
+
 #eval testForOfAccumulation
 #eval testLoopTriggersDoMode
 #eval testBreakContinue
@@ -96,3 +106,4 @@ def testTotalForOf : IO Unit :=
 #eval testNestedForOf
 #eval testStringElementType
 #eval testTotalForOf
+#eval testStringLengthBoundLoudMarker

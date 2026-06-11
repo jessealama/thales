@@ -87,6 +87,30 @@ private def loopContextAdmitted (ctx : MutCtx) : Bool :=
   | none => false
   | some info => info.doModeLowerable && !ctx.noMutZone && ctx.allowEligible
 
+/-- Resolve a TSType through type alias references.
+    Follows at most one level of .ref to avoid infinite loops in v1. -/
+private def resolveType (aliasEnv : Std.HashMap String TSType) : TSType → TSType
+  | .ref name _ =>
+    match aliasEnv.get? name with
+    | some resolved => resolved
+    | none => .ref name []
+  | .paren inner => resolveType aliasEnv inner
+  | other => other
+
+/-- The identifier's declared type resolves to an array in the enclosing
+    function's parameter environment. Conservative (params-only):
+    body-declared arrays do not resolve — widening them is a future task.
+    Non-array iterables/bounds (string, Map, generator, …) must stay
+    rejected: their Lean lowerings diverge semantically (e.g. `Char` vs
+    1-char string, codepoint vs UTF-16 length). -/
+private def identIsArray (ctx : MutCtx) (name : String) : Bool :=
+  match ctx.bindingEnv.get? name with
+  | some ty =>
+      match resolveType ctx.aliasEnv ty with
+      | .array _ => true
+      | _ => false
+  | none => false
+
 /-- Route a statement-position mutation of identifier `name`.
     Returns the rejection diagnostics; `#[]` means the mutation is allowed.
     `emittable` is false for operators whose lowering isn't implemented. -/
@@ -127,16 +151,6 @@ private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
       #[]
     else
       #[mkThalesDiag (.cannotReassignVariable name) loc]
-
-/-- Resolve a TSType through type alias references.
-    Follows at most one level of .ref to avoid infinite loops in v1. -/
-private def resolveType (aliasEnv : Std.HashMap String TSType) : TSType → TSType
-  | .ref name _ =>
-    match aliasEnv.get? name with
-    | some resolved => resolved
-    | none => .ref name []
-  | .paren inner => resolveType aliasEnv inner
-  | other => other
 
 mutual
 
@@ -272,64 +286,37 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
     checkExpr ctx test
       ++ checkStmt ctx consequent
       ++ (match alternate with | some s => checkStmt ctx s | none => #[])
-  -- TH0010: loop statements.
-  -- A loop is ADMITTED (no TH0010, recurse into body) iff:
-  --   • ctx.info = some info (we are inside a declared function),
-  --   • info.doModeLowerable (no unlowered switch, no try/catch, no
-  --     unlowered loop shape, no narrowing-dependent body),
-  --   • !ctx.noMutZone (not inside @throws or try/catch),
-  --   • ctx.allowEligible (annotated function declaration body), and
-  --   • LoopShape.classifyLoop classifies this loop as .forOf or .canonicalFor.
-  -- NOT admitted → exactly one TH0010, no recursion into the body.
-  --
-  -- MutationInfo semantics: info.doModeLowerable reflects EscapeAnalysis's own
-  -- loop-shape analysis. A function containing BOTH an admitted-shape loop and a
-  -- `while` has hasUnloweredLoopShape=true, so doModeLowerable=false, meaning the
-  -- admitted-shape loop also gets TH0010 — required for checker/emitter agreement.
+  -- TH0010: loop statements. A loop is admitted (no TH0010, recurse into
+  -- the body) iff `loopContextAdmitted` holds AND `classifyLoop` admits its
+  -- shape AND its array operand (for-of RHS / length bound) passes
+  -- `identIsArray`; otherwise exactly one TH0010 and no body recursion.
+  -- doModeLowerable keeps the phases agreeing: a function holding both an
+  -- admitted-shape loop and a `while` rejects BOTH loops.
   | .whileStmt b _ _ =>
-    -- while is never classifyLoop .forOf or .canonicalFor; always TH0010.
     #[mkThalesDiag .loopNotSupported b.loc]
   | .doWhileStmt b _ _ =>
-    -- do-while is never lowerable; always TH0010.
     #[mkThalesDiag .loopNotSupported b.loc]
   | .forInStmt b _ _ _ =>
-    -- for-in is never lowerable; always TH0010.
     #[mkThalesDiag .loopNotSupported b.loc]
-  | s@(.forStmt b _ _ _ _) =>
+  | s@(.forStmt b _ _ _ body) =>
     let admitted :=
       loopContextAdmitted ctx
         && (match LoopShape.classifyLoop s with
-            | .canonicalFor _ _ _ => true
+            | .canonicalFor _ (.inl _) _ => true
+            | .canonicalFor _ (.inr arrName) _ => identIsArray ctx arrName
             | _ => false)
     if admitted then
-      -- The test expression (i < B) and update expression (i++) are part of
-      -- the admitted shape: classifyLoop already constrained them to bare
-      -- identifier/literal/length forms with no subexpressions worth checking.
-      -- Routing i++ through checkExpr would draw .assignmentInExpressionPosition;
-      -- the init declaration is not a statement-position child of this function.
-      -- So we check only the body.
-      match s with
-      | .forStmt _ _ _ _ body => checkStmt ctx body
-      | _ => #[mkThalesDiag .loopNotSupported b.loc]  -- unreachable
+      -- Only the body: classifyLoop already constrained init/test/update to
+      -- bare shapes, and routing `i++` through checkExpr would draw
+      -- .assignmentInExpressionPosition.
+      checkStmt ctx body
     else
       #[mkThalesDiag .loopNotSupported b.loc]
   | s@(.forOfStmt b _ right body _) =>
-    -- RHS must be an array literal or an identifier whose declared type resolves
-    -- to `.array _` in the enclosing function's parameter environment.
-    -- This is conservative (params-only): for-of over body-declared arrays is
-    -- also rejected here — widening to body-declared arrays is a future task.
-    -- Non-array iterables (string, Map, generator, …) are rejected because the
-    -- TS element type (1-char string for strings) does not correspond to a
-    -- Lean `Char`, and lone-surrogate semantics diverge.
     let rhsIsArray : Bool :=
       match right with
       | .arrayExpr _ _ => true
-      | .identifier _ n =>
-          match ctx.bindingEnv.get? n with
-          | some ty => (match resolveType ctx.aliasEnv ty with
-                        | .array _ => true
-                        | _ => false)
-          | none => false
+      | .identifier _ n => identIsArray ctx n
       | _ => false
     let admitted :=
       rhsIsArray
@@ -338,8 +325,8 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
             | .forOf _ _ _ _ => true
             | _ => false)
     if admitted then
-      -- The loop binder (head declaration) is part of the admitted shape; do not
-      -- route it through any statement arm. Check only the RHS expression and body.
+      -- The loop binder is part of the admitted shape; check only the RHS
+      -- expression and the body.
       checkExpr ctx right ++ checkStmt ctx body
     else
       #[mkThalesDiag .loopNotSupported b.loc]

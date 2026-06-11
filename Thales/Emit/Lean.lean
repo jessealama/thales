@@ -49,6 +49,18 @@ private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
   | .paren inner => resolveTypeAlias env inner
   | other => other
 
+/-- The element type of `name`, when its binding resolves to an array type;
+    `none` otherwise. Loop lowering (#25) keys on this: SubsetCheck only
+    admits array operands, so a `none` here means the phases drifted and the
+    caller must emit the loud marker rather than miscompile. -/
+private def arrayElemTy? (env : EmitEnv) (name : String) : Option TSType :=
+  match env.bindingEnv.get? name with
+  | some rawTy =>
+      match resolveTypeAlias env rawTy with
+      | .array et => some et
+      | _ => none
+  | none => none
+
 /-- If every branch of a union shares one underlying primitive (all string
     literals, or all numeric literals, or all boolean literals), return that
     primitive. Used to lower `1 | 2 | 3` to `Float`, `"a" | "b"` to `String`,
@@ -1150,81 +1162,54 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
           | none => unloweredDoStmt)
       | _ => unloweredDoStmt
   -- #25 loop lowering: `for (const x of rhs)` / `for (let i = 0; i < B; i++)`.
-  -- These arms MUST appear before the catch-all.  EscapeAnalysis guarantees
-  -- only lowerable loop shapes reach here; `notLowerable` still falls through
-  -- to the loud marker as a defence-in-depth measure.  The two constructors
-  -- are combined in one arm because both dispatch through `classifyLoop`,
-  -- whose result is structurally disjoint by constructor.
+  -- EscapeAnalysis admits only lowerable shapes into do-mode; anything else
+  -- (`.notLowerable`, a non-array operand) falls to the loud marker as
+  -- defence-in-depth against phase drift.
   | s@(.forOfStmt _ _ _ _ _) :: rest | s@(.forStmt _ _ _ _ _) :: rest =>
       match LoopShape.classifyLoop s with
-      -- for-of: `for (const x of rhs) { … }` → `for x in rhs do …`.
-      -- Thread the element type into the body's binding environment so that
-      -- sub-expressions involving `x` elaborate at the right type (e.g. string
-      -- indexing, array element arithmetic). For an ident RHS whose declared
-      -- type is `Array et`, we insert `x ↦ et`; for array literals or unknown
-      -- shapes the body env is left unchanged (conservative but sound — the
-      -- element is only untyped in env, which affects refinement projection,
-      -- not correctness of basic arithmetic).
+      -- `for (const x of rhs) { … }` → `for x in rhs do …`. An ident RHS
+      -- threads its element type onto `x` in the body env; an array-literal
+      -- RHS leaves the env unchanged (element type unknown without
+      -- inference — affects refinement projection only, not correctness).
       | .forOf x rhs rhsExpr body =>
-          -- Defence-in-depth: if SubsetCheck admitted a for-of but the RHS is an
-          -- identifier whose binding doesn't resolve to an array type, the phases
-          -- have drifted — emit the loud marker rather than silently miscompiling.
-          -- ArrayLit RHS is always safe (the literal is already an Array in Lean).
-          let rhsOk : Bool :=
+          let bodyEnv? : Option EmitEnv :=
             match rhs with
-            | .arrayLit _ => true
+            | .arrayLit _ => some env
             | .ident arrName =>
-                match env.bindingEnv.get? arrName with
-                | some rawTy => (match resolveTypeAlias env rawTy with
-                                 | .array _ => true
-                                 | _ => false)
-                | none => false
-          if !rhsOk then unloweredDoStmt
-          else
-          let env' : EmitEnv :=
-            match rhs with
-            | .ident arrName =>
-                match env.bindingEnv.get? arrName with
-                | some rawTy =>
-                    (match resolveTypeAlias env rawTy with
-                    | .array et =>
-                        { env with bindingEnv := env.bindingEnv.insert x et }
-                    | _ => env)
-                | none => env
-            | .arrayLit _ => env  -- element type unknown without inference; leave env
-          .forDo x (emitExprEnv env rhsExpr) (emitBodyDo env' info (blockStmts body))
-            :: emitBodyDo env info rest
-      -- canonical-for: `for (let i = 0; i < B; i++) { … }` →
-      -- `for i in [0:B] do … `.
-      -- The Lean range-loop binder `i` is a `Nat`; TS uses `number` (Float),
-      -- so the body needs a shim `let i : Float := i.toFloat` inserted first.
-      -- The shim shadows the Nat `i` with a Float for all downstream uses.
-      -- The bound is either a Nat literal (`.inl n`) or `arr.size` (`.inr
-      -- arrName`); the latter emits `arr.size` (a Nat, Lean 4's Array.size),
-      -- NOT the `Array.toNaturalSize`-wrapped form used for arithmetic —
-      -- range bounds are Nat, so no coercion is needed there.
+                (arrayElemTy? env arrName).map fun et =>
+                  { env with bindingEnv := env.bindingEnv.insert x et }
+          match bodyEnv? with
+          | none => unloweredDoStmt
+          | some env' =>
+              .forDo x (emitExprEnv env rhsExpr)
+                  (emitBodyDo env' info (blockStmts body))
+                :: emitBodyDo env info rest
+      -- `for (let i = 0; i < B; i++) { … }` → `for i in [0:B] do …`. The
+      -- range binder is a `Nat` while TS `number` is `Float`, so the body is
+      -- prefixed with `let i : Float := i.toFloat`, shadowing the Nat binder
+      -- for all downstream uses. A `.inr` bound emits `arr.size` directly —
+      -- range bounds are Nat, so no Float coercion as in expression position.
       | .canonicalFor i bound body =>
-          let iterExpr : LExpr :=
+          let iter? : Option LExpr :=
             match bound with
-            | .inl n    => .rangeTo (.int (Int.ofNat n))
+            | .inl n => some (.rangeTo (.int (Int.ofNat n)))
             | .inr arrName =>
-                -- `arr.size` as a Nat — Array.size is the Lean 4 name for the
-                -- array's length; the range loop expects a Nat.
-                .rangeTo (.proj (.var arrName) "size")
-          -- The shim inserts a Float-typed `i` that shadows the Nat binder.
-          let shim : LDoStmt :=
-            .letPure i (some (.const "Float")) (.proj (.var i) "toFloat")
-          -- Body env: `i` is `number` (Float) for the rest of the body.
-          let env' : EmitEnv :=
-            { env with bindingEnv := env.bindingEnv.insert i .number }
-          let bodyDo := shim :: emitBodyDo env' info (blockStmts body)
-          .forDo i iterExpr bodyDo :: emitBodyDo env info rest
-      | .notLowerable => unloweredDoStmt  -- defence-in-depth; EscapeAnalysis should prevent this
-  -- #25 break/continue: unlabeled forms map 1:1 to do-notation's `break` /
-  -- `continue`.  Any remaining statements after the break/continue are dead
-  -- code and are dropped (same convention as `return`).  Labeled forms are
-  -- not handled by the do-mode emitter (EscapeAnalysis poisons such loops),
-  -- so they fall through to the loud marker.
+                if (arrayElemTy? env arrName).isSome then
+                  some (.rangeTo (.proj (.var arrName) "size"))
+                else none
+          match iter? with
+          | none => unloweredDoStmt
+          | some iterExpr =>
+              let shim : LDoStmt :=
+                .letPure i (some (.const "Float")) (.proj (.var i) "toFloat")
+              let env' : EmitEnv :=
+                { env with bindingEnv := env.bindingEnv.insert i .number }
+              .forDo i iterExpr (shim :: emitBodyDo env' info (blockStmts body))
+                :: emitBodyDo env info rest
+      | .notLowerable => unloweredDoStmt
+  -- #25: unlabeled break/continue map 1:1; trailing statements are dead code
+  -- and dropped (same convention as `return`). Labeled forms fall through to
+  -- the loud marker (EscapeAnalysis poisons them upstream).
   | .breakStmt _ none :: _ => [.breakDo]
   | .continueStmt _ none :: _ => [.continueDo]
   -- A list that ends without `return` is a branch falling through to the

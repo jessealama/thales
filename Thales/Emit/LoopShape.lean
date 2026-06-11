@@ -69,6 +69,15 @@ def classifyLoop : Statement → LoopClass
       | _, _, _ => .notLowerable
   | _ => .notLowerable
 
+/-- The statement is a loop, possibly wrapped in (further) labels. Callers
+    poison labels-on-loops wholesale: `emitBodyDo` has no labeledStmt
+    lowering. -/
+partial def isLoopStmt : Statement → Bool
+  | .whileStmt _ _ _ | .doWhileStmt _ _ _ | .forStmt _ _ _ _ _
+  | .forInStmt _ _ _ _ | .forOfStmt _ _ _ _ _ => true
+  | .labeledStmt _ _ inner => isLoopStmt inner
+  | _ => false
+
 /-- Unlabeled break/continue check: any LABELED break/continue anywhere in
     the own body (stopping at nested functions) poisons loop lowering. -/
 partial def hasLabeledBreakOrContinue : Statement → Bool
