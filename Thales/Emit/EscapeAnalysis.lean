@@ -12,10 +12,11 @@
       refinement-predicate shape) is ineligible — assignment would
       invalidate narrowing evidence the emitter bakes into `dite`/`match`.
   Beyond per-variable eligibility, `doModeLowerable` is the function-level
-  gate (#40/#41): bodies containing a `try`/`catch`, a switch shape the
-  do-mode emitter cannot lower, or a read of a narrow-tested variable
-  outside its test positions stay on the pure emission path entirely, so
-  their mutation is rejected wholesale.
+  gate (#25/#40/#41): bodies containing a `try`/`catch`, a switch shape the
+  do-mode emitter cannot lower, a loop shape the do-mode emitter cannot
+  lower, or a read of a narrow-tested variable outside its test positions
+  stay on the pure emission path entirely, so their mutation is rejected
+  wholesale.
 -/
 import Thales.AST
 import Thales.Emit.LoopShape
@@ -80,11 +81,12 @@ def MutationInfo.narrowingDependentBody (info : MutationInfo) : Bool :=
   info.narrowTested.toList.any fun n =>
     info.nonTestRefs.contains n || info.capturedRefs.contains n
 
-/-- Function-level do-mode admissibility (#40/#41): the single predicate
+/-- Function-level do-mode admissibility (#25/#40/#41): the single predicate
     that BOTH SubsetCheck's mutation routing and `emitFuncDecl`'s do-mode
     entry consult — they must never disagree, or accepted programs get
     miscompiled. False when the body contains a shape `emitBodyDo` cannot
-    lower. -/
+    lower (unlowered switch, try/catch, unlowered loop, or narrowing-dependent
+    body). -/
 def MutationInfo.doModeLowerable (info : MutationInfo) : Bool :=
   !info.hasUnloweredSwitchShape && !info.hasTryShape
     && !info.narrowingDependentBody && !info.hasUnloweredLoopShape
@@ -285,13 +287,19 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
       match LoopShape.classifyLoop s with
       | .canonicalFor v bound _ =>
           -- Check if the loop BODY (not the structural i++ update) mutates v.
-          let vMutatedBeforeBody := accBeforeBody.mutated.contains v
+          -- We use `accAfterBody` (which excludes the update clause) to test
+          -- whether v appears in `mutated`. We deliberately do NOT subtract the
+          -- pre-body state: if an outer variable with the same name `v` was
+          -- already mutated before the loop, the before/after diff is unreliable
+          -- (the shadowing loop var and the outer var share the same string key).
+          -- Poisoning whenever `accAfterBody.mutated.contains v` is conservative
+          -- (a clean canonical-for whose outer scope has a same-named mutated var
+          -- is false-poisoned) but always sound.
           let vMutatedAfterBody := accAfterBody.mutated.contains v
-          let bodyMutatedV := vMutatedAfterBody && !vMutatedBeforeBody
           let boundMutated := match bound with
             | .inr arrName => accAfterBody.mutated.contains arrName
             | .inl _ => false
-          if bodyMutatedV || boundMutated
+          if vMutatedAfterBody || boundMutated
               || LoopShape.hasLabeledBreakOrContinue b then
             { accFinal with hasUnloweredLoopShape := true }
           else
@@ -306,6 +314,12 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
       let acc := walkStmt (walkExpr acc r) b
       match LoopShape.classifyLoop s with
       | .forOf v _ _ _ =>
+          -- Deliberate asymmetry with canonicalFor: for-of has no update clause,
+          -- so `acc` already reflects the full walk (left + rhs + body).
+          -- We check `acc.mutated.contains v` directly on the full accumulator
+          -- rather than a before/after diff; this is more conservative than the
+          -- canonicalFor check (pre-loop same-named mutation poisons), which is
+          -- correct here because for-of has no structural update to exclude.
           if acc.mutated.contains v || LoopShape.hasLabeledBreakOrContinue b then
             { acc with hasUnloweredLoopShape := true }
           else

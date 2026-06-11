@@ -115,6 +115,33 @@ def t9 : IO Unit := do
   if info.hasUnloweredLoopShape then
     throw (IO.userError s!"expected !hasUnloweredLoopShape (no loops), got true")
 
+-- ── shadowed loop var with body mutation: poisons do-mode ────────────────────
+-- Outer `i` is mutated before the loop; the canonical-for declares a shadowing
+-- `i`; the body further mutates it. The before/after diff is unreliable
+-- (both share the key "i"), so any post-body visibility of `i` in `mutated`
+-- poisons. This guards the latent miscompile where `bodyMutatedV = false`
+-- because `vMutatedBeforeBody = true`.
+def t_shadowedLoopVar : IO Unit := do
+  let info ← analyzeFirstFuncLoop
+    "function f(xs: number[]): number { let i = 0; i = 5; for (let i = 0; i < xs.length; i++) { i = i + 2; } return i; }"
+  unless info.hasUnloweredLoopShape do
+    throw (IO.userError "expected hasUnloweredLoopShape for shadowed mutated loop var")
+  if info.doModeLowerable then
+    throw (IO.userError "expected !doModeLowerable for shadowed mutated loop var")
+
+-- ── shadowed loop var, clean body: conservatively poisons ────────────────────
+-- Outer `i` is mutated before the loop; the canonical-for declares a shadowing
+-- `i`; the body is clean (no mutation of `i`). After the fix, the outer `i`'s
+-- pre-loop mutation is visible in `accAfterBody.mutated`, which poisons.
+-- This is a false positive but is documented and acceptable — sound conservatism.
+def t_shadowedLoopVarCleanBody : IO Unit := do
+  let info ← analyzeFirstFuncLoop
+    "function f(xs: number[]): number { let i = 0; i = 5; for (let i = 0; i < xs.length; i++) { } return i; }"
+  unless info.hasUnloweredLoopShape do
+    throw (IO.userError "expected hasUnloweredLoopShape (conservative: outer same-named mutated var)")
+  if info.doModeLowerable then
+    throw (IO.userError "expected !doModeLowerable (conservative: outer same-named mutated var)")
+
 #eval t1
 #eval t2
 #eval t3
@@ -124,3 +151,5 @@ def t9 : IO Unit := do
 #eval t7
 #eval t8
 #eval t9
+#eval t_shadowedLoopVar
+#eval t_shadowedLoopVarCleanBody
