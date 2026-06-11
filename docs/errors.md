@@ -207,7 +207,25 @@ purely.
 
 **Message:** `Loop not supported; use recursion or array methods`
 
-Rejected: `for (let i = 0; i < n; i++) { ... }`
+**Status:** Partially lifted. The following shapes are now accepted inside
+do-mode-lowerable declared functions:
+
+- `for (const x of arr)` / `for (let x of arr)` — simple-identifier array
+  operand, loop variable never reassigned in the body.
+- `for (let i = 0; i < B; i++)` — canonical C-style with `i++` update, bound
+  `B` is a non-negative integer literal or `arr.length`, bound array not
+  reassigned in the body.
+- Unlabeled `break`, `continue`, and early `return` inside admitted loops.
+- Mutation inside an admitted loop follows the same rules as mutation
+  elsewhere in do-mode (see TH0001–TH0007).
+
+**Still rejected:** `while` / `do-while` (issue [#26](https://github.com/jessealama/thales/issues/26)); `for-in`; `for await`; non-canonical
+C-style `for` (any shape other than `i++` / non-negative literal or
+`arr.length` bound); destructuring or expression loop-variable heads;
+`for-of` with a call on the right-hand side; loop-variable or bound-array
+reassignment in the body; labeled `break`/`continue`; any loop in a
+`@throws`-annotated function, or a function that contains `try`/`catch` or
+other do-mode-poisoning constructs.
 
 [Details in subset.md#th0010--loop-not-supported-use-recursion-or-array-methods](./subset.md#th0010--loop-not-supported-use-recursion-or-array-methods)
 

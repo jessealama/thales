@@ -21,20 +21,22 @@ The current slate, tracked in issues
 [#23](https://github.com/jessealama/thales/issues/23)–[#29](https://github.com/jessealama/thales/issues/29),
 widens the executable subset in dependency order:
 
-1. **Local variable mutation** — reassignment, `++`/`--`, the `+=`
-   family on non-escaping locals and parameters, emitted as `Id.run do`
-   with `let mut` bindings (parameters via self-shadowing,
-   `let mut x := x`). Mutation of captured variables stays out until a
-   concrete pattern demands an escape (then: `StateM`, or a fuller heap
-   model).
-2. **`for` / `for-of`** — `for x in arr do`; lands before `while`
-   because folds over finite structures keep totality available.
-3. **`while` / `do-while`** — Lean's do-notation `while`, which is
-   backed by a `partial` combinator: fine for evaluation (the
-   byte-match contract is unaffected), opaque to proofs. `@total` and
-   `while` are therefore mutually exclusive, mirroring the
-   `@throws`/`@total` design. Verification of while-bodies arrives
-   later via loop invariants (see Arc 2).
+1. **Local variable mutation** — DONE ([#24](https://github.com/jessealama/thales/issues/24)).
+   Reassignment, `++`/`--`, `+=` family on non-escaping locals and parameters,
+   emitted as `Id.run do` with `let mut` bindings (parameters via
+   self-shadowing, `let mut x := x`). Mutation of captured variables stays
+   out until a concrete pattern demands an escape (then: `StateM`, or a fuller
+   heap model).
+2. **`for` / `for-of`** — DONE ([#25](https://github.com/jessealama/thales/issues/25)).
+   Canonical C-style `for` and `for-of` over array identifiers/literals, with
+   unlabeled `break`/`continue` and early `return`. Lowers to `for … in … do`
+   inside `Id.run do`. `@total` works; array iteration is structurally total.
+3. **`while` / `do-while`** — next ([#26](https://github.com/jessealama/thales/issues/26)).
+   Lean's do-notation `while`, which is backed by a `partial` combinator:
+   fine for evaluation (the byte-match contract is unaffected), opaque to
+   proofs. `@total` and `while` are therefore mutually exclusive, mirroring
+   the `@throws`/`@total` design. Verification of while-bodies arrives later
+   via loop invariants (see Arc 2).
 4. **Local array mutation** — `.push`/`.pop`/element assignment on
    non-escaping `let` locals.
 5. **Stdlib breadth** — array methods (`join`, `indexOf`, `includes`,
