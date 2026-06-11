@@ -72,6 +72,15 @@ private def emittableMutationOp : AssignmentOperator → Bool
   | .orLogicalAssign | .andLogicalAssign | .nullishAssign => false
   | _ => true
 
+/-- True iff the enclosing context can admit an emittable loop shape (#25):
+    inside a declared function whose body is do-mode lowerable, outside
+    `@throws`/try zones. The per-loop syntactic shape check is separate
+    (`LoopShape.classifyLoop`). -/
+private def loopContextAdmitted (ctx : MutCtx) : Bool :=
+  match ctx.info with
+  | none => false
+  | some info => info.doModeLowerable && !ctx.noMutZone && ctx.allowEligible
+
 /-- Route a statement-position mutation of identifier `name`.
     Returns the rejection diagnostics; `#[]` means the mutation is allowed.
     `emittable` is false for operators whose lowering isn't implemented. -/
@@ -272,13 +281,10 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
     #[mkThalesDiag .loopNotSupported b.loc]
   | s@(.forStmt b _ _ _ _) =>
     let admitted :=
-      match ctx.info with
-      | none => false
-      | some info =>
-        info.doModeLowerable && !ctx.noMutZone && ctx.allowEligible
-          && (match LoopShape.classifyLoop s with
-              | .canonicalFor _ _ _ => true
-              | _ => false)
+      loopContextAdmitted ctx
+        && (match LoopShape.classifyLoop s with
+            | .canonicalFor _ _ _ => true
+            | _ => false)
     if admitted then
       -- The test expression (i < B) and update expression (i++) are part of
       -- the admitted shape: classifyLoop already constrained them to bare
@@ -293,13 +299,10 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
       #[mkThalesDiag .loopNotSupported b.loc]
   | s@(.forOfStmt b _ right body _) =>
     let admitted :=
-      match ctx.info with
-      | none => false
-      | some info =>
-        info.doModeLowerable && !ctx.noMutZone && ctx.allowEligible
-          && (match LoopShape.classifyLoop s with
-              | .forOf _ _ _ _ => true
-              | _ => false)
+      loopContextAdmitted ctx
+        && (match LoopShape.classifyLoop s with
+            | .forOf _ _ _ _ => true
+            | _ => false)
     if admitted then
       -- The loop binder (head declaration) is part of the admitted shape; do not
       -- route it through any statement arm. Check only the RHS expression and body.

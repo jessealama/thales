@@ -22,7 +22,8 @@ private def padCode4 (n : Nat) : String :=
   "".pushn '0' (4 - s.length) ++ s
 
 /-- Parse src, run subsetCheckIgnoringDirectives, collect all TH#### codes
-    (zero-padded to 4 digits, e.g. "TH0010"), sort them, compare to expected. -/
+    (zero-padded to 4 digits, e.g. "TH0010"), sort them, compare to expected.
+    -- no directives in these fixtures; subsetCheckIgnoringDirectives = subsetCheck here -/
 def expectTH (src : String) (expected : List String) : IO Unit := do
   match parseTSSourceNative src with
   | .error e => throw (IO.userError s!"parse error: {e}")
@@ -103,6 +104,19 @@ def testUnlabeledBreakInForOfOk : IO Unit := expectTH
   "function f(xs: number[]): number { let t = 0; for (const x of xs) { if (x < 0) { break; } t += x; } return t; }"
   []
 
+-- ── Case 11: admitted canonical-for with xs.length bound — no TH0010 ──
+def testCanonicalForLengthBound : IO Unit := expectTH
+  "function f(xs: number[]): number { let t = 0; for (let i = 0; i < xs.length; i++) { t += i; } return t; }"
+  []
+
+-- ── Case 12: admitted-shape for-of inside a NESTED plain function → TH0010 ──
+-- The inner function is a plain functionDecl (no type annotations), so its
+-- body is checked with allowEligible := false — loopContextAdmitted returns
+-- false → TH0010.  The outer annotated function itself is clean.
+def testForOfNestedFunctionTH0010 : IO Unit := expectTH
+  "function outer(xs: number[]): number { function inner() { for (const x of xs) { } } return 0; }"
+  ["TH0010"]
+
 #eval testForOfAdmitted
 #eval testCanonicalForAdmitted
 #eval testWhileTH0010
@@ -113,3 +127,5 @@ def testUnlabeledBreakInForOfOk : IO Unit := expectTH
 #eval testBothAdmittedAndWhileTH0010
 #eval testTopLevelForOfTH0010
 #eval testUnlabeledBreakInForOfOk
+#eval testCanonicalForLengthBound
+#eval testForOfNestedFunctionTH0010
