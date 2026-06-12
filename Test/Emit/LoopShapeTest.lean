@@ -194,6 +194,69 @@ def t_labeledBreak_nestedFunction : IO Unit := do
   if hasLabeledBreakOrContinue s then
     throw (IO.userError "labeled break inside nested function should not be flagged")
 
+-- ── generalForDesugarable / hasOwnUnlabeledContinue (#26) ──────────────────
+
+private def assertGeneralFor (loop : String) (expected : Bool) : IO Unit := do
+  let s ← firstStmt s!"function f(xs: number[]): void \{ {loop} }"
+  unless generalForDesugarable s == expected do
+    throw (IO.userError
+      s!"expected generalForDesugarable = {expected} for: {loop}")
+
+-- non-canonical shapes that desugar
+def t_generalFor_compoundStep : IO Unit :=
+  assertGeneralFor "for (let i = 9; i > 0; i -= 2) { }" true
+def t_generalFor_noInit : IO Unit :=
+  assertGeneralFor "for (; xs.length > 0;) { }" true
+-- bare-expression init (the predicate is syntactic; binding rules are the
+-- callers' concern)
+def t_generalFor_exprInit : IO Unit :=
+  assertGeneralFor "for (i = 5; i > 0; i -= 1) { }" true
+
+-- canonical shape must NOT fall back to the desugar (keeps its range
+-- lowering, and keeps #25's operand rejections intact)
+def t_generalFor_canonicalExcluded : IO Unit :=
+  assertGeneralFor "for (let i = 0; i < 5; i++) { }" false
+def t_generalFor_canonicalStringBoundExcluded : IO Unit := do
+  let s ← firstStmt
+    "function f(s: string): void { for (let i = 0; i < s.length; i++) { } }"
+  unless generalForDesugarable s == false do
+    throw (IO.userError
+      "canonical-SHAPED loop (string bound) must not fall back to desugar")
+
+-- `var` init hoists; out of subset
+def t_generalFor_varInit : IO Unit :=
+  assertGeneralFor "for (var i = 9; i > 0; i -= 2) { }" false
+
+-- loop-level continue + update clause → not desugarable
+def t_generalFor_continueWithUpdate : IO Unit :=
+  assertGeneralFor "for (let i = 9; i > 0; i -= 2) { if (i > 4) { continue; } }" false
+
+-- loop-level continue WITHOUT update clause → fine (test is re-checked)
+def t_generalFor_continueNoUpdate : IO Unit :=
+  assertGeneralFor "for (let i = 9; i > 0;) { i -= 1; if (i > 4) { continue; } }" true
+
+-- continue inside a NESTED loop binds to the inner loop → outer desugarable
+def t_generalFor_nestedLoopContinue : IO Unit :=
+  assertGeneralFor
+    "for (let i = 9; i > 0; i -= 2) { for (const x of xs) { continue; } }" true
+
+private def assertOwnContinue (body : String) (expected : Bool) : IO Unit := do
+  let s ← firstStmt s!"function f(xs: number[]): void \{ {body} }"
+  match s with
+  | .whileStmt _ _ b | .doWhileStmt _ b _ =>
+    unless hasOwnUnlabeledContinue b == expected do
+      throw (IO.userError
+        s!"expected hasOwnUnlabeledContinue = {expected} for: {body}")
+  | _ => throw (IO.userError s!"setup: expected a while/do-while: {body}")
+
+def t_ownContinue_direct : IO Unit :=
+  assertOwnContinue "do { if (xs.length > 0) { continue; } } while (false);" true
+def t_ownContinue_nestedLoop : IO Unit :=
+  assertOwnContinue "do { for (const x of xs) { continue; } } while (false);" false
+def t_ownContinue_switch : IO Unit :=
+  assertOwnContinue
+    "while (false) { switch (xs.length) { default: continue; } }" true
+
 -- ── eval ──────────────────────────────────────────────────────────────────
 
 #eval t_forOf_const
@@ -218,3 +281,15 @@ def t_labeledBreak_nestedFunction : IO Unit := do
 #eval t_labeledBreak_positive
 #eval t_labeledBreak_negative
 #eval t_labeledBreak_nestedFunction
+#eval t_generalFor_compoundStep
+#eval t_generalFor_noInit
+#eval t_generalFor_exprInit
+#eval t_generalFor_canonicalExcluded
+#eval t_generalFor_canonicalStringBoundExcluded
+#eval t_generalFor_varInit
+#eval t_generalFor_continueWithUpdate
+#eval t_generalFor_continueNoUpdate
+#eval t_generalFor_nestedLoopContinue
+#eval t_ownContinue_direct
+#eval t_ownContinue_nestedLoop
+#eval t_ownContinue_switch

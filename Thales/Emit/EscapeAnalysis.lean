@@ -63,8 +63,9 @@ structure MutationInfo where
   hasLowerableLoop : Bool := false
   /-- The own body contains a loop do-mode cannot lower: `notLowerable`
       shape, a loop variable that is reassigned, a canonical-for bound
-      identifier that is reassigned, or a labeled break/continue. Poisons
-      do-mode wholesale, like `hasTryShape`. -/
+      identifier that is reassigned, a labeled break/continue, or a
+      do-while with a loop-level `continue` (#26). Poisons do-mode
+      wholesale, like `hasTryShape`. -/
   hasUnloweredLoopShape : Bool := false
 
 def MutationInfo.eligible (info : MutationInfo) (name : String) : Bool :=
@@ -266,12 +267,25 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
             | some _ => { a with initializedLets := a.initializedLets.insert id.name }
             | none => { a with uninitializedLets := a.uninitializedLets.insert id.name }
         | _ => a) acc
+  -- #26: while/do-while have no loop variable or bound to constrain — any
+  -- test expression is re-evaluated per iteration by Lean's `while` /
+  -- `repeat … until` exactly as in TS. Only labeled break/continue (no
+  -- labeledStmt lowering) and, for do-while, a loop-level `continue`
+  -- (Lean's `repeat … until` re-enters the body without checking the test,
+  -- where TS jumps to it) poison the shape.
   | .whileStmt _ t b =>
       let acc := walkStmt (walkExpr acc t) b
-      { acc with hasUnloweredLoopShape := true }
+      if LoopShape.hasLabeledBreakOrContinue b then
+        { acc with hasUnloweredLoopShape := true }
+      else
+        { acc with hasLowerableLoop := true }
   | .doWhileStmt _ b t =>
       let acc := walkExpr (walkStmt acc b) t
-      { acc with hasUnloweredLoopShape := true }
+      if LoopShape.hasLabeledBreakOrContinue b
+          || LoopShape.hasOwnUnlabeledContinue b then
+        { acc with hasUnloweredLoopShape := true }
+      else
+        { acc with hasLowerableLoop := true }
   | s@(.forStmt _ init t u b) =>
       -- Walk order: init, test, body, THEN the update — `accAfterBody`
       -- excludes the structural `i++` so it can't poison the loop var.
@@ -297,7 +311,14 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
             { accFinal with hasUnloweredLoopShape := true }
           else
             { accFinal with hasLowerableLoop := true }
-      | _ => { accFinal with hasUnloweredLoopShape := true }
+      | _ =>
+          -- #26: a non-canonical `for` that can desugar to
+          -- `init; while (test) { body; update }` is lowerable.
+          if LoopShape.generalForDesugarable s
+              && !LoopShape.hasLabeledBreakOrContinue b then
+            { accFinal with hasLowerableLoop := true }
+          else
+            { accFinal with hasUnloweredLoopShape := true }
   | s@(.forOfStmt _ left r b _) =>
       -- Walk children first so the mutated set is populated, then classify.
       let acc := match left with

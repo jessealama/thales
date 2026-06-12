@@ -191,6 +191,13 @@ axiom Float.ofInt_le (m n : Int) (hm : m.natAbs ≤ 9007199254740991)
     no theorem in Lean's stdlib asserts this directly. -/
 axiom Nat.toFloat_nonneg (n : Nat) : n.toFloat ≥ 0.0
 
+/-- JS `+` on two strings is concatenation. The emitter lowers TS `+`
+    uniformly to Lean `+`; this instance covers the String × String case
+    (#26 left-pad arc). Mixed string/number `+` (JS coerces) deliberately
+    has no instance — it fails loudly at the Lean stage rather than
+    miscompiling. -/
+instance : HAdd String String String := ⟨String.append⟩
+
 /-- Embed a `String`'s `length` as a `Natural`. Same shape as
     `Array.toNaturalSize`; bounds the length at MAX_SAFE_INTEGER. -/
 def String.toNaturalLength (s : String) : Natural :=

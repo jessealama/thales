@@ -99,4 +99,61 @@ partial def hasLabeledBreakOrContinue : Statement → Bool
         || (match f with | some s => hasLabeledBreakOrContinue s | none => false)
   | _ => false
 
+/-- An unlabeled `continue` that binds to THIS loop: the walk descends
+    through blocks/ifs/switch/try but stops at nested loops (whose own
+    `continue` binds to them) and nested functions. TS `continue` in a
+    do-while jumps to the test, but Lean's `repeat ... until` re-enters the
+    body without checking — and in a while-desugared `for`, `continue`
+    would skip the update clause — so those loop bodies stay rejected
+    when this holds (#26). -/
+partial def hasOwnUnlabeledContinue : Statement → Bool
+  | .continueStmt _ none => true
+  | .blockStmt _ ss => ss.any hasOwnUnlabeledContinue
+  | .ifStmt _ _ c a =>
+      hasOwnUnlabeledContinue c
+        || (match a with | some s => hasOwnUnlabeledContinue s | none => false)
+  | .labeledStmt _ _ b | .withStmt _ _ b => hasOwnUnlabeledContinue b
+  | .switchStmt _ _ cases =>
+      cases.any fun (.mk _ _ ss) => ss.any hasOwnUnlabeledContinue
+  | .tryStmt _ b h f =>
+      hasOwnUnlabeledContinue b
+        || (match h with
+            | some (.mk _ _ hb _) => hasOwnUnlabeledContinue hb
+            | none => false)
+        || (match f with | some s => hasOwnUnlabeledContinue s | none => false)
+  -- Nested loops and (nested-function-bearing) statements stop the walk.
+  | _ => false
+
+/-- A non-canonical C-style `for` that can desugar to
+    `init; while (test) { body; update }` (#26). Conditions:
+
+    * NOT `canonicalFor`-shaped — the canonical form keeps its structural
+      `for i in [0:B]` lowering (`@total`-friendly; a desugared `while` is
+      not). A canonical SHAPE whose operand later fails the caller's array
+      check stays rejected rather than falling back here, preserving the
+      #25 boundaries.
+    * init is empty, a bare expression, or a single-identifier `let`/`const`
+      declarator WITH an initializer (`var` hoists; out of subset).
+    * if an update clause exists, the body has no loop-level `continue` —
+      TS `continue` runs the update, but the desugared `while` body would
+      skip it. With no update clause, `continue` just re-checks the test
+      in both, so it stays admitted.
+
+    A missing test means `while (true)`. Labeled break/continue is the
+    callers' (existing) poison check, as for the other loop shapes. -/
+def generalForDesugarable : Statement → Bool
+  | s@(.forStmt _ init _ update body) =>
+      (match classifyLoop s with
+       | .canonicalFor _ _ _ => false
+       | .forOf _ _ _ _ => false
+       | .notLowerable =>
+        (match init with
+         | none => true
+         | some (.inl _) => true
+         | some (.inr (.mk _ [.mk _ (.identifier _) (some _) _] kind)) =>
+             kind != .var
+         | some (.inr _) => false)
+        && (update.isNone || !hasOwnUnlabeledContinue body))
+  | _ => false
+
 end Thales.Emit.LoopShape

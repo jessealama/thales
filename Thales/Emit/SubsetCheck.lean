@@ -49,6 +49,11 @@ structure MutCtx where
       stays rejected in v1 even when the eligibility analysis would allow
       it. -/
   allowEligible : Bool := false
+  /-- Inside a `@total` function body. while/do-while (and while-desugared
+      `for`) lower to a partial-backed combinator the termination verifier
+      cannot see through, so they draw TH0068 here instead of being
+      admitted (#26). -/
+  inTotalFn : Bool := false
   /-- Type alias environment threaded from the enclosing `annotatedFuncDecl`
       context; used to resolve array types for for-of admission. -/
   aliasEnv : Std.HashMap String TSType := {}
@@ -291,25 +296,64 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
   -- shape AND its array operand (for-of RHS / length bound) passes
   -- `identIsArray`; otherwise exactly one TH0010 and no body recursion.
   -- doModeLowerable keeps the phases agreeing: a function holding both an
-  -- admitted-shape loop and a `while` rejects BOTH loops.
-  | .whileStmt b _ _ =>
-    #[mkThalesDiag .loopNotSupported b.loc]
-  | .doWhileStmt b _ _ =>
-    #[mkThalesDiag .loopNotSupported b.loc]
+  -- admitted-shape loop and an unlowerable one (labeled break/continue,
+  -- do-while with loop-level `continue`) rejects BOTH loops.
+  --
+  -- #26: while/do-while have no per-loop shape conditions beyond what
+  -- EscapeAnalysis already folded into `doModeLowerable` (labels,
+  -- do-while `continue`). In a `@total` function the admitted shapes draw
+  -- TH0068 instead: their lowering is partial-backed and would make the
+  -- lake-side termination verification pass vacuously.
+  | .whileStmt b test body =>
+    if loopContextAdmitted ctx then
+      if ctx.inTotalFn then
+        #[mkThalesDiag .totalHasUnverifiableLoop b.loc]
+      else
+        checkExpr ctx test ++ checkStmt ctx body
+    else
+      #[mkThalesDiag .loopNotSupported b.loc]
+  | .doWhileStmt b body test =>
+    if loopContextAdmitted ctx then
+      if ctx.inTotalFn then
+        #[mkThalesDiag .totalHasUnverifiableLoop b.loc]
+      else
+        checkStmt ctx body ++ checkExpr ctx test
+    else
+      #[mkThalesDiag .loopNotSupported b.loc]
   | .forInStmt b _ _ _ =>
     #[mkThalesDiag .loopNotSupported b.loc]
-  | s@(.forStmt b _ _ _ body) =>
-    let admitted :=
-      loopContextAdmitted ctx
-        && (match LoopShape.classifyLoop s with
-            | .canonicalFor _ (.inl _) _ => true
-            | .canonicalFor _ (.inr arrName) _ => identIsArray ctx arrName
-            | _ => false)
-    if admitted then
+  | s@(.forStmt b init test update body) =>
+    let canonicalAdmitted :=
+      match LoopShape.classifyLoop s with
+      | .canonicalFor _ (.inl _) _ => true
+      | .canonicalFor _ (.inr arrName) _ => identIsArray ctx arrName
+      | _ => false
+    if loopContextAdmitted ctx && canonicalAdmitted then
       -- Only the body: classifyLoop already constrained init/test/update to
       -- bare shapes, and routing `i++` through checkExpr would draw
       -- .assignmentInExpressionPosition.
       checkStmt ctx body
+    else if loopContextAdmitted ctx && LoopShape.generalForDesugarable s then
+      -- #26: desugars to `init; while (test) { body; update }`. In a
+      -- `@total` function that lowering is partial-backed — TH0068, like
+      -- while itself. Init and update are checked in STATEMENT position
+      -- (that is where the desugar puts them), so `i -= 2` routes through
+      -- the statement-position mutation rules, not
+      -- .assignmentInExpressionPosition.
+      if ctx.inTotalFn then
+        #[mkThalesDiag .totalHasUnverifiableLoop b.loc]
+      else
+        (match init with
+          | some (.inr vd) => checkStmt ctx (.variableDecl vd)
+          | some (.inl e) => checkStmt ctx (.exprStmt b e)
+          | none => #[])
+          ++ (match test with
+              | some e => checkExpr ctx e
+              | none => #[])
+          ++ checkStmt ctx body
+          ++ (match update with
+              | some u => checkStmt ctx (.exprStmt b u)
+              | none => #[])
     else
       #[mkThalesDiag .loopNotSupported b.loc]
   | s@(.forOfStmt b _ right body _) =>
@@ -792,11 +836,12 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType) (ts : TSStatement) : Arra
           | none => #[])
   -- TH0012: async annotated function declarations — emit diagnostic, still recurse body.
   -- TH0060 is no longer SubsetCheck's responsibility, so no suppression filter is needed.
-  | .annotatedFuncDecl b _ _ params returnType body _ async throwsAnn _ =>
+  | .annotatedFuncDecl b _ _ params returnType body _ async throwsAnn isTotal =>
     let ctx : MutCtx :=
       { info := some (EscapeAnalysis.analyze (params.map (·.1)) body),
         noMutZone := throwsAnn != .absent,
         allowEligible := true,
+        inTotalFn := isTotal,
         aliasEnv := aliasEnv,
         bindingEnv := buildParamEnv params }
     let paramTypeDiags := params.foldl (fun acc (_, ann, _, _) =>

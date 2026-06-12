@@ -94,6 +94,10 @@ inductive ThalesKind where
   | throwsRequiresTypeList
   | totalConflictsWithThrows
   | totalHasUncaughtThrow (source : ThrowSource)
+  -- TH0068: while/do-while (and while-desugared `for`) lower to a
+  -- partial-backed combinator the termination verifier cannot see through,
+  -- so they cannot substantiate a `@total` claim (#26).
+  | totalHasUnverifiableLoop
   | totalityUnverified (leanError : String)
   -- Refinement-type diagnostics (TH0080–TH0081)
   | literalOutOfRange (literal : Float) (typeName : String) (min : Option Float) (max : Option Float)
@@ -135,6 +139,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .throwsRequiresTypeList => 65
   | .totalConflictsWithThrows => 66
   | .totalHasUncaughtThrow _ => 67
+  | .totalHasUnverifiableLoop => 68
   | .totalityUnverified _ => 70
   | .literalOutOfRange .. => 80
   | .refinementNeedsEvidence .. => 81
@@ -192,6 +197,8 @@ def ThalesKind.message : ThalesKind → String
     "`@total` function has an uncaught `throw`; wrap it in `try`/`catch` or remove `@total`"
   | .totalHasUncaughtThrow (.fromCall callee) =>
     s!"`@total` function calls `@throws`-annotated `{callee}` outside `try`/`catch`; catch the failure or remove `@total`"
+  | .totalHasUnverifiableLoop =>
+    "`@total` function contains a loop whose termination cannot be verified; use a for-of loop or recursion, or remove `@total`"
   | .totalityUnverified leanError =>
     s!"`@total` asserted but Lean could not prove termination: {leanError}"
   | .literalOutOfRange lit tyName min max =>

@@ -1,14 +1,16 @@
 /-
   Test/Emit/LoopSubsetCheckTest.lean
-  Verifies shape-aware TH0010 routing in SubsetCheck (#25):
-  - Admitted for-of and canonical-for shapes in do-mode-lowerable functions
-    are accepted (no TH0010).
-  - Non-lowerable loops (while, for-in, destructuring heads, call RHS,
-    etc.) always draw TH0010.
-  - do-mode poison (try/catch, @throws, mixed admitted+while) forces TH0010
+  Verifies shape-aware TH0010 routing in SubsetCheck (#25/#26):
+  - Admitted for-of, canonical-for, while, do-while, and desugarable
+    general-for shapes in do-mode-lowerable functions are accepted (no
+    TH0010).
+  - Non-lowerable loops (for-in, destructuring heads, call RHS, do-while
+    with loop-level continue, etc.) always draw TH0010.
+  - do-mode poison (try/catch, @throws, labeled loops) forces TH0010
     even for otherwise-admitted shapes.
   - Module-level loops draw TH0010 (no function context).
   - Unlabeled break/continue inside admitted for-of is fine (no TH0010).
+  - while/do-while/general-for inside a @total function draw TH0068.
 -/
 import Thales.Emit.SubsetCheck
 import Thales.Parser.Native
@@ -49,10 +51,10 @@ def testCanonicalForAdmitted : IO Unit := expectTH
   "function f(): number { let t = 0; for (let i = 0; i < 5; i++) { t += i; } return t; }"
   []
 
--- ── Case 3: while inside a function — TH0010 ──
-def testWhileTH0010 : IO Unit := expectTH
+-- ── Case 3: while inside a function — admitted (#26) ──
+def testWhileAdmitted : IO Unit := expectTH
   "function f(n: number): number { let i = 0; while (i < n) { i++; } return i; }"
-  ["TH0010"]
+  []
 
 -- ── Case 4: for-of with destructuring head — not admitted, TH0010 ──
 -- Pattern binder (not a simple identifier) → classifyLoop = .notLowerable
@@ -85,12 +87,13 @@ def testForOfThrowsFnTH0010 : IO Unit := expectTH
   "/** @throws RangeError */\nfunction f(xs: number[]): number { for (const x of xs) { } return 0; }"
   ["TH0010"]
 
--- ── Case 8: function with BOTH admitted for-of AND while → both TH0010 ──
--- hasUnloweredLoopShape=true (from while) → doModeLowerable=false →
--- neither loop is admitted; both draw TH0010.
+-- ── Case 8: function with admitted for-of AND a labeled while → both TH0010 ──
+-- hasUnloweredLoopShape=true (label on the while) → doModeLowerable=false →
+-- neither loop is admitted; both draw TH0010. Pins the function-level
+-- poisoning: one unlowerable loop rejects every loop in the function.
 -- No mutation in bodies to keep the diagnostic set clean.
-def testBothAdmittedAndWhileTH0010 : IO Unit := expectTH
-  "function f(xs: number[]): number { for (const x of xs) { } while (false) { } return 0; }"
+def testBothAdmittedAndLabeledWhileTH0010 : IO Unit := expectTH
+  "function f(xs: number[]): number { for (const x of xs) { } outer: while (false) { break outer; } return 0; }"
   ["TH0010", "TH0010"]
 
 -- ── Case 9: module-level (top-level) for-of → TH0010 (no function context) ──
@@ -149,14 +152,71 @@ def testForStringLengthBoundTH0010 : IO Unit := expectTH
   "function f(s: string): number { let t = 0; for (let i = 0; i < s.length; i++) { t += i; } return t; }"
   ["TH0010"]
 
+-- ── Case 17: do-while inside a function — admitted (#26) ──
+def testDoWhileAdmitted : IO Unit := expectTH
+  "function f(n: number): number { let s = 0; do { s += 1; n -= 1; } while (n > 0); return s; }"
+  []
+
+-- ── Case 18: do-while with loop-level continue → TH0010 (#26) ──
+-- `repeat … until` re-enters the body without checking the test where TS
+-- jumps to it; EscapeAnalysis poisons the function, SubsetCheck rejects.
+def testDoWhileContinueTH0010 : IO Unit := expectTH
+  "function f(n: number): number { do { if (n > 0) { continue; } } while (n > 0); return n; }"
+  ["TH0010"]
+
+-- ── Case 19: while inside a @throws function → TH0010 (#26) ──
+def testWhileThrowsFnTH0010 : IO Unit := expectTH
+  "/** @throws RangeError */\nfunction f(n: number): number { while (n > 0) { } return 0; }"
+  ["TH0010"]
+
+-- ── Case 20: while inside a @total function → TH0068 (#26) ──
+-- The lowering is partial-backed; the lake-side termination verification
+-- would pass vacuously, so the combination is rejected outright.
+def testTotalWhileTH0068 : IO Unit := expectTH
+  "/** @total */\nfunction f(n: number): number { while (n > 0) { } return 0; }"
+  ["TH0068"]
+
+-- ── Case 21: do-while inside a @total function → TH0068 (#26) ──
+def testTotalDoWhileTH0068 : IO Unit := expectTH
+  "/** @total */\nfunction f(n: number): number { do { } while (n > 0); return 0; }"
+  ["TH0068"]
+
+-- ── Case 22: canonical for inside a @total function → no TH codes ──
+-- Structural `for i in [0:B]` is termination-checker-visible; @total keeps it.
+def testTotalCanonicalForOk : IO Unit := expectTH
+  "/** @total */\nfunction f(): number { let t = 0; for (let i = 0; i < 5; i++) { t += i; } return t; }"
+  []
+
+-- ── Case 23: non-canonical for — admitted via while-desugar (#26) ──
+def testGeneralForAdmitted : IO Unit := expectTH
+  "function f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { t += i; } return t; }"
+  []
+
+-- ── Case 24: non-canonical for inside a @total function → TH0068 (#26) ──
+-- The desugared lowering is the partial-backed `while`, same as Case 20.
+def testTotalGeneralForTH0068 : IO Unit := expectTH
+  "/** @total */\nfunction f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { t += i; } return t; }"
+  ["TH0068"]
+
+-- ── Case 25: non-canonical for with loop-level continue → TH0010 (#26) ──
+-- The desugared body would skip the update clause on `continue`.
+def testGeneralForContinueTH0010 : IO Unit := expectTH
+  "function f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { if (i > 4) { continue; } t += i; } return t; }"
+  ["TH0010"]
+
+-- ── Case 26: module-level while → TH0010 (no function context) ──
+def testTopLevelWhileTH0010 : IO Unit := expectTH
+  "while (false) { }"
+  ["TH0010"]
+
 #eval testForOfAdmitted
 #eval testCanonicalForAdmitted
-#eval testWhileTH0010
+#eval testWhileAdmitted
 #eval testForOfDestructuringTH0010
 #eval testForOfCallRhsTH0010
 #eval testForOfWithTryTH0010
 #eval testForOfThrowsFnTH0010
-#eval testBothAdmittedAndWhileTH0010
+#eval testBothAdmittedAndLabeledWhileTH0010
 #eval testTopLevelForOfTH0010
 #eval testUnlabeledBreakInForOfOk
 #eval testCanonicalForLengthBound
@@ -165,3 +225,13 @@ def testForStringLengthBoundTH0010 : IO Unit := expectTH
 #eval testForOfBodyDeclArrayTH0010
 #eval testLabeledForOfNoBreakTH0010
 #eval testForStringLengthBoundTH0010
+#eval testDoWhileAdmitted
+#eval testDoWhileContinueTH0010
+#eval testWhileThrowsFnTH0010
+#eval testTotalWhileTH0068
+#eval testTotalDoWhileTH0068
+#eval testTotalCanonicalForOk
+#eval testGeneralForAdmitted
+#eval testTotalGeneralForTH0068
+#eval testGeneralForContinueTH0010
+#eval testTopLevelWhileTH0010
