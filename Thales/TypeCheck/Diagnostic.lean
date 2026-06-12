@@ -77,6 +77,9 @@ inductive ThalesKind where
   | intersectionNotSupported
   | typeLevelProgrammingNotSupported
   | nullUndefinedNotSupported
+  -- TH0026: condition positions and `!`/`&&`/`||` operands must be
+  -- boolean; `requireBooleanCondition` has the rationale.
+  | conditionNotBoolean (actualType : String)
   | classNotSupported
   | inheritanceNotSupported
   | switchNotExhaustive (missingKinds : List String)
@@ -96,7 +99,7 @@ inductive ThalesKind where
   | totalHasUncaughtThrow (source : ThrowSource)
   -- TH0068: while/do-while (and while-desugared `for`) lower to a
   -- partial-backed combinator the termination verifier cannot see through,
-  -- so they cannot substantiate a `@total` claim (#26).
+  -- so they cannot substantiate a `@total` claim.
   | totalHasUnverifiableLoop
   | totalityUnverified (leanError : String)
   -- Refinement-type diagnostics (TH0080–TH0081)
@@ -128,6 +131,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .intersectionNotSupported => 23
   | .typeLevelProgrammingNotSupported => 24
   | .nullUndefinedNotSupported => 25
+  | .conditionNotBoolean _ => 26
   | .classNotSupported => 30
   | .inheritanceNotSupported => 31
   | .switchNotExhaustive _ => 40
@@ -173,6 +177,8 @@ def ThalesKind.message : ThalesKind → String
   | .intersectionNotSupported => "Intersection types are not supported"
   | .typeLevelProgrammingNotSupported => "keyof/conditional/mapped types are not supported"
   | .nullUndefinedNotSupported => "null/undefined types are not supported; use Option<T>"
+  | .conditionNotBoolean actualType =>
+    s!"Condition must be boolean, got '{actualType}'; truthiness is not mirrored — compare explicitly (e.g. `x !== 0`)"
   | .classNotSupported => "'class' is not supported"
   | .inheritanceNotSupported => "Inheritance ('extends') is not supported"
   | .switchNotExhaustive missingKinds =>

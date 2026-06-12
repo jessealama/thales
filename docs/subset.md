@@ -280,7 +280,8 @@ function leftPad(str: string, len: number, ch: string): string {
 }
 ```
 
-Any test expression is accepted. `while` lowers to Lean do-notation
+Any boolean-typed test expression is accepted (conditions must be
+boolean — see TH0026). `while` lowers to Lean do-notation
 `while`; `do`/`while` lowers to `repeat ... until !(test)` (body runs at
 least once, as in TS). Both are backed by a partial combinator — fine for
 evaluation (the byte-match contract is unaffected), opaque to termination
@@ -577,6 +578,55 @@ interface ReadOnlyPoint {
 ```
 
 These constructs are type-level programs; translating them to Lean requires dependent types or macro metaprogramming. They are deferred to a future version with a type-level elaboration pass.
+
+---
+
+### TH0026 — Condition must be boolean
+
+**Category:** Types
+
+Every condition position — `if`, `while`, `do`/`while`, the `for` test
+clause, and the ternary — must have type `boolean`, and so must the
+operands of `!`, `&&`, and `||`: in the subset these are exactly Lean's
+boolean operators. tsc accepts any type in these positions and applies
+JS truthiness (`0`, `''`, `NaN`, `null`, `undefined` are falsy); Lean
+has no truthiness coercion, so a non-boolean condition or operand would
+emit code the Lean stage cannot compile, violating the accept clause of
+the conformance contract.
+
+Rejected:
+
+```typescript
+function f(n: number): number {
+  if (n) {
+    // TH0026: Condition must be boolean, got 'number'
+    return 1;
+  }
+  return 0;
+}
+```
+
+The operand rule also rejects `if (!n)`, `if (n && b)`, and the
+default-value idiom `s || 'fallback'` — the latter additionally relies
+on JS `||` returning an operand rather than a boolean, which Lean's `||`
+does not do. Use an explicit ternary for defaults
+(`s !== '' ? s : 'fallback'`). `??` on nullable types is unaffected; it
+lowers to `Option` handling, not truthiness.
+
+Idiomatic replacement:
+
+```typescript
+function f(n: number): number {
+  if (n !== 0) {
+    return 1;
+  }
+  return 0;
+}
+```
+
+Mirroring truthiness with a runtime coercion (`truthy : Float → Bool`
+handling `NaN` and `-0`) is a possible future widening; rejection is the
+v1 boundary.
 
 ---
 

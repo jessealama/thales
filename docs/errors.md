@@ -59,6 +59,7 @@ soundness check).
 | TH0023 | Types        | Intersection types not supported                    |
 | TH0024 | Types        | keyof/conditional/mapped types not supported        |
 | TH0025 | Types        | null/undefined types not supported                  |
+| TH0026 | Types        | Condition must be boolean                           |
 | TH0030 | Declarations | `class` not supported                               |
 | TH0031 | Declarations | Inheritance (`extends`) not supported               |
 | TH0032 | Declarations | Shadowing declaration not supported                 |
@@ -216,8 +217,9 @@ do-mode-lowerable declared functions:
 - `for (let i = 0; i < B; i++)` — canonical C-style with `i++` update, bound
   `B` is a non-negative integer literal or an array-typed `arr.length`, bound
   array not reassigned in the body.
-- `while (test) body` — any test expression; lowered to Lean do-notation
-  `while`. Not allowed in `@total` functions — see TH0068.
+- `while (test) body` — any boolean test expression (conditions must be
+  boolean — see TH0026); lowered to Lean do-notation `while`. Not allowed
+  in `@total` functions — see TH0068.
 - `do body while (test)` — lowered to `repeat ... until !(test)`; the body
   runs at least once, as in TS. Same `@total` exclusion. A loop-level
   `continue` keeps a do-while rejected: TS `continue` jumps to the test,
@@ -345,6 +347,42 @@ If you have a `@thales-expect-error TH0025` directive in your source, remove
 it — the directive is now unused and will produce TH9000.
 
 See `docs/subset.md` (Nullable types section) for the full translation rules.
+
+---
+
+### TH0026 — condition must be boolean
+
+**Message:** `Condition must be boolean, got '<type>'; truthiness is not
+mirrored — compare explicitly (e.g. \`x !== 0\`)`
+
+Every condition position — `if`, `while`, `do`/`while`, the `for` test
+clause, and the ternary — must have type `boolean`, and so must the
+operands of `!`, `&&`, and `||` (in the subset they are exactly Lean's
+boolean operators). tsc accepts any type in these positions and applies
+JS truthiness (`0`, `''`, `NaN`, `null`, `undefined` are falsy); Lean
+has no such coercion, so a non-boolean condition or operand would emit
+code the Lean stage cannot compile. Rejecting keeps the accept clause of
+the conformance contract honest: everything thales accepts must compile
+and byte-match.
+
+```typescript
+function f(n: number): number {
+  if (n) {
+    // TH0026: Condition must be boolean, got 'number'
+    return 1;
+  }
+  return 0;
+}
+```
+
+The operand rule also rejects truthy shorthands like `if (!n)`,
+`if (n && b)`, and the default-value idiom `s || 'fallback'` (which
+additionally relies on `||` returning an operand rather than a boolean).
+
+**Fix:** compare explicitly — `n !== 0` (truthiness for numbers also
+excludes `NaN`; use `Number.isNaN` if that case matters), `s !== ""` for
+strings, or a boolean-returning predicate. For defaults, use an explicit
+ternary: `s !== '' ? s : 'fallback'`.
 
 ---
 
