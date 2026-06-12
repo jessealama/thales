@@ -406,6 +406,18 @@ function collectCases(rootDir, mode) {
   return cases;
 }
 
+/** Directory membership IS the test specification: each bucket admits
+ *  exactly one pass label. A pass outcome with the wrong label (e.g. an
+ *  accept/ file that is merely subset-rejected) is a corpus violation, not
+ *  a pass — without this, a regression that demotes an accepted example to
+ *  subset-rejected would go unnoticed. */
+const expectedLabelByBucket = {
+  accept: 'accepted',
+  mirror: 'tsc-rejected',
+  reject: 'subset-rejected',
+  throws: 'both-throw',
+};
+
 function runCorpus(rootDir, opts = {}) {
   const cases = collectCases(rootDir, opts.selfTest ? 'subdir' : 'flat');
   let passes = 0;
@@ -417,6 +429,17 @@ function runCorpus(rootDir, opts = {}) {
       outcome = evaluateCase(c.inputPath);
     } catch (e) {
       outcome = { kind: 'fail', label: 'crash', detail: e.stack || e.message };
+    }
+    if (!opts.selfTest && outcome.kind === 'pass') {
+      const bucket = c.label.split('/')[0];
+      const expected = expectedLabelByBucket[bucket];
+      if (expected && outcome.label !== expected) {
+        outcome = {
+          kind: 'fail',
+          label: 'bucket-mismatch',
+          detail: `${bucket}/ requires outcome '${expected}', got '${outcome.label}'`,
+        };
+      }
     }
 
     if (opts.selfTest) {
