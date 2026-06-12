@@ -1,10 +1,8 @@
 /-
   Test/TypeCheck/ConditionBooleanTest.lean
-  Pins TH0026: condition positions (`if`/`while`/`do-while`/`for` tests,
-  the ternary) must synthesize boolean. JS truthiness has no Lean-side
-  coercion, so a non-boolean condition would emit a branch on a type Lean
-  cannot decide — rejection keeps the accept clause honest. tsc accepts
-  all of these programs; TH0026 is a subset boundary, not a tsc mirror.
+  Pins TH0026: condition positions and `!`/`&&`/`||` operands must be
+  boolean (see `requireBooleanCondition`). tsc accepts all of these
+  programs; TH0026 is a subset boundary, not a tsc mirror.
 -/
 import Thales.TypeCheck.Check
 import Thales.Parser.Native
@@ -44,6 +42,19 @@ def t_forNumberTest : IO Unit := expectTH0026
 def t_ternaryNumber : IO Unit := expectTH0026
   "function f(n: number): string { return n ? \"some\" : \"none\"; }"
 
+-- `!`/`&&`/`||` synthesize boolean-ish result types, so the condition-position
+-- check alone would let truthy operands through; the operand check fires.
+def t_notNumber : IO Unit := expectTH0026
+  "function f(n: number): number { if (!n) { return 1; } return 0; }"
+def t_andNumberLeft : IO Unit := expectTH0026
+  "function f(n: number, b: boolean): number { if (n && b) { return 1; } return 0; }"
+def t_orNumberRight : IO Unit := expectTH0026
+  "function p(n: number): boolean { return n > 0; } function g(n: number): number { if (p(n) || n) { return 1; } return 0; }"
+-- the operand rule applies outside condition positions too: `||` as a
+-- truthy default has no Lean-side meaning
+def t_orDefaultString : IO Unit := expectTH0026
+  "function pick(s: string): string { return s || \"fallback\"; }"
+
 -- ── boolean conditions stay clean ────────────────────────────────────────────
 
 def t_comparison : IO Unit := expectNoTH0026
@@ -59,6 +70,12 @@ def t_ternaryBoolean : IO Unit := expectNoTH0026
   "function f(n: number): string { return n > 0 ? \"pos\" : \"rest\"; }"
 def t_negatedBoolean : IO Unit := expectNoTH0026
   "function f(b: boolean): number { if (!b) { return 1; } return 0; }"
+def t_andBooleans : IO Unit := expectNoTH0026
+  "function f(b: boolean, c: boolean): number { if (b && c) { return 1; } return 0; }"
+def t_orBooleans : IO Unit := expectNoTH0026
+  "function f(b: boolean, c: boolean): number { if (b || c) { return 1; } return 0; }"
+def t_notComparison : IO Unit := expectNoTH0026
+  "function f(n: number): number { if (!(n > 0)) { return 1; } return 0; }"
 
 #eval t_ifNumber
 #eval t_ifString
@@ -66,9 +83,16 @@ def t_negatedBoolean : IO Unit := expectNoTH0026
 #eval t_doWhileNumber
 #eval t_forNumberTest
 #eval t_ternaryNumber
+#eval t_notNumber
+#eval t_andNumberLeft
+#eval t_orNumberRight
+#eval t_orDefaultString
 #eval t_comparison
 #eval t_booleanParam
 #eval t_whileTrue
 #eval t_canonicalFor
 #eval t_ternaryBoolean
 #eval t_negatedBoolean
+#eval t_andBooleans
+#eval t_orBooleans
+#eval t_notComparison

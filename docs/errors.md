@@ -356,12 +356,14 @@ See `docs/subset.md` (Nullable types section) for the full translation rules.
 mirrored — compare explicitly (e.g. \`x !== 0\`)`
 
 Every condition position — `if`, `while`, `do`/`while`, the `for` test
-clause, and the ternary — must have type `boolean`. tsc accepts any type
-there and applies JS truthiness (`0`, `''`, `NaN`, `null`, `undefined`
-are falsy); Lean has no such coercion, so a non-boolean condition would
-emit a branch the Lean stage cannot compile. Rejecting keeps the accept
-clause of the conformance contract honest: everything thales accepts
-must compile and byte-match.
+clause, and the ternary — must have type `boolean`, and so must the
+operands of `!`, `&&`, and `||` (in the subset they are exactly Lean's
+boolean operators). tsc accepts any type in these positions and applies
+JS truthiness (`0`, `''`, `NaN`, `null`, `undefined` are falsy); Lean
+has no such coercion, so a non-boolean condition or operand would emit
+code the Lean stage cannot compile. Rejecting keeps the accept clause of
+the conformance contract honest: everything thales accepts must compile
+and byte-match.
 
 ```typescript
 function f(n: number): number {
@@ -373,9 +375,14 @@ function f(n: number): number {
 }
 ```
 
+The operand rule also rejects truthy shorthands like `if (!n)`,
+`if (n && b)`, and the default-value idiom `s || 'fallback'` (which
+additionally relies on `||` returning an operand rather than a boolean).
+
 **Fix:** compare explicitly — `n !== 0` (truthiness for numbers also
 excludes `NaN`; use `Number.isNaN` if that case matters), `s !== ""` for
-strings, or a boolean-returning predicate.
+strings, or a boolean-returning predicate. For defaults, use an explicit
+ternary: `s !== '' ? s : 'fallback'`.
 
 ---
 

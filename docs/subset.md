@@ -586,11 +586,13 @@ These constructs are type-level programs; translating them to Lean requires depe
 **Category:** Types
 
 Every condition position — `if`, `while`, `do`/`while`, the `for` test
-clause, and the ternary — must have type `boolean`. tsc accepts any type
-in these positions and applies JS truthiness (`0`, `''`, `NaN`, `null`,
-`undefined` are falsy); Lean has no truthiness coercion, so a non-boolean
-condition would emit a branch the Lean stage cannot compile, violating
-the accept clause of the conformance contract.
+clause, and the ternary — must have type `boolean`, and so must the
+operands of `!`, `&&`, and `||`: in the subset these are exactly Lean's
+boolean operators. tsc accepts any type in these positions and applies
+JS truthiness (`0`, `''`, `NaN`, `null`, `undefined` are falsy); Lean
+has no truthiness coercion, so a non-boolean condition or operand would
+emit code the Lean stage cannot compile, violating the accept clause of
+the conformance contract.
 
 Rejected:
 
@@ -603,6 +605,13 @@ function f(n: number): number {
   return 0;
 }
 ```
+
+The operand rule also rejects `if (!n)`, `if (n && b)`, and the
+default-value idiom `s || 'fallback'` — the latter additionally relies
+on JS `||` returning an operand rather than a boolean, which Lean's `||`
+does not do. Use an explicit ternary for defaults
+(`s !== '' ? s : 'fallback'`). `??` on nullable types is unaffected; it
+lowers to `Option` handling, not truthiness.
 
 Idiomatic replacement:
 

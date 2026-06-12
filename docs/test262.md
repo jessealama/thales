@@ -82,10 +82,10 @@ Top blocking diagnostics (tests blocked, by attribution):
 Code              Shim   Body  Unknown
 TS2339            1179    895        0
 TH0001            1179    213        0
-TS2304            1179     92        0
+TS2304            1179     98        0
 TH0030            1179     48        0
+TH0026            1179     26        0
 TH0007            1179     18        0
-TH0026            1179     17        0
 TH0063            1179      2        0
 TH0021            1179      0        0
 TH0031            1179      0        0
@@ -136,15 +136,18 @@ The widening #26 delivers is exercised by the conformance corpus
 (`loop-while-*`, `loop-do-while-*`, `loop-for-general-*`); test262
 movement on these slices is gated entirely on #49.
 
-The TH0026 re-measure (non-boolean conditions rejected, #55) leaves
-every other count byte-identical and adds one attribution row: TH0026
-blocks the shim — the `harness/assert.ts:34` truthy narrowing documented
-below now draws a structured rejection instead of silently mistyping —
-and 17 test bodies that branch on truthy conditions. Totals and OoS are
-unchanged: all 17 were already blocked by other codes, so this is
-attribution honesty, not new blockage. (The new row pushes TH0004 —
-0 shim / 5 body — past the runner's top-20 display; the table above
-retains it from the baseline measure.)
+The TH0026 re-measure (non-boolean conditions and `!`/`&&`/`||` operands
+rejected, #55) leaves totals and OoS byte-identical and adds one
+attribution row: TH0026 blocks the shim — the `harness/assert.ts:34`
+truthy narrowing documented below now draws a structured rejection
+instead of silently mistyping — and 26 test bodies (17 truthy condition
+positions, 9 more from truthy `!`/`&&`/`||` operands). All 26 were
+already blocked by other codes, so this is attribution honesty, not new
+blockage. The same change moves body TS2304 92 → 98: the checker
+previously did not synthesize the operand of `!` at all, so undeclared
+references inside a negation went unrecorded; they now surface. (The new
+row pushes TH0004 — 0 shim / 5 body — past the runner's top-20 display;
+the table above retains it from the baseline measure.)
 
 New shim-attribution rows vs the pre-#24 baseline: TS2322 — #24's
 declared-type precision (unannotated/const bindings are no longer `any`)

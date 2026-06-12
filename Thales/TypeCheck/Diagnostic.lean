@@ -77,10 +77,8 @@ inductive ThalesKind where
   | intersectionNotSupported
   | typeLevelProgrammingNotSupported
   | nullUndefinedNotSupported
-  -- TH0026: condition positions (`if`/`while`/`do-while`/`for` tests, the
-  -- ternary) must be boolean. JS truthiness (`0`, `''`, `NaN`, `null`,
-  -- `undefined` are falsy) has no Lean-side coercion, so a non-boolean
-  -- condition would emit code that cannot compile.
+  -- TH0026: condition positions and `!`/`&&`/`||` operands must be
+  -- boolean; `requireBooleanCondition` has the rationale.
   | conditionNotBoolean (actualType : String)
   | classNotSupported
   | inheritanceNotSupported

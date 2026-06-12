@@ -100,11 +100,11 @@ partial def tsExprSourceName : TSExpression → String
   | .satisfiesExpr inner _ => tsExprSourceName inner
   | .nonNullAssert inner => tsExprSourceName inner
 
-/-- Condition positions (`if`/`while`/`do-while`/`for` tests, the ternary)
-    must synthesize boolean (TH0026). JS truthiness — `0`, `''`, `NaN`,
-    `null`, `undefined` are falsy — has no Lean-side coercion, so a
-    non-boolean condition would emit a branch on a type Lean cannot
-    decide, failing after acceptance. -/
+/-- Require boolean in positions Lean will branch on: `if`/`while`/
+    `do-while`/`for` tests, the ternary test, and the operands of
+    `!`/`&&`/`||` (TH0026). JS truthiness — `0`, `''`, `NaN`, `null`,
+    `undefined` are falsy — has no Lean-side coercion, so a non-boolean
+    here would emit code the Lean stage cannot compile. -/
 def requireBooleanCondition (ty : TSType) (loc : Option SourceLocation)
     : TypeCheckM Unit := do
   unless (← isSubtype ty .boolean) do
@@ -401,22 +401,28 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
     let ctx ← read
     match op with
     | .«and» =>
+      -- `&&` is Lean `&&`: both operands must be boolean (TH0026), not
+      -- merely the synthesized result.
+      requireBooleanCondition leftTyped.type (exprLoc left)
       match Narrowing.extractGuard left with
       | some guard =>
         let narrowed := Narrowing.applyGuard guard ctx.bindings
-        let rightTyped ← withScope (Narrowing.bindingsDiff narrowed ctx.bindings) (synthJSExpr right)
+        let rightTyped ← withScope (Narrowing.bindingsDiff narrowed ctx.bindings) (synthCondition right)
         return { expr := .js expr, type := rightTyped.type, children := #[leftTyped, rightTyped] }
       | none =>
-        let rightTyped ← synthJSExpr right
+        let rightTyped ← synthCondition right
         return { expr := .js expr, type := rightTyped.type, children := #[leftTyped, rightTyped] }
     | .«or» =>
+      -- `||` is Lean `||`: both operands must be boolean (TH0026). A truthy
+      -- default (`s || "fallback"`) is out of subset.
+      requireBooleanCondition leftTyped.type (exprLoc left)
       match Narrowing.extractGuard left with
       | some guard =>
         let narrowed := Narrowing.applyNegatedGuard guard ctx.bindings
-        let rightTyped ← withScope (Narrowing.bindingsDiff narrowed ctx.bindings) (synthJSExpr right)
+        let rightTyped ← withScope (Narrowing.bindingsDiff narrowed ctx.bindings) (synthCondition right)
         return { expr := .js expr, type := .union [leftTyped.type, rightTyped.type], children := #[leftTyped, rightTyped] }
       | none =>
-        let rightTyped ← synthJSExpr right
+        let rightTyped ← synthCondition right
         return { expr := .js expr, type := leftTyped.type, children := #[leftTyped, rightTyped] }
     | _ =>
       let rightTyped ← synthJSExpr right
@@ -457,8 +463,7 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
 
   -- Conditional (ternary)
   | .conditionalExpr _ test consequent alternate =>
-    let testTyped ← synthJSExpr test
-    requireBooleanCondition testTyped.type (exprLoc test)
+    let testTyped ← synthCondition test
     let ctx ← read
     match Narrowing.extractGuard test with
     | some guard =>
@@ -540,7 +545,10 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
   | .unaryExpr _ .neg _ _ => return mk .number #[]
   | .unaryExpr _ .pos _ _ => return mk .number #[]
   | .unaryExpr _ .bitnot _ _ => return mk .number #[]
-  | .unaryExpr _ .not _ _ => return mk .boolean #[]
+  | .unaryExpr _ .not _ arg =>
+    -- `!` is Lean `not`: the operand must already be boolean (TH0026).
+    let argTyped ← synthCondition arg
+    return mk .boolean #[argTyped]
 
   -- this
   | .thisExpr _ => return mk .any #[]
@@ -599,6 +607,13 @@ where
       | .withDefault id _ => some id.name
       | .rest id => some id.name
       | .pattern _ => none
+
+/-- Synthesize a condition-position expression and require it to be
+    boolean — the single entry point for TH0026 condition checks. -/
+partial def synthCondition (e : Expression) : TypeCheckM TypedExpression := do
+  let typed ← synthJSExpr e
+  requireBooleanCondition typed.type (exprLoc e)
+  return typed
 
 end
 
