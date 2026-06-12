@@ -50,10 +50,10 @@ on demand).
 
 ## Baseline
 
-thales `0067add` (after the #26 while/do-while widening and the TH0026
-non-boolean-condition rejection from #55; previous measures `06796af`
-after #25 and `4177bd1` after #24 and the #40–#45 hardening), test262
-`fc32f3e8`, 2026-06-12:
+Measured 2026-06-12, after the #26 while/do-while widening and the
+TH0026 non-boolean-condition rejection (#55); previous measures followed
+#24 (with the #40–#45 hardening) and #25. test262 is the pinned
+submodule snapshot.
 
 ```
 Slice                                             Total  Skip   OoS  Pass  Fail  InSubset   Pass%
