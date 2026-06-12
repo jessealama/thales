@@ -194,7 +194,7 @@ def t_labeledBreak_nestedFunction : IO Unit := do
   if hasLabeledBreakOrContinue s then
     throw (IO.userError "labeled break inside nested function should not be flagged")
 
--- ── generalForDesugarable / hasOwnUnlabeledContinue (#26) ──────────────────
+-- ── generalForDesugarable / hasOwnUnlabeledContinue ──────────────────
 
 private def assertGeneralFor (loop : String) (expected : Bool) : IO Unit := do
   let s ← firstStmt s!"function f(xs: number[]): void \{ {loop} }"
@@ -213,7 +213,7 @@ def t_generalFor_exprInit : IO Unit :=
   assertGeneralFor "for (i = 5; i > 0; i -= 1) { }" true
 
 -- canonical shape must NOT fall back to the desugar (keeps its range
--- lowering, and keeps #25's operand rejections intact)
+-- lowering, and keeps the canonical-for operand rejections intact)
 def t_generalFor_canonicalExcluded : IO Unit :=
   assertGeneralFor "for (let i = 0; i < 5; i++) { }" false
 def t_generalFor_canonicalStringBoundExcluded : IO Unit := do
@@ -257,6 +257,33 @@ def t_ownContinue_switch : IO Unit :=
   assertOwnContinue
     "while (false) { switch (xs.length) { default: continue; } }" true
 
+-- ── desugarGeneralFor: the one decomposition all phases consume ─────────────
+
+-- `for (init; test; update) body` → `init; while (test) { body; update }`
+def t_desugar_shape : IO Unit := do
+  let s ← firstStmt
+    "function f(xs: number[]): void { for (let i = 9; i > 0; i -= 2) { } }"
+  match desugarGeneralFor s with
+  | some [.variableDecl _,
+          .whileStmt _ _ (.blockStmt _ [.exprStmt _ _])] => pure ()
+  | some _ => throw (IO.userError
+      "desugar: expected `init; while` with the update appended to the body")
+  | none => throw (IO.userError "expected a desugar for a compound-step for")
+
+-- a missing test desugars to `while (true)`
+def t_desugar_missingTest : IO Unit := do
+  let s ← firstStmt "function f(xs: number[]): void { for (;;) { break; } }"
+  match desugarGeneralFor s with
+  | some [.whileStmt _ (.literal _ (.boolean true) _) _] => pure ()
+  | _ => throw (IO.userError "expected a missing test to desugar to while (true)")
+
+-- a body with a labeled break never desugars (no loop lowering has labels)
+def t_desugar_labeledBreak : IO Unit := do
+  let s ← firstStmt
+    "function f(xs: number[]): void { for (let i = 9; i > 0; i -= 2) { outer: { break outer; } } }"
+  unless (desugarGeneralFor s).isNone do
+    throw (IO.userError "a body with a labeled break must not desugar")
+
 -- ── eval ──────────────────────────────────────────────────────────────────
 
 #eval t_forOf_const
@@ -293,3 +320,6 @@ def t_ownContinue_switch : IO Unit :=
 #eval t_ownContinue_direct
 #eval t_ownContinue_nestedLoop
 #eval t_ownContinue_switch
+#eval t_desugar_shape
+#eval t_desugar_missingTest
+#eval t_desugar_labeledBreak

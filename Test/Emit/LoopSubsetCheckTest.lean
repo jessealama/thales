@@ -1,6 +1,6 @@
 /-
   Test/Emit/LoopSubsetCheckTest.lean
-  Verifies shape-aware TH0010 routing in SubsetCheck (#25/#26):
+  Verifies shape-aware TH0010 routing in SubsetCheck:
   - Admitted for-of, canonical-for, while, do-while, and desugarable
     general-for shapes in do-mode-lowerable functions are accepted (no
     TH0010).
@@ -51,7 +51,7 @@ def testCanonicalForAdmitted : IO Unit := expectTH
   "function f(): number { let t = 0; for (let i = 0; i < 5; i++) { t += i; } return t; }"
   []
 
--- ── Case 3: while inside a function — admitted (#26) ──
+-- ── Case 3: while inside a function — admitted ──
 def testWhileAdmitted : IO Unit := expectTH
   "function f(n: number): number { let i = 0; while (i < n) { i++; } return i; }"
   []
@@ -152,31 +152,31 @@ def testForStringLengthBoundTH0010 : IO Unit := expectTH
   "function f(s: string): number { let t = 0; for (let i = 0; i < s.length; i++) { t += i; } return t; }"
   ["TH0010"]
 
--- ── Case 17: do-while inside a function — admitted (#26) ──
+-- ── Case 17: do-while inside a function — admitted ──
 def testDoWhileAdmitted : IO Unit := expectTH
   "function f(n: number): number { let s = 0; do { s += 1; n -= 1; } while (n > 0); return s; }"
   []
 
--- ── Case 18: do-while with loop-level continue → TH0010 (#26) ──
+-- ── Case 18: do-while with loop-level continue → TH0010 ──
 -- `repeat … until` re-enters the body without checking the test where TS
 -- jumps to it; EscapeAnalysis poisons the function, SubsetCheck rejects.
 def testDoWhileContinueTH0010 : IO Unit := expectTH
   "function f(n: number): number { do { if (n > 0) { continue; } } while (n > 0); return n; }"
   ["TH0010"]
 
--- ── Case 19: while inside a @throws function → TH0010 (#26) ──
+-- ── Case 19: while inside a @throws function → TH0010 ──
 def testWhileThrowsFnTH0010 : IO Unit := expectTH
   "/** @throws RangeError */\nfunction f(n: number): number { while (n > 0) { } return 0; }"
   ["TH0010"]
 
--- ── Case 20: while inside a @total function → TH0068 (#26) ──
+-- ── Case 20: while inside a @total function → TH0068 ──
 -- The lowering is partial-backed; the lake-side termination verification
 -- would pass vacuously, so the combination is rejected outright.
 def testTotalWhileTH0068 : IO Unit := expectTH
   "/** @total */\nfunction f(n: number): number { while (n > 0) { } return 0; }"
   ["TH0068"]
 
--- ── Case 21: do-while inside a @total function → TH0068 (#26) ──
+-- ── Case 21: do-while inside a @total function → TH0068 ──
 def testTotalDoWhileTH0068 : IO Unit := expectTH
   "/** @total */\nfunction f(n: number): number { do { } while (n > 0); return 0; }"
   ["TH0068"]
@@ -187,18 +187,18 @@ def testTotalCanonicalForOk : IO Unit := expectTH
   "/** @total */\nfunction f(): number { let t = 0; for (let i = 0; i < 5; i++) { t += i; } return t; }"
   []
 
--- ── Case 23: non-canonical for — admitted via while-desugar (#26) ──
+-- ── Case 23: non-canonical for — admitted via while-desugar ──
 def testGeneralForAdmitted : IO Unit := expectTH
   "function f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { t += i; } return t; }"
   []
 
--- ── Case 24: non-canonical for inside a @total function → TH0068 (#26) ──
+-- ── Case 24: non-canonical for inside a @total function → TH0068 ──
 -- The desugared lowering is the partial-backed `while`, same as Case 20.
 def testTotalGeneralForTH0068 : IO Unit := expectTH
   "/** @total */\nfunction f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { t += i; } return t; }"
   ["TH0068"]
 
--- ── Case 25: non-canonical for with loop-level continue → TH0010 (#26) ──
+-- ── Case 25: non-canonical for with loop-level continue → TH0010 ──
 -- The desugared body would skip the update clause on `continue`.
 def testGeneralForContinueTH0010 : IO Unit := expectTH
   "function f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { if (i > 4) { continue; } t += i; } return t; }"

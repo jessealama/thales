@@ -105,7 +105,7 @@ partial def hasLabeledBreakOrContinue : Statement → Bool
     do-while jumps to the test, but Lean's `repeat ... until` re-enters the
     body without checking — and in a while-desugared `for`, `continue`
     would skip the update clause — so those loop bodies stay rejected
-    when this holds (#26). -/
+    when this holds. -/
 partial def hasOwnUnlabeledContinue : Statement → Bool
   | .continueStmt _ none => true
   | .blockStmt _ ss => ss.any hasOwnUnlabeledContinue
@@ -125,13 +125,13 @@ partial def hasOwnUnlabeledContinue : Statement → Bool
   | _ => false
 
 /-- A non-canonical C-style `for` that can desugar to
-    `init; while (test) { body; update }` (#26). Conditions:
+    `init; while (test) { body; update }`. Conditions:
 
     * NOT `canonicalFor`-shaped — the canonical form keeps its structural
       `for i in [0:B]` lowering (`@total`-friendly; a desugared `while` is
       not). A canonical SHAPE whose operand later fails the caller's array
       check stays rejected rather than falling back here, preserving the
-      #25 boundaries.
+      canonical-for operand boundaries.
     * init is empty, a bare expression, or a single-identifier `let`/`const`
       declarator WITH an initializer (`var` hoists; out of subset).
     * if an update clause exists, the body has no loop-level `continue` —
@@ -155,5 +155,36 @@ def generalForDesugarable : Statement → Bool
          | some (.inr _) => false)
         && (update.isNone || !hasOwnUnlabeledContinue body))
   | _ => false
+
+/-- The desugaring of a non-canonical `for`:
+    `for (init; test; update) body` → `init; while (test) { body; update }`,
+    with a missing test desugaring to `while (true)`. `none` unless
+    `generalForDesugarable` holds and the body is free of labeled
+    break/continue (no loop lowering supports labels). EscapeAnalysis,
+    SubsetCheck, and the emitter all consume this one decomposition, so the
+    phases cannot disagree about whether a `for` desugars or what it
+    desugars to. The init binding outliving the loop in the enclosing block
+    is safe: shadowing rejection (TH0032) keeps any same-named outer
+    binding out, so no later read can resolve to the loop variable. -/
+def desugarGeneralFor : Statement → Option (List Statement)
+  | s@(.forStmt fb init test update body) =>
+      if generalForDesugarable s && !hasLabeledBreakOrContinue body then
+        let initStmts : List Statement := match init with
+          | none => []
+          | some (.inl e) => [.exprStmt fb e]
+          | some (.inr vd) => [.variableDecl vd]
+        let testE : Expression := match test with
+          | some e => e
+          | none => .literal fb (.boolean true) "true"
+        let bodyStmts : List Statement :=
+          (match body with
+           | .blockStmt _ ss => ss
+           | other => [other])
+          ++ (match update with
+              | some u => [.exprStmt fb u]
+              | none => [])
+        some (initStmts ++ [.whileStmt fb testE (.blockStmt fb bodyStmts)])
+      else none
+  | _ => none
 
 end Thales.Emit.LoopShape

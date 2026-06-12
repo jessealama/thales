@@ -52,7 +52,7 @@ structure MutCtx where
   /-- Inside a `@total` function body. while/do-while (and while-desugared
       `for`) lower to a partial-backed combinator the termination verifier
       cannot see through, so they draw TH0068 here instead of being
-      admitted (#26). -/
+      admitted. -/
   inTotalFn : Bool := false
   /-- Type alias environment threaded from the enclosing `annotatedFuncDecl`
       context; used to resolve array types for for-of admission. -/
@@ -91,6 +91,20 @@ private def loopContextAdmitted (ctx : MutCtx) : Bool :=
   match ctx.info with
   | none => false
   | some info => info.doModeLowerable && !ctx.noMutZone && ctx.allowEligible
+
+/-- Shared gate for the while-family loop arms (`while`, `do`/`while`,
+    desugared `for`): an admitted loop inside `@total` draws TH0068 — its
+    lowering is partial-backed, so the lake-side termination verification
+    would pass vacuously — otherwise the operand checks run. An unadmitted
+    loop is exactly one TH0010, no operand recursion. -/
+private def checkAdmittedLoop (ctx : MutCtx) (loc : Option SourceLocation)
+    (admitted : Bool) (operands : Unit → Array Diagnostic)
+    : Array Diagnostic :=
+  if admitted then
+    if ctx.inTotalFn then #[mkThalesDiag .totalHasUnverifiableLoop loc]
+    else operands ()
+  else
+    #[mkThalesDiag .loopNotSupported loc]
 
 /-- Resolve a TSType through type alias references.
     Follows at most one level of .ref to avoid infinite loops in v1. -/
@@ -299,30 +313,21 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
   -- admitted-shape loop and an unlowerable one (labeled break/continue,
   -- do-while with loop-level `continue`) rejects BOTH loops.
   --
-  -- #26: while/do-while have no per-loop shape conditions beyond what
-  -- EscapeAnalysis already folded into `doModeLowerable` (labels,
-  -- do-while `continue`). In a `@total` function the admitted shapes draw
-  -- TH0068 instead: their lowering is partial-backed and would make the
-  -- lake-side termination verification pass vacuously.
+  -- while has no per-loop shape conditions beyond what EscapeAnalysis
+  -- already folded into `doModeLowerable` (labels poison it there).
   | .whileStmt b test body =>
-    if loopContextAdmitted ctx then
-      if ctx.inTotalFn then
-        #[mkThalesDiag .totalHasUnverifiableLoop b.loc]
-      else
-        checkExpr ctx test ++ checkStmt ctx body
-    else
-      #[mkThalesDiag .loopNotSupported b.loc]
+    checkAdmittedLoop ctx b.loc (loopContextAdmitted ctx) fun _ =>
+      checkExpr ctx test ++ checkStmt ctx body
+  -- A do-while loop-level `continue` is rejected here, not only via
+  -- EscapeAnalysis poisoning: TS `continue` jumps to the test, but the
+  -- `repeat … until` lowering re-enters the body without checking it.
   | .doWhileStmt b body test =>
-    if loopContextAdmitted ctx then
-      if ctx.inTotalFn then
-        #[mkThalesDiag .totalHasUnverifiableLoop b.loc]
-      else
-        checkStmt ctx body ++ checkExpr ctx test
-    else
-      #[mkThalesDiag .loopNotSupported b.loc]
+    checkAdmittedLoop ctx b.loc
+      (loopContextAdmitted ctx && !LoopShape.hasOwnUnlabeledContinue body)
+      fun _ => checkStmt ctx body ++ checkExpr ctx test
   | .forInStmt b _ _ _ =>
     #[mkThalesDiag .loopNotSupported b.loc]
-  | s@(.forStmt b init test update body) =>
+  | s@(.forStmt b _ _ _ body) =>
     let canonicalAdmitted :=
       match LoopShape.classifyLoop s with
       | .canonicalFor _ (.inl _) _ => true
@@ -333,29 +338,20 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
       -- bare shapes, and routing `i++` through checkExpr would draw
       -- .assignmentInExpressionPosition.
       checkStmt ctx body
-    else if loopContextAdmitted ctx && LoopShape.generalForDesugarable s then
-      -- #26: desugars to `init; while (test) { body; update }`. In a
-      -- `@total` function that lowering is partial-backed — TH0068, like
-      -- while itself. Init and update are checked in STATEMENT position
-      -- (that is where the desugar puts them), so `i -= 2` routes through
-      -- the statement-position mutation rules, not
-      -- .assignmentInExpressionPosition.
-      if ctx.inTotalFn then
-        #[mkThalesDiag .totalHasUnverifiableLoop b.loc]
-      else
-        (match init with
-          | some (.inr vd) => checkStmt ctx (.variableDecl vd)
-          | some (.inl e) => checkStmt ctx (.exprStmt b e)
-          | none => #[])
-          ++ (match test with
-              | some e => checkExpr ctx e
-              | none => #[])
-          ++ checkStmt ctx body
-          ++ (match update with
-              | some u => checkStmt ctx (.exprStmt b u)
-              | none => #[])
     else
-      #[mkThalesDiag .loopNotSupported b.loc]
+      match LoopShape.desugarGeneralFor s with
+      | some desugared =>
+        if loopContextAdmitted ctx then
+          -- Check the statements the emitter will actually lower: init and
+          -- update land in STATEMENT position (so `i -= 2` routes through
+          -- the statement-position mutation rules, not
+          -- .assignmentInExpressionPosition) and the while arm supplies
+          -- the `@total` gate (TH0068).
+          desugared.foldl (fun acc d => acc ++ checkStmt ctx d) #[]
+        else
+          #[mkThalesDiag .loopNotSupported b.loc]
+      | none =>
+        #[mkThalesDiag .loopNotSupported b.loc]
   | s@(.forOfStmt b _ right body _) =>
     let rhsIsArray : Bool :=
       match right with

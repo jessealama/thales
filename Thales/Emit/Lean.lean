@@ -1206,40 +1206,15 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
                 { env with bindingEnv := env.bindingEnv.insert i .number }
               .forDo i iterExpr (shim :: emitBodyDo env' info (blockStmts body))
                 :: emitBodyDo env info rest
-      -- #26: a non-canonical `for` desugars at the AST level to
-      -- `init; while (test) { body; update }` and re-enters this function,
-      -- reusing the while lowering (and `emitVarDeclDo`'s `let mut`
-      -- routing for the init declarator). A missing test is `while true`.
-      -- The init binding outliving the loop in the Lean block is safe:
-      -- shadowing rejection (TH0032) keeps any same-named outer binding
-      -- out, so no later read can resolve to the loop variable.
+      -- A non-canonical `for` desugars to `init; while (test) { body;
+      -- update }` and re-enters this function, reusing the while lowering.
       | .notLowerable =>
-          match s with
-          | .forStmt fb init test update body =>
-              if LoopShape.generalForDesugarable s
-                  && !(LoopShape.hasLabeledBreakOrContinue body) then
-                let initStmts : List Statement := match init with
-                  | none => []
-                  | some (.inl e) => [.exprStmt fb e]
-                  | some (.inr vd) => [.variableDecl vd]
-                let testE : Expression := match test with
-                  | some e => e
-                  | none => .literal fb (.boolean true) "true"
-                let bodyStmts := blockStmts body
-                  ++ (match update with
-                      | some u => [.exprStmt fb u]
-                      | none => [])
-                emitBodyDo env info
-                  (initStmts
-                    ++ .whileStmt fb testE (.blockStmt fb bodyStmts) :: rest)
-              else unloweredDoStmt
-          | _ => unloweredDoStmt
-  -- #26 loop lowering: `while (c) body` → `while c do …`; `do body while (c)`
-  -- → `repeat … until !(c)` (TS loops WHILE the test holds, Lean loops UNTIL
-  -- it does). EscapeAnalysis admits only lowerable shapes into do-mode —
-  -- labeled break/continue, and a do-while whose loop-level `continue` would
-  -- skip the until-check, were poisoned upstream; the re-checks here are
-  -- defence-in-depth against phase drift, like the for cases above.
+          match LoopShape.desugarGeneralFor s with
+          | some desugared => emitBodyDo env info (desugared ++ rest)
+          | none => unloweredDoStmt
+  -- `while (c) body` → `while c do …`; `do body while (c)` →
+  -- `repeat … until !(c)`: TS loops WHILE the test holds, Lean's `repeat`
+  -- runs UNTIL it does. The shape re-checks are defence-in-depth, as above.
   | .whileStmt _ test body :: rest =>
       if LoopShape.hasLabeledBreakOrContinue body then unloweredDoStmt
       else

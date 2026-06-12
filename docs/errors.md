@@ -217,16 +217,14 @@ do-mode-lowerable declared functions:
   `B` is a non-negative integer literal or an array-typed `arr.length`, bound
   array not reassigned in the body.
 - `while (test) body` — any test expression; lowered to Lean do-notation
-  `while` ([#26](https://github.com/jessealama/thales/issues/26)). Not
-  allowed in `@total` functions — see TH0068.
+  `while`. Not allowed in `@total` functions — see TH0068.
 - `do body while (test)` — lowered to `repeat ... until !(test)`; the body
   runs at least once, as in TS. Same `@total` exclusion. A loop-level
   `continue` keeps a do-while rejected: TS `continue` jumps to the test,
   but Lean's `repeat ... until` re-enters the body without checking it.
 - Non-canonical C-style `for` (any init/test/update combination with a
   simple-identifier `let`/`const` init declarator, bare-expression init, or
-  no init) — desugared to `init; while (test) { body; update }`
-  ([#26](https://github.com/jessealama/thales/issues/26)). Same `@total`
+  no init) — desugared to `init; while (test) { body; update }`. Same `@total`
   exclusion as `while` (TH0068), and a loop-level `continue` keeps the
   shape rejected when an update clause exists (the desugared body would
   skip the update where TS runs it).

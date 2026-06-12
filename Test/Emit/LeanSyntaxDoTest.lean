@@ -169,7 +169,7 @@ def emptyForExpected : String :=
 
 def t10 : IO Unit := expectRender emptyForStmt emptyForExpected
 
--- whileDo / repeatUntilDo (#26) ---------------------------------------------
+-- whileDo / repeatUntilDo ---------------------------------------------
 
 -- t11: whileDo renders `while c do` with an indented body
 def whileStmtRender : String :=

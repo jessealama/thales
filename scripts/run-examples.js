@@ -366,18 +366,31 @@ function evaluateCase(inputPath) {
 
 // ---- driver ----
 
-/** Enumerate corpus cases. For `tests/conformance/`, the immediate
- *  subdirectories `accept/`, `reject/`, and `throws/` are each scanned for
- *  `.ts` files; `future/` is skipped (parked fixtures). For
+/** Enumerate corpus cases. For `tests/conformance/`, each bucket
+ *  subdirectory in `corpusBuckets` is scanned for `.ts` files;
+ *  `future/` is skipped (parked fixtures). For
  *  `Test/Examples/fixtures/`, each subdirectory containing `input.ts` is a
  *  case (paired with `expected-outcome.txt`). Returns an array of
  *  {label, inputPath, expectedPath?} ordered by label.
  */
+/** Directory membership IS the test specification: each bucket admits
+ *  exactly one pass label. A pass outcome with the wrong label (e.g. an
+ *  accept/ file that is merely subset-rejected) is a corpus violation, not
+ *  a pass — without this, a regression that demotes an accepted example to
+ *  subset-rejected would go unnoticed. This single table drives both the
+ *  corpus walk and the outcome enforcement, so a bucket cannot be scanned
+ *  without its required label. */
+const corpusBuckets = {
+  accept: 'accepted',
+  mirror: 'tsc-rejected',
+  reject: 'subset-rejected',
+  throws: 'both-throw',
+};
+
 function collectCases(rootDir, mode) {
   const cases = [];
   if (mode === 'flat') {
-    const buckets = ['accept', 'mirror', 'reject', 'throws'];
-    for (const bucket of buckets) {
+    for (const bucket of Object.keys(corpusBuckets)) {
       const bucketDir = path.join(rootDir, bucket);
       if (!fs.existsSync(bucketDir)) continue;
       const files = fs.readdirSync(bucketDir).sort();
@@ -406,18 +419,6 @@ function collectCases(rootDir, mode) {
   return cases;
 }
 
-/** Directory membership IS the test specification: each bucket admits
- *  exactly one pass label. A pass outcome with the wrong label (e.g. an
- *  accept/ file that is merely subset-rejected) is a corpus violation, not
- *  a pass — without this, a regression that demotes an accepted example to
- *  subset-rejected would go unnoticed. */
-const expectedLabelByBucket = {
-  accept: 'accepted',
-  mirror: 'tsc-rejected',
-  reject: 'subset-rejected',
-  throws: 'both-throw',
-};
-
 function runCorpus(rootDir, opts = {}) {
   const cases = collectCases(rootDir, opts.selfTest ? 'subdir' : 'flat');
   let passes = 0;
@@ -432,8 +433,8 @@ function runCorpus(rootDir, opts = {}) {
     }
     if (!opts.selfTest && outcome.kind === 'pass') {
       const bucket = c.label.split('/')[0];
-      const expected = expectedLabelByBucket[bucket];
-      if (expected && outcome.label !== expected) {
+      const expected = corpusBuckets[bucket];
+      if (outcome.label !== expected) {
         outcome = {
           kind: 'fail',
           label: 'bucket-mismatch',

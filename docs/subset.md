@@ -268,7 +268,7 @@ integer literal or `arr.length` for an array-typed parameter `arr` (a
 bound array (if any) is not reassigned in the body. Lowers to a Lean range
 loop (`for i in [0:B] do`) inside `Id.run do`.
 
-**`while` and `do`/`while`** ([#26](https://github.com/jessealama/thales/issues/26)):
+**`while` and `do`/`while`**:
 
 ```typescript
 function leftPad(str: string, len: number, ch: string): string {
@@ -289,7 +289,7 @@ mirroring the `@total`/`@throws` exclusivity. A do-while whose body has a
 loop-level `continue` stays rejected: TS `continue` jumps to the test,
 but Lean's `repeat ... until` re-enters the body without checking it.
 
-**Non-canonical C-style `for`** ([#26](https://github.com/jessealama/thales/issues/26)):
+**Non-canonical C-style `for`**:
 any `for (init; test; update)` where init is empty, a bare expression, or
 a single-identifier `let`/`const` declarator with an initializer.
 Desugars to `init; while (test) { body; update }`, so it inherits the

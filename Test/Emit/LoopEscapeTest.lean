@@ -1,6 +1,6 @@
 /-
   Test/Emit/LoopEscapeTest.lean
-  Pins the #25/#26 loop-shape flags on `MutationInfo`:
+  Pins the loop-shape flags on `MutationInfo`:
     * `hasLowerableLoop`     — the own body has a loop EscapeAnalysis admits
     * `hasUnloweredLoopShape` — the own body has a loop that poisons do-mode
   Both flags start `false`; lowerable loops set the first, everything
@@ -37,16 +37,16 @@ def t1 : IO Unit := do
   unless info.doModeLowerable do
     throw (IO.userError s!"expected doModeLowerable, got false")
 
--- ── while loop: lowerable (#26) ──────────────────────────────────────────────
+-- ── while loop: lowerable ──────────────────────────────────────────────
 def t2 : IO Unit := do
   let info ← analyzeFirstFuncLoop
     "function f(x: number): number { let n = 0; while (n < x) { n += 1; } return n; }"
   unless info.hasLowerableLoop do
-    throw (IO.userError s!"expected hasLowerableLoop (while, #26), got false")
+    throw (IO.userError s!"expected hasLowerableLoop (while), got false")
   if info.hasUnloweredLoopShape then
-    throw (IO.userError s!"expected !hasUnloweredLoopShape (while, #26), got true")
+    throw (IO.userError s!"expected !hasUnloweredLoopShape (while), got true")
   unless info.doModeLowerable do
-    throw (IO.userError s!"expected doModeLowerable (while, #26), got false")
+    throw (IO.userError s!"expected doModeLowerable (while), got false")
 
 -- ── for-of with loop-var reassignment: poisons do-mode ───────────────────────
 def t3 : IO Unit := do
@@ -97,14 +97,14 @@ def t7 : IO Unit := do
   if info.hasUnloweredLoopShape then
     throw (IO.userError s!"expected !hasUnloweredLoopShape (nested for-of), got true")
 
--- ── for-of with inner while: both lowerable (#26) ────────────────────────────
+-- ── for-of with inner while: both lowerable ────────────────────────────
 def t8 : IO Unit := do
   let info ← analyzeFirstFuncLoop
     "function f(xs: number[]): number { let t = 0; for (const x of xs) { while (t < x) { t += 1; } } return t; }"
   unless info.hasLowerableLoop do
-    throw (IO.userError s!"expected hasLowerableLoop (inner while, #26), got false")
+    throw (IO.userError s!"expected hasLowerableLoop (inner while), got false")
   if info.hasUnloweredLoopShape then
-    throw (IO.userError s!"expected !hasUnloweredLoopShape (inner while, #26), got true")
+    throw (IO.userError s!"expected !hasUnloweredLoopShape (inner while), got true")
 
 -- ── no loops: both flags false (regression guard) ────────────────────────────
 def t9 : IO Unit := do
@@ -154,7 +154,7 @@ def t_labeledLoopNoBreak : IO Unit := do
   if info.doModeLowerable then
     throw (IO.userError "expected !doModeLowerable (labeled loop, no break), got true")
 
--- ── #26: do-while is lowerable ───────────────────────────────────────────────
+-- ── do-while is lowerable ───────────────────────────────────────────────
 def t_doWhile : IO Unit := do
   let info ← analyzeFirstFuncLoop
     "function f(n: number): number { let s = 0; do { s += 1; n -= 1; } while (n > 0); return s; }"
@@ -163,7 +163,7 @@ def t_doWhile : IO Unit := do
   if info.hasUnloweredLoopShape then
     throw (IO.userError "expected !hasUnloweredLoopShape (do-while), got true")
 
--- ── #26: do-while with loop-level continue poisons ──────────────────────────
+-- ── do-while with loop-level continue poisons ──────────────────────────
 -- TS `continue` jumps to the test; `repeat … until` re-enters the body
 -- without checking it, so the shape cannot lower.
 def t_doWhileContinue : IO Unit := do
@@ -174,7 +174,7 @@ def t_doWhileContinue : IO Unit := do
   if info.doModeLowerable then
     throw (IO.userError "expected !doModeLowerable (do-while continue), got true")
 
--- ── #26: while with continue is fine (Lean's while re-checks the test) ──────
+-- ── while with continue is fine (Lean's while re-checks the test) ──────
 def t_whileContinue : IO Unit := do
   let info ← analyzeFirstFuncLoop
     "function f(n: number): number { let s = 0; while (s < n) { s += 1; if (s > 2) { continue; } } return s; }"
@@ -183,23 +183,23 @@ def t_whileContinue : IO Unit := do
   if info.hasUnloweredLoopShape then
     throw (IO.userError "expected !hasUnloweredLoopShape (while continue), got true")
 
--- ── #26: while with labeled break poisons ────────────────────────────────────
+-- ── while with labeled break poisons ────────────────────────────────────
 def t_whileLabeledBreak : IO Unit := do
   let info ← analyzeFirstFuncLoop
     "function f(n: number): number { outer: while (n > 0) { break outer; } return n; }"
   unless info.hasUnloweredLoopShape do
     throw (IO.userError "expected hasUnloweredLoopShape (while labeled break), got false")
 
--- ── #26: non-canonical for (compound step) is lowerable via while-desugar ───
+-- ── non-canonical for (compound step) is lowerable via while-desugar ───
 def t_generalFor : IO Unit := do
   let info ← analyzeFirstFuncLoop
     "function f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { t += i; } return t; }"
   unless info.hasLowerableLoop do
-    throw (IO.userError "expected hasLowerableLoop (general for, #26), got false")
+    throw (IO.userError "expected hasLowerableLoop (general for), got false")
   if info.hasUnloweredLoopShape then
-    throw (IO.userError "expected !hasUnloweredLoopShape (general for, #26), got true")
+    throw (IO.userError "expected !hasUnloweredLoopShape (general for), got true")
 
--- ── #26: general for + loop-level continue (update would be skipped) ────────
+-- ── general for + loop-level continue (update would be skipped) ────────
 def t_generalForContinue : IO Unit := do
   let info ← analyzeFirstFuncLoop
     "function f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { if (i > 4) { continue; } t += i; } return t; }"

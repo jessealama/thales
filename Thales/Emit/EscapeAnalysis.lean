@@ -64,7 +64,7 @@ structure MutationInfo where
   /-- The own body contains a loop do-mode cannot lower: `notLowerable`
       shape, a loop variable that is reassigned, a canonical-for bound
       identifier that is reassigned, a labeled break/continue, or a
-      do-while with a loop-level `continue` (#26). Poisons do-mode
+      do-while with a loop-level `continue`. Poisons do-mode
       wholesale, like `hasTryShape`. -/
   hasUnloweredLoopShape : Bool := false
 
@@ -267,7 +267,7 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
             | some _ => { a with initializedLets := a.initializedLets.insert id.name }
             | none => { a with uninitializedLets := a.uninitializedLets.insert id.name }
         | _ => a) acc
-  -- #26: while/do-while have no loop variable or bound to constrain — any
+  -- while/do-while have no loop variable or bound to constrain — any
   -- test expression is re-evaluated per iteration by Lean's `while` /
   -- `repeat … until` exactly as in TS. Only labeled break/continue (no
   -- labeledStmt lowering) and, for do-while, a loop-level `continue`
@@ -312,10 +312,9 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
           else
             { accFinal with hasLowerableLoop := true }
       | _ =>
-          -- #26: a non-canonical `for` that can desugar to
+          -- A non-canonical `for` that can desugar to
           -- `init; while (test) { body; update }` is lowerable.
-          if LoopShape.generalForDesugarable s
-              && !LoopShape.hasLabeledBreakOrContinue b then
+          if (LoopShape.desugarGeneralFor s).isSome then
             { accFinal with hasLowerableLoop := true }
           else
             { accFinal with hasUnloweredLoopShape := true }

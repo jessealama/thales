@@ -87,10 +87,10 @@ inductive LDoStmt where
   | matchDo (scrutinee : LExpr) (arms : List (LPattern × List LDoStmt))
   -- `for v in iter do …` (#25); may run zero iterations, so not terminating
   | forDo (var : String) (iter : LExpr) (body : List LDoStmt)
-  -- `while c do …` (#26); the condition is re-evaluated per iteration and
+  -- `while c do …`; the condition is re-evaluated per iteration and
   -- `continue` re-checks it, matching TS `while`
   | whileDo (cond : LExpr) (body : List LDoStmt)
-  -- `repeat … until c` (#26); body runs at least once — TS `do`/`while`
+  -- `repeat … until c`; body runs at least once — TS `do`/`while`
   -- (callers negate the TS test: TS loops WHILE true, Lean loops UNTIL true)
   | repeatUntilDo (body : List LDoStmt) (cond : LExpr)
   | breakDo                                                       -- break
@@ -113,7 +113,7 @@ partial def doStmtsTerminate (stmts : List LDoStmt) : Bool :=
   | some (.matchDo _ arms) =>
       !arms.isEmpty && arms.all fun (_, ss) => doStmtsTerminate ss
   -- Deliberately covers letMut/letPure/assign/forDo/whileDo/repeatUntilDo/
-  -- breakDo/continueDo. forDo and whileDo may run zero iterations (#25/#26);
+  -- breakDo/continueDo. forDo and whileDo may run zero iterations;
   -- repeatUntilDo runs at least once but its exits (until-check, break) need
   -- no trailing return, so all three stay conservatively non-terminating.
   | some _ => false
