@@ -76,6 +76,8 @@ soundness check).
 | TH0064 | Exceptions   | Undeclared propagation                              |
 | TH0080 | Refinement   | Literal value out of range for refinement type      |
 | TH0081 | Refinement   | Value not assignable to refinement without evidence |
+| TH0082 | Subset       | Possibly-undefined operand; narrow before use       |
+| TH0083 | Subset       | Computed index access only supported on arrays      |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive             |
 | TH9001 | Directive    | Directive code mismatch                             |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed           |
@@ -801,3 +803,65 @@ Fix: narrow with a predicate guard (`if (isInteger(n)) { ... }`) or use
 the throwing constructor (`asInteger(n)`) which validates at runtime.
 
 [Details in subset.md](./subset.md#prelude-refinement-types)
+
+---
+
+### TH0082 — Possibly-undefined operand
+
+**Message:** `Operand may be 'undefined' or 'null'; narrow it first (e.g. bind it and test !== undefined)`
+
+Emitted when an arithmetic or relational binary operator (`+ - * / % ** & | ^ << >> >>> < <= > >=`)
+has an operand whose type is `T | undefined` or `T | null` — most commonly
+an un-narrowed array element read, since `xs[i]` is `T | undefined` under
+`noUncheckedIndexedAccess`. `tsc` accepts some of these programs (e.g.
+`(string | undefined) + string`), but JS's coercion semantics for
+`undefined` operands (`undefined + "x"` is `"undefinedx"`) are not
+mirrored by the Lean runtime, so the subset requires narrowing first.
+
+Equality tests (`===`, `!==`, `==`, `!=`) are exempt — they are the
+narrowing primitives.
+
+Example (rejected):
+
+```typescript
+const greetings: string[] = ['hi', 'hello'];
+function greet(i: number, name: string): string {
+  // @thales-expect-error TH0082
+  return greetings[i] + ' ' + name;
+}
+```
+
+Fix: bind the read and narrow it before use:
+
+```typescript
+function greet(i: number, name: string): string {
+  const hit = greetings[i];
+  if (hit !== undefined) {
+    return hit + ' ' + name;
+  }
+  return name;
+}
+```
+
+---
+
+### TH0083 — Computed index access only supported on arrays
+
+**Message:** `Computed index access is only supported on array values`
+
+Emitted when a computed (bracket) access `x[i]` has a non-array base —
+string indexing (`s[0]`), object bracket access — or a non-numeric index
+expression. `tsc` accepts several of these shapes; arrays are the only
+indexable values in the subset.
+
+Example (rejected):
+
+```typescript
+function firstChar(s: string): string | undefined {
+  // @thales-expect-error TH0083
+  return s[0];
+}
+```
+
+Fix: for strings, use the supported string methods; for objects, use dot
+access with a statically-known property name.
