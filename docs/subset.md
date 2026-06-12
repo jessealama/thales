@@ -223,28 +223,84 @@ Mutable captured variables require reference cells (`ST.Ref` or `IO.Ref`) in Lea
 
 **Category:** Control flow
 
-Rejected:
+**Status:** Partially lifted. The admitted shapes are described below;
+everything else still fires TH0010.
+
+#### Admitted shapes
+
+The following loop forms are accepted inside declared functions that are
+do-mode-lowerable (no `@throws`, no `try`/`catch`, no do-mode-poisoning
+constructs):
+
+**`for-of` over an array identifier or literal:**
 
 ```typescript
-for (let i = 0; i < arr.length; i++) {
-  process(arr[i]);
+function sum(xs: number[]): number {
+  let total = 0;
+  for (const x of xs) {
+    total += x;
+  }
+  return total;
 }
 ```
 
-Idiomatic replacement:
+Conditions: the right-hand side is a simple identifier of array type or an
+array literal; the loop variable is `const x` or `let x` (simple identifier,
+not a destructuring pattern); the loop variable is not reassigned in the body.
+Lowers to `for x in xs do` inside `Id.run do`.
+
+**Canonical C-style `for`:**
 
 ```typescript
-arr.forEach(process);
-// or
+function indexWeight(xs: number[]): number {
+  let total = 0;
+  for (let i = 0; i < xs.length; i++) {
+    total += i;
+  }
+  return total;
+}
+```
+
+Conditions: init is `let i = 0`; test is `i < B` where `B` is a non-negative
+integer literal or `arr.length` for an array-typed parameter `arr` (a
+`string`-typed `.length` bound is rejected — Lean range bounds need
+`Array.size`, and string length semantics diverge); update is `i++`; the
+bound array (if any) is not reassigned in the body. Lowers to a Lean range
+loop (`for i in [0:B] do`) inside `Id.run do`.
+
+**Inside admitted loops:** unlabeled `break`, `continue`, early `return`, and
+mutation following the TH0001–TH0007 rules are all accepted.
+
+#### Still rejected
+
+- `while` and `do`/`while` — issue [#26](https://github.com/jessealama/thales/issues/26).
+  Workaround: recursive helper or array methods.
+- `for-in`, `for await`.
+- Non-canonical C-style `for` (update other than `i++`, bound other than a
+  non-negative integer literal or an array-typed `arr.length`, init other
+  than `let i = 0`).
+- Destructuring or expression loop-variable heads.
+- `for-of` with a call expression on the right-hand side.
+- Loop variable or bound array reassigned in the body.
+- Labeled `break`/`continue`.
+- Any loop inside a `@throws`-annotated function or a function with
+  `try`/`catch`.
+
+For the still-rejected cases, idiomatic replacements are recursive helpers or
+higher-order array methods:
+
+```typescript
+// while → recursion
 function go(i: number): void {
   if (i >= arr.length) return;
   process(arr[i]);
   return go(i + 1);
 }
 go(0);
-```
 
-`for`, `while`, and `do`/`while` loops have no pure-functional analogue without introducing a monad. Recursive functions and higher-order array methods (`map`, `filter`, `reduce`, `forEach`) cover all practical cases and embed directly into Lean. Loop support via `Id.run do` is a candidate for 0.5.5.
+// for-of side-effects without mutation → forEach
+arr.forEach(process);
+```
 
 ---
 

@@ -12,12 +12,14 @@
       refinement-predicate shape) is ineligible — assignment would
       invalidate narrowing evidence the emitter bakes into `dite`/`match`.
   Beyond per-variable eligibility, `doModeLowerable` is the function-level
-  gate (#40/#41): bodies containing a `try`/`catch`, a switch shape the
-  do-mode emitter cannot lower, or a read of a narrow-tested variable
-  outside its test positions stay on the pure emission path entirely, so
-  their mutation is rejected wholesale.
+  gate (#25/#40/#41): bodies containing a `try`/`catch`, a switch shape the
+  do-mode emitter cannot lower, a loop shape the do-mode emitter cannot
+  lower, or a read of a narrow-tested variable outside its test positions
+  stay on the pure emission path entirely, so their mutation is rejected
+  wholesale.
 -/
 import Thales.AST
+import Thales.Emit.LoopShape
 import Std.Data.HashSet
 
 namespace Thales.Emit.EscapeAnalysis
@@ -55,6 +57,15 @@ structure MutationInfo where
       pure Except match-chains, which do-mode cannot thread through, so
       mutation in such a function stays rejected. -/
   hasTryShape : Bool := false
+  /-- The own body contains a loop `classifyLoop` admits (#25). Triggers
+      do-mode entry even without eligible mutation — the pure path cannot
+      host a loop. -/
+  hasLowerableLoop : Bool := false
+  /-- The own body contains a loop do-mode cannot lower: `notLowerable`
+      shape, a loop variable that is reassigned, a canonical-for bound
+      identifier that is reassigned, or a labeled break/continue. Poisons
+      do-mode wholesale, like `hasTryShape`. -/
+  hasUnloweredLoopShape : Bool := false
 
 def MutationInfo.eligible (info : MutationInfo) (name : String) : Bool :=
   (info.params.contains name || info.initializedLets.contains name)
@@ -70,14 +81,15 @@ def MutationInfo.narrowingDependentBody (info : MutationInfo) : Bool :=
   info.narrowTested.toList.any fun n =>
     info.nonTestRefs.contains n || info.capturedRefs.contains n
 
-/-- Function-level do-mode admissibility (#40/#41): the single predicate
+/-- Function-level do-mode admissibility (#25/#40/#41): the single predicate
     that BOTH SubsetCheck's mutation routing and `emitFuncDecl`'s do-mode
     entry consult — they must never disagree, or accepted programs get
     miscompiled. False when the body contains a shape `emitBodyDo` cannot
-    lower. -/
+    lower (unlowered switch, try/catch, unlowered loop, or narrowing-dependent
+    body). -/
 def MutationInfo.doModeLowerable (info : MutationInfo) : Bool :=
   !info.hasUnloweredSwitchShape && !info.hasTryShape
-    && !info.narrowingDependentBody
+    && !info.narrowingDependentBody && !info.hasUnloweredLoopShape
 
 private def insertAll (s : Std.HashSet String) (xs : List String) : Std.HashSet String :=
   xs.foldl (·.insert ·) s
@@ -254,21 +266,59 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
             | some _ => { a with initializedLets := a.initializedLets.insert id.name }
             | none => { a with uninitializedLets := a.uninitializedLets.insert id.name }
         | _ => a) acc
-  | .whileStmt _ t b => walkStmt (walkExpr acc t) b
-  | .doWhileStmt _ b t => walkExpr (walkStmt acc b) t
-  | .forStmt _ init t u b =>
-      let acc := match init with
+  | .whileStmt _ t b =>
+      let acc := walkStmt (walkExpr acc t) b
+      { acc with hasUnloweredLoopShape := true }
+  | .doWhileStmt _ b t =>
+      let acc := walkExpr (walkStmt acc b) t
+      { acc with hasUnloweredLoopShape := true }
+  | s@(.forStmt _ init t u b) =>
+      -- Walk order: init, test, body, THEN the update — `accAfterBody`
+      -- excludes the structural `i++` so it can't poison the loop var.
+      let accBeforeBody := match init with
         | some (.inl e) => walkExpr acc e
         | some (.inr vd) => walkStmt acc (.variableDecl vd)
         | none => acc
-      let acc := match t with | some e => walkExpr acc e | none => acc
-      let acc := match u with | some e => walkExpr acc e | none => acc
-      walkStmt acc b
-  | .forInStmt _ left r b | .forOfStmt _ left r b _ =>
+      let accBeforeBody := match t with | some e => walkExpr accBeforeBody e | none => accBeforeBody
+      let accAfterBody := walkStmt accBeforeBody b
+      let accFinal := match u with | some e => walkExpr accAfterBody e | none => accAfterBody
+      match LoopShape.classifyLoop s with
+      | .canonicalFor v bound _ =>
+          -- Containment, not a before/after diff: a shadowing loop var shares
+          -- its string key with outer vars, so the diff is unreliable. This
+          -- false-poisons a clean loop under a same-named mutated outer var,
+          -- but is always sound (tested).
+          let vMutatedAfterBody := accAfterBody.mutated.contains v
+          let boundMutated := match bound with
+            | .inr arrName => accAfterBody.mutated.contains arrName
+            | .inl _ => false
+          if vMutatedAfterBody || boundMutated
+              || LoopShape.hasLabeledBreakOrContinue b then
+            { accFinal with hasUnloweredLoopShape := true }
+          else
+            { accFinal with hasLowerableLoop := true }
+      | _ => { accFinal with hasUnloweredLoopShape := true }
+  | s@(.forOfStmt _ left r b _) =>
+      -- Walk children first so the mutated set is populated, then classify.
       let acc := match left with
         | .inl e => walkExpr acc e
         | .inr vd => walkStmt acc (.variableDecl vd)
-      walkStmt (walkExpr acc r) b
+      let acc := walkStmt (walkExpr acc r) b
+      match LoopShape.classifyLoop s with
+      | .forOf v _ _ _ =>
+          -- No update clause to exclude, so the full accumulator is checked;
+          -- same containment conservatism as canonicalFor.
+          if acc.mutated.contains v || LoopShape.hasLabeledBreakOrContinue b then
+            { acc with hasUnloweredLoopShape := true }
+          else
+            { acc with hasLowerableLoop := true }
+      | _ => { acc with hasUnloweredLoopShape := true }
+  | .forInStmt _ left r b =>
+      let acc := match left with
+        | .inl e => walkExpr acc e
+        | .inr vd => walkStmt acc (.variableDecl vd)
+      let acc := walkStmt (walkExpr acc r) b
+      { acc with hasUnloweredLoopShape := true }
   | .switchStmt _ d cases =>
       -- Lowerable switch shape: a discriminated-union dispatch
       -- (`switch (ident.field)`, non-computed) where every arm returns and
@@ -288,7 +338,14 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
       let acc := walkStmt { acc with hasTryShape := true } b
       let acc := match h with | some (.mk _ _ hb _) => walkStmt acc hb | none => acc
       match f with | some s => walkStmt acc s | none => acc
-  | .labeledStmt _ _ b | .withStmt _ _ b => walkStmt acc b
+  | .withStmt _ _ b => walkStmt acc b
+  | .labeledStmt _ _ b =>
+      -- Labels on loops poison do-mode wholesale (`emitBodyDo` has no
+      -- labeledStmt lowering); labeled break/continue inside bodies is
+      -- poisoned separately via hasLabeledBreakOrContinue.
+      let acc := walkStmt acc b
+      if LoopShape.isLoopStmt b then { acc with hasUnloweredLoopShape := true }
+      else acc
   | .functionDecl _ _ _ body _ _ =>
       -- nested function declaration: everything it references is a capture
       { acc with capturedRefs := insertAll acc.capturedRefs (identsStmt body) }

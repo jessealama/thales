@@ -50,8 +50,9 @@ on demand).
 
 ## Baseline
 
-thales `4177bd1` (after #24 mutation widening and the #40–#45 emitter
-hardening), test262 `fc32f3e8`, 2026-06-11:
+thales `06796af` (after #25 for-of/canonical-for widening; previous
+measure `4177bd1` after #24 and the #40–#45 hardening), test262
+`fc32f3e8`, 2026-06-11:
 
 ```
 Slice                                             Total  Skip   OoS  Pass  Fail  InSubset   Pass%
@@ -80,7 +81,7 @@ Top blocking diagnostics (tests blocked, by attribution):
 Code              Shim   Body  Unknown
 TS2339            1179    895        0
 TH0001            1179    213        0
-TS2304            1179     77        0
+TS2304            1179     92        0
 TH0030            1179     48        0
 TH0007            1179     18        0
 TH0063            1179      2        0
@@ -108,9 +109,20 @@ dropped 451 → 213**, with the remainder reclassified into the new precise
 codes — TH0005 (captured mutation, 171), TH0006 (expression-position
 assignment, 78), TH0007 (mutation under throws/try, 18) — and the truly
 in-subset mutations absorbed into tests still blocked by other constructs.
-Loops (TH0010, 765) remain the dominant body blocker, next up in #25/#26.
-`parse-error` counts tests where thales hard-fails without a structured
-diagnostic (e.g. multi-declarator `var x, y;`).
+Loops (TH0010, 765) remain the dominant body blocker — and the #25
+re-measure shows **zero movement on that count**, honestly: #25 admits
+loops only inside declared function bodies and only over array-typed
+operands, while the slice tests overwhelmingly use top-level loops and
+non-array iterables (strings, Maps, generators). Unblocking the top-level
+population is #49 (top-level mutation + loops in `main`'s IO do-block);
+`while`/`do-while` are #26. The visible #25 delta is body TS2304
+77 → 92: for-of bodies are now genuinely type-checked (previously the
+checker skipped them wholesale), so their undeclared references —
+including destructured loop-variable names the checker does not yet
+bind — are recorded; those tests were already loop-blocked, so this is
+attribution honesty, not new blockage. `parse-error` counts tests where
+thales hard-fails without a structured diagnostic (e.g. multi-declarator
+`var x, y;`).
 
 New shim-attribution rows vs the pre-#24 baseline: TS2322 — #24's
 declared-type precision (unannotated/const bindings are no longer `any`)

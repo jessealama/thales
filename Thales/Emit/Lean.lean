@@ -49,6 +49,18 @@ private def resolveTypeAlias (env : EmitEnv) : TSType → TSType
   | .paren inner => resolveTypeAlias env inner
   | other => other
 
+/-- The element type of `name`, when its binding resolves to an array type;
+    `none` otherwise. Loop lowering (#25) keys on this: SubsetCheck only
+    admits array operands, so a `none` here means the phases drifted and the
+    caller must emit the loud marker rather than miscompile. -/
+private def arrayElemTy? (env : EmitEnv) (name : String) : Option TSType :=
+  match env.bindingEnv.get? name with
+  | some rawTy =>
+      match resolveTypeAlias env rawTy with
+      | .array et => some et
+      | _ => none
+  | none => none
+
 /-- If every branch of a union shares one underlying primitive (all string
     literals, or all numeric literals, or all boolean literals), return that
     primitive. Used to lower `1 | 2 | 3` to `Float`, `"a" | "b"` to `String`,
@@ -575,6 +587,12 @@ private def refinementKindPredicate : RefinementKind → String
 private def unloweredDoStmt : List LDoStmt :=
   [.ret (.var "(unsupported: statement not lowerable in do-mode)")]
 
+/-- Unwrap a block into its statement list; a single statement becomes a
+    singleton list. -/
+private def blockStmts : Statement → List Statement
+  | .blockStmt _ ss => ss
+  | other => [other]
+
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
@@ -1056,11 +1074,12 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
 partial def emitBody : List Statement → LExpr :=
   emitBodyEnv {}
 
-/-- #24 do-mode lowering: the body of a function with an eligible
+/-- #24/#25 do-mode lowering: the body of a function with an eligible
     statement-position mutation, as a list of `Id.run do` statements.
     Only shapes SubsetCheck admits into do-mode arrive here — straight-line
-    mutation, declarations, `return`, `if`/`else`, and discriminated-union
-    switches; anything else was rejected upstream
+    mutation, declarations, `return`, `if`/`else`, discriminated-union
+    switches, `for-of` and canonical `for` loops, and unlabeled
+    `break`/`continue` (#25); anything else was rejected upstream
     (TH0001/TH0005/TH0006/TH0007/TH0010 …). A statement this function has
     no lowering for renders the loud `(unsupported: …)` marker — invalid
     Lean — rather than being dropped: silent divergence from the TS
@@ -1101,13 +1120,9 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
   -- not apply), so mutation inside a branch stays visible after it and
   -- `return` inside a branch is do-notation's native early return.
   | .ifStmt _ cond thn elsOpt :: rest =>
-      let stmtsOf : Statement → List Statement := fun s =>
-        match s with
-        | .blockStmt _ ss => ss
-        | other => [other]
-      let thnDo := emitBodyDo env info (stmtsOf thn)
+      let thnDo := emitBodyDo env info (blockStmts thn)
       let elsDo := match elsOpt with
-        | some els => emitBodyDo env info (stmtsOf els)
+        | some els => emitBodyDo env info (blockStmts els)
         | none => []
       .ifDo (emitExprEnv env cond) thnDo elsDo :: emitBodyDo env info rest
   | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
@@ -1146,6 +1161,57 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
             | _ => unloweredDoStmt)
           | none => unloweredDoStmt)
       | _ => unloweredDoStmt
+  -- #25 loop lowering: `for (const x of rhs)` / `for (let i = 0; i < B; i++)`.
+  -- EscapeAnalysis admits only lowerable shapes into do-mode; anything else
+  -- (`.notLowerable`, a non-array operand) falls to the loud marker as
+  -- defence-in-depth against phase drift.
+  | s@(.forOfStmt _ _ _ _ _) :: rest | s@(.forStmt _ _ _ _ _) :: rest =>
+      match LoopShape.classifyLoop s with
+      -- `for (const x of rhs) { … }` → `for x in rhs do …`. An ident RHS
+      -- threads its element type onto `x` in the body env; an array-literal
+      -- RHS leaves the env unchanged (element type unknown without
+      -- inference — affects refinement projection only, not correctness).
+      | .forOf x rhs rhsExpr body =>
+          let bodyEnv? : Option EmitEnv :=
+            match rhs with
+            | .arrayLit _ => some env
+            | .ident arrName =>
+                (arrayElemTy? env arrName).map fun et =>
+                  { env with bindingEnv := env.bindingEnv.insert x et }
+          match bodyEnv? with
+          | none => unloweredDoStmt
+          | some env' =>
+              .forDo x (emitExprEnv env rhsExpr)
+                  (emitBodyDo env' info (blockStmts body))
+                :: emitBodyDo env info rest
+      -- `for (let i = 0; i < B; i++) { … }` → `for i in [0:B] do …`. The
+      -- range binder is a `Nat` while TS `number` is `Float`, so the body is
+      -- prefixed with `let i : Float := i.toFloat`, shadowing the Nat binder
+      -- for all downstream uses. A `.inr` bound emits `arr.size` directly —
+      -- range bounds are Nat, so no Float coercion as in expression position.
+      | .canonicalFor i bound body =>
+          let iter? : Option LExpr :=
+            match bound with
+            | .inl n => some (.rangeTo (.int (Int.ofNat n)))
+            | .inr arrName =>
+                if (arrayElemTy? env arrName).isSome then
+                  some (.rangeTo (.proj (.var arrName) "size"))
+                else none
+          match iter? with
+          | none => unloweredDoStmt
+          | some iterExpr =>
+              let shim : LDoStmt :=
+                .letPure i (some (.const "Float")) (.proj (.var i) "toFloat")
+              let env' : EmitEnv :=
+                { env with bindingEnv := env.bindingEnv.insert i .number }
+              .forDo i iterExpr (shim :: emitBodyDo env' info (blockStmts body))
+                :: emitBodyDo env info rest
+      | .notLowerable => unloweredDoStmt
+  -- #25: unlabeled break/continue map 1:1; trailing statements are dead code
+  -- and dropped (same convention as `return`). Labeled forms fall through to
+  -- the loud marker (EscapeAnalysis poisons them upstream).
+  | .breakStmt _ none :: _ => [.breakDo]
+  | .continueStmt _ none :: _ => [.continueDo]
   -- A list that ends without `return` is a branch falling through to the
   -- code after its `if` — emit nothing. The function-level trailing
   -- `return ()` (for void bodies) is appended by `emitFuncDecl`.
@@ -1309,16 +1375,18 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
   let stmts := match body with
     | .blockStmt _ ss => ss
     | other           => [other]
-  -- #24: a body with an eligible statement-position mutation lowers to
-  -- `Id.run do` with `let mut`; everything else keeps the pure path
-  -- untouched. `@throws` functions never reach do-mode (TH0007 upstream),
-  -- and `doModeLowerable` is the same function-level gate SubsetCheck's
-  -- mutation routing rejects on (#40/#41) — checked here too so a checker
-  -- regression degrades to the pure path instead of a miscompile.
+  -- #24/#25: a body with an eligible statement-position mutation (#24) OR a
+  -- lowerable loop (#25) lowers to `Id.run do`; everything else keeps the
+  -- pure path untouched.  `@throws` functions never reach do-mode (TH0007
+  -- upstream), and `doModeLowerable` is the same function-level gate
+  -- SubsetCheck's mutation routing rejects on (#40/#41) — checked here too
+  -- so a checker regression degrades to the pure path instead of a
+  -- miscompile.  Loop-triggered entry is needed because the pure expression
+  -- path has no host for a `for … in … do` statement (#25).
   let info := EscapeAnalysis.analyze (params.map (·.1)) body
   let hasEligibleMutation := info.mutated.toList.any info.eligible
   let bodyExpr :=
-    if hasEligibleMutation && info.doModeLowerable && throws.isEmpty then
+    if (hasEligibleMutation || info.hasLowerableLoop) && info.doModeLowerable && throws.isEmpty then
       -- Mutated parameters self-shadow as `let mut x := x`: JS parameters
       -- are mutable locals whose mutation never affects the caller.
       let prologue : List LDoStmt := normalizedParams.filterMap fun (n, _) =>
