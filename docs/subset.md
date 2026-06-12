@@ -268,29 +268,62 @@ integer literal or `arr.length` for an array-typed parameter `arr` (a
 bound array (if any) is not reassigned in the body. Lowers to a Lean range
 loop (`for i in [0:B] do`) inside `Id.run do`.
 
+**`while` and `do`/`while`** ([#26](https://github.com/jessealama/thales/issues/26)):
+
+```typescript
+function leftPad(str: string, len: number, ch: string): string {
+  let pad = str;
+  while (pad.length < len) {
+    pad = ch + pad;
+  }
+  return pad;
+}
+```
+
+Any test expression is accepted. `while` lowers to Lean do-notation
+`while`; `do`/`while` lowers to `repeat ... until !(test)` (body runs at
+least once, as in TS). Both are backed by a partial combinator — fine for
+evaluation (the byte-match contract is unaffected), opaque to termination
+proofs — so they are **mutually exclusive with `@total`** (TH0068),
+mirroring the `@total`/`@throws` exclusivity. A do-while whose body has a
+loop-level `continue` stays rejected: TS `continue` jumps to the test,
+but Lean's `repeat ... until` re-enters the body without checking it.
+
+**Non-canonical C-style `for`** ([#26](https://github.com/jessealama/thales/issues/26)):
+any `for (init; test; update)` where init is empty, a bare expression, or
+a single-identifier `let`/`const` declarator with an initializer.
+Desugars to `init; while (test) { body; update }`, so it inherits the
+`while` rules (including the `@total` exclusion, TH0068). A loop-level
+`continue` is rejected when an update clause exists (the desugared body
+would skip the update where TS runs it before re-testing). The canonical
+`for (let i = 0; i < B; i++)` shape keeps its structural range lowering
+above — including its operand restrictions — and stays `@total`-friendly.
+
 **Inside admitted loops:** unlabeled `break`, `continue`, early `return`, and
 mutation following the TH0001–TH0007 rules are all accepted.
 
 #### Still rejected
 
-- `while` and `do`/`while` — issue [#26](https://github.com/jessealama/thales/issues/26).
-  Workaround: recursive helper or array methods.
 - `for-in`, `for await`.
-- Non-canonical C-style `for` (update other than `i++`, bound other than a
-  non-negative integer literal or an array-typed `arr.length`, init other
-  than `let i = 0`).
-- Destructuring or expression loop-variable heads.
+- Canonical-shaped `for` whose bound is not a non-negative integer
+  literal or an array-typed `arr.length` (e.g. a `string`-typed
+  `s.length`) — the canonical shape never falls back to the while-desugar.
+- `var` loop-variable heads; destructuring or expression loop-variable
+  heads in `for-of`.
 - `for-of` with a call expression on the right-hand side.
-- Loop variable or bound array reassigned in the body.
+- Loop variable or bound array reassigned in a canonical-for body.
 - Labeled `break`/`continue`.
-- Any loop inside a `@throws`-annotated function or a function with
-  `try`/`catch`.
+- Loop-level `continue` in a do-while body, or in a general `for` body
+  when an update clause exists.
+- Any loop at module level, inside a `@throws`-annotated function, or in
+  a function with `try`/`catch`.
+- `while`/`do-while`/general `for` inside a `@total` function (TH0068).
 
 For the still-rejected cases, idiomatic replacements are recursive helpers or
 higher-order array methods:
 
 ```typescript
-// while → recursion
+// still-rejected loop (e.g. module-level, or inside @throws/@total) → recursion
 function go(i: number): void {
   if (i >= arr.length) return;
   process(arr[i]);

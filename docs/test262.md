@@ -124,6 +124,16 @@ attribution honesty, not new blockage. `parse-error` counts tests where
 thales hard-fails without a structured diagnostic (e.g. multi-declarator
 `var x, y;`).
 
+The #26 re-measure (while/do-while admitted, general C-style `for`
+desugared to `while` — all function-scoped) reproduces this table
+**byte-identically**, zero movement on TH0010 (765) included. That is the
+structurally expected outcome, not a measurement artifact: the slice
+tests are top-level statement scripts, and loop admission is (still)
+function-scoped, so every slice loop keeps drawing module-level TH0010.
+The widening #26 delivers is exercised by the conformance corpus
+(`loop-while-*`, `loop-do-while-*`, `loop-for-general-*`); test262
+movement on these slices is gated entirely on #49.
+
 New shim-attribution rows vs the pre-#24 baseline: TS2322 — #24's
 declared-type precision (unannotated/const bindings are no longer `any`)
 exposes a pre-existing truthy-narrowing gap at `harness/assert.ts:34`
