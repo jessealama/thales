@@ -1206,7 +1206,27 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
                 { env with bindingEnv := env.bindingEnv.insert i .number }
               .forDo i iterExpr (shim :: emitBodyDo env' info (blockStmts body))
                 :: emitBodyDo env info rest
-      | .notLowerable => unloweredDoStmt
+      -- A non-canonical `for` desugars to `init; while (test) { body;
+      -- update }` and re-enters this function, reusing the while lowering.
+      | .notLowerable =>
+          match LoopShape.desugarGeneralFor s with
+          | some desugared => emitBodyDo env info (desugared ++ rest)
+          | none => unloweredDoStmt
+  -- `while (c) body` → `while c do …`; `do body while (c)` →
+  -- `repeat … until !(c)`: TS loops WHILE the test holds, Lean's `repeat`
+  -- runs UNTIL it does. The shape re-checks are defence-in-depth, as above.
+  | .whileStmt _ test body :: rest =>
+      if LoopShape.hasLabeledBreakOrContinue body then unloweredDoStmt
+      else
+        .whileDo (emitExprEnv env test) (emitBodyDo env info (blockStmts body))
+          :: emitBodyDo env info rest
+  | .doWhileStmt _ body test :: rest =>
+      if LoopShape.hasLabeledBreakOrContinue body
+          || LoopShape.hasOwnUnlabeledContinue body then unloweredDoStmt
+      else
+        .repeatUntilDo (emitBodyDo env info (blockStmts body))
+            (.app (.var "not") [emitExprEnv env test])
+          :: emitBodyDo env info rest
   -- #25: unlabeled break/continue map 1:1; trailing statements are dead code
   -- and dropped (same convention as `return`). Labeled forms fall through to
   -- the loud marker (EscapeAnalysis poisons them upstream).

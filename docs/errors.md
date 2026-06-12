@@ -20,7 +20,7 @@ displayed in diagnostics for human readability.
 See `docs/superpowers/specs/2026-04-21-conformance-harness-design.md` for
 the full contract and harness details.
 
-This reference lists all 20 subset `TH####` codes plus the 5 directive
+This reference lists all subset `TH####` codes plus the 5 directive
 codes (TH9000–TH9004) with minimal detail. For full explanation,
 rationale, and idiomatic replacements, see [subset.md](./subset.md).
 
@@ -67,6 +67,7 @@ soundness check).
 | TH0050 | Recursion    | Cannot verify termination                           |
 | TH0066 | Totality     | `@total` and `@throws` declared together            |
 | TH0067 | Totality     | `@total` function has uncaught throw                |
+| TH0068 | Totality     | `@total` function contains an unverifiable loop     |
 | TH0070 | Totality     | `@total` asserted but Lean rejects termination      |
 | TH0060 | Exceptions   | Unannotated `throw`                                 |
 | TH0061 | Exceptions   | Unused `@throws` annotation                         |
@@ -215,18 +216,32 @@ do-mode-lowerable declared functions:
 - `for (let i = 0; i < B; i++)` — canonical C-style with `i++` update, bound
   `B` is a non-negative integer literal or an array-typed `arr.length`, bound
   array not reassigned in the body.
+- `while (test) body` — any test expression; lowered to Lean do-notation
+  `while`. Not allowed in `@total` functions — see TH0068.
+- `do body while (test)` — lowered to `repeat ... until !(test)`; the body
+  runs at least once, as in TS. Same `@total` exclusion. A loop-level
+  `continue` keeps a do-while rejected: TS `continue` jumps to the test,
+  but Lean's `repeat ... until` re-enters the body without checking it.
+- Non-canonical C-style `for` (any init/test/update combination with a
+  simple-identifier `let`/`const` init declarator, bare-expression init, or
+  no init) — desugared to `init; while (test) { body; update }`. Same `@total`
+  exclusion as `while` (TH0068), and a loop-level `continue` keeps the
+  shape rejected when an update clause exists (the desugared body would
+  skip the update where TS runs it).
 - Unlabeled `break`, `continue`, and early `return` inside admitted loops.
 - Mutation inside an admitted loop follows the same rules as mutation
   elsewhere in do-mode (see TH0001–TH0007).
 
-**Still rejected:** `while` / `do-while` (issue [#26](https://github.com/jessealama/thales/issues/26)); `for-in`; `for await`; non-canonical
-C-style `for` (any shape other than `i++` / non-negative literal or
-array-typed `arr.length` bound); destructuring or expression loop-variable
-heads;
+**Still rejected:** `for-in`; `for await`; `var` or destructuring or
+expression loop-variable heads; canonical-shaped `for` whose bound is not a
+non-negative integer literal or array-typed `arr.length` (e.g. a
+string-typed `s.length`);
 `for-of` with a call on the right-hand side; loop-variable or bound-array
-reassignment in the body; labeled `break`/`continue`; any loop in a
-`@throws`-annotated function, or a function that contains `try`/`catch` or
-other do-mode-poisoning constructs.
+reassignment in a canonical-for body; labeled `break`/`continue`; a
+loop-level `continue` in a do-while body or in a general `for` body with an
+update clause; any loop at module level, in a
+`@throws`-annotated function, or in a function that contains `try`/`catch`
+or other do-mode-poisoning constructs.
 
 [Details in subset.md#th0010--loop-not-supported-use-recursion-or-array-methods](./subset.md#th0010--loop-not-supported-use-recursion-or-array-methods)
 
@@ -427,7 +442,7 @@ Rejected: `function f(n: bigint): bigint { ... return f(n - 1); ... /* non-struc
 
 ## Totality
 
-`@total` is the Thales-TS claim that **a function always returns a value of its declared return type** — it terminates and has no observable failure modes. Three diagnostics enforce this contract: TH0066 (the annotation can't coexist with `@throws`), TH0067 (no failures may escape the body), and TH0070 (Lean's termination checker must accept the emitted `def`).
+`@total` is the Thales-TS claim that **a function always returns a value of its declared return type** — it terminates and has no observable failure modes. Four diagnostics enforce this contract: TH0066 (the annotation can't coexist with `@throws`), TH0067 (no failures may escape the body), TH0068 (no loops the termination checker can't see through), and TH0070 (Lean's termination checker must accept the emitted `def`).
 
 ### TH0066 — `@total` and `@throws` declared together
 
@@ -488,6 +503,32 @@ function outer(n: number): number {
 ```
 
 Fix: handle the failure case with `try`/`catch`, or annotate the function with `@throws` instead of `@total`.
+
+---
+
+### TH0068 — `@total` function contains an unverifiable loop
+
+**Message:** `` `@total` function contains a loop whose termination cannot be verified; use a for-of loop or recursion, or remove `@total` ``
+
+Emitted at each `while` / `do-while` loop inside a `@total` function. These loops lower to Lean do-notation `while` / `repeat ... until`, which are backed by a partial combinator: the emitted code compiles whether or not the loop terminates, so the lake-side termination verification (TH0070) would pass vacuously instead of checking anything. Rather than let `@total` make a claim the verifier cannot inspect, the combination is rejected outright — mirroring how TH0066 keeps `@total` and `@throws` apart.
+
+`for-of` and canonical `for` loops are unaffected: they lower to Lean's structural `for ... in`, which the termination checker does see through (see `loop-total-forof.ts` in the conformance corpus).
+
+Example (rejected):
+
+```typescript
+/** @total */
+function drain(n: number): number {
+  let i = n;
+  while (i > 0) {
+    // TH0068 (would diverge for non-integer n, unprovable either way)
+    i -= 1;
+  }
+  return i;
+}
+```
+
+Fix: rewrite the loop as for-of/canonical `for` or recursion, or remove `@total` to fall back to `partial def`.
 
 ---
 

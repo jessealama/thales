@@ -169,6 +169,48 @@ def emptyForExpected : String :=
 
 def t10 : IO Unit := expectRender emptyForStmt emptyForExpected
 
+-- whileDo / repeatUntilDo ---------------------------------------------
+
+-- t11: whileDo renders `while c do` with an indented body
+def whileStmtRender : String :=
+  renderDoStmt (.whileDo (.binOp "<" (.var "pad") (.var "len")) [
+    .assign "pad" (.binOp "+" (.var "ch") (.var "pad"))
+  ])
+
+def whileExpected : String :=
+  "while (pad < len) do\n" ++
+  "  pad := (ch + pad)"
+
+def t11 : IO Unit := expectRender whileStmtRender whileExpected
+
+-- t12: repeatUntilDo renders `repeat`, indented body, dedented `until c`
+def repeatStmtRender : String :=
+  renderDoStmt (.repeatUntilDo [
+    .assign "n" (.binOp "-" (.var "n") (.int 1))
+  ] (.app (.var "not") [.binOp ">" (.var "n") (.int 0)]))
+
+def repeatExpected : String :=
+  "repeat\n" ++
+  "  n := (n - 1)\n" ++
+  "until (not ((n > 0)))"
+
+def t12 : IO Unit := expectRender repeatStmtRender repeatExpected
+
+-- t13: doStmtsTerminate — while/repeatUntil alone are false; with trailing
+-- ret the list terminates
+def t13 : IO Unit := do
+  unless !doStmtsTerminate [.whileDo (.bool true) [.ret (.var "x")]] do
+    throw (IO.userError "whileDo alone should not terminate")
+  unless doStmtsTerminate [.whileDo (.bool true) [], .ret (.var "x")] do
+    throw (IO.userError "whileDo then ret should terminate")
+  unless !doStmtsTerminate [.repeatUntilDo [.ret (.var "x")] (.bool true)] do
+    throw (IO.userError "repeatUntilDo alone should not terminate")
+
+-- t14: empty whileDo body renders "pure ()" (valid Lean)
+def t14 : IO Unit := expectRender
+  (renderDoStmt (.whileDo (.bool true) []))
+  ("while true do\n" ++ "  pure ()")
+
 #eval t1
 #eval t2
 #eval t3
@@ -179,3 +221,7 @@ def t10 : IO Unit := expectRender emptyForStmt emptyForExpected
 #eval t8
 #eval t9
 #eval t10
+#eval t11
+#eval t12
+#eval t13
+#eval t14
