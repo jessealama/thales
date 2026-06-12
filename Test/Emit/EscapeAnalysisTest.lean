@@ -107,10 +107,12 @@ def expectLowerable (src : String) (expected : Bool) : IO Unit := do
 def t14 : IO Unit := expectLowerable
   "function f(x: number): number { let n = 0; n = 1; try { return x; } catch (e) { return n; } }"
   false
--- a narrow-tested variable read outside its test (#40): not lowerable …
+-- a null-tested PARAM read outside its test is lowerable: do-mode lowers
+-- the test to a statement-position match with pattern rebinding (the
+-- param's binding type is always recorded, so the match can fire)
 def t15 : IO Unit := expectLowerable
   "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }"
-  false
+  true
 -- … but a var that only ever appears in its test leaves the function
 -- lowerable (the t7b source)
 def t16 : IO Unit := expectLowerable

@@ -23,6 +23,10 @@ structure EmitEnv where
   -- Map from function name → parameter types (in order). Used at call
   -- sites to coerce numeric literal arguments into refinement-typed slots.
   funcParamTypes : Std.HashMap String (List TSType) := {}
+  -- Map from function name → declared return type (normalized). Lets an
+  -- un-annotated `const x = f(...)` record x's binding so Option-narrowing
+  -- can fire on it.
+  funcRetTypes : Std.HashMap String TSType := {}
   -- Counter used to generate unique dite-binder names. Bumped each time
   -- a fresh `h_i` is introduced (e.g. for `is<T>`-narrowing shadow-lets).
   diteBinderCounter : Nat := 0
@@ -593,6 +597,14 @@ private def blockStmts : Statement → List Statement
   | .blockStmt _ ss => ss
   | other => [other]
 
+/-- Normalize a TSType for use in emission: convert nullable unions to `option`. -/
+private def normalizeForEmit : TSType → TSType
+  | .union types =>
+    match normalizeNullableUnion types with
+    | some optTy => optTy
+    | none => .union types
+  | other => other
+
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
@@ -854,8 +866,17 @@ partial def emitVarDecl (env : EmitEnv)
                   <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
                   |>.getD (emitExprEnv env e)
             | none   => .var "()"
+          -- Record the binding's type: a normalized annotation when present,
+          -- else inferred from the initializer shape (call to a declared
+          -- function / element read on an array binding) so Option-narrowing
+          -- (`if (x !== undefined)`) can fire on un-annotated consts.
+          let inferredTy : Option TSType := match init with
+            | some (.callExpr _ (.identifier _ f) _ _) => env.funcRetTypes.get? f
+            | some (.memberExpr _ (.identifier _ arrName) _ true _) =>
+                (arrayElemTy? env arrName).map (fun et => TSType.option et)
+            | _ => none
           let env' :=
-            match typeAnnotation with
+            match (typeAnnotation.map normalizeForEmit) <|> inferredTy with
             | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
             | none   => env
           .letE id.name ty initExpr (emitVarDecl env' rest body)
@@ -1128,7 +1149,38 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
       let elsDo := match elsOpt with
         | some els => emitBodyDo env info (blockStmts els)
         | none => []
-      .ifDo (emitExprEnv env cond) thnDo elsDo :: emitBodyDo env info rest
+      -- Definedness test on an Option-typed binding: a statement-position
+      -- match rebinds the name at the unwrapped type via pattern shadowing
+      -- (do-mode twin of `emitBodyEnv`'s lowering). When the THEN branch
+      -- returns on every path, the continuation joins the OTHER arm so it
+      -- flows at the post-test type (e.g. `if (x === null) return …;` —
+      -- everything after runs under the some-rebinding). Otherwise both
+      -- arms are mutation-only and the continuation follows the match,
+      -- where TS flow types are back to the un-narrowed binding anyway.
+      let narrowedMatch : Option (List LDoStmt) :=
+        match nullCheckVar cond with
+        | some (varName, positive) =>
+            match env.bindingEnv.get? varName with
+            | some (.option _) =>
+                let someArm := LPattern.ctor "some" [.var varName]
+                let noneArm := LPattern.ctor "none" []
+                if EscapeAnalysis.stmtsReturn [thn] then
+                  let contDo := elsDo ++ emitBodyDo env info rest
+                  let arms :=
+                    if positive then [(noneArm, thnDo), (someArm, contDo)]
+                    else [(someArm, thnDo), (noneArm, contDo)]
+                  some [.matchDo (.var varName) arms]
+                else
+                  let arms :=
+                    if positive then [(noneArm, thnDo), (someArm, elsDo)]
+                    else [(someArm, thnDo), (noneArm, elsDo)]
+                  some (.matchDo (.var varName) arms :: emitBodyDo env info rest)
+            | _ => none
+        | none => none
+      match narrowedMatch with
+      | some stmts => stmts
+      | none =>
+          .ifDo (emitExprEnv env cond) thnDo elsDo :: emitBodyDo env info rest
   | .exprStmt _ _ :: rest => emitBodyDo env info rest  -- dropped, as in pure mode
   -- Discriminated-union switch, do-mode twin of `emitBodyEnv`'s arm.
   -- EscapeAnalysis guarantees every arm returns and there is no `default`
@@ -1264,8 +1316,16 @@ partial def emitVarDeclDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
                   <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
                   |>.getD (emitExprEnv env e)
             | none   => .var "()"
+          -- Binding type: normalized annotation, else initializer-shape
+          -- inference — mirrors `emitVarDecl` so Option-narrowing fires on
+          -- un-annotated consts in do-mode too.
+          let inferredTy : Option TSType := match init with
+            | some (.callExpr _ (.identifier _ f) _ _) => env.funcRetTypes.get? f
+            | some (.memberExpr _ (.identifier _ arrName) _ true _) =>
+                (arrayElemTy? env arrName).map (fun et => TSType.option et)
+            | _ => none
           let env' :=
-            match typeAnnotation with
+            match (typeAnnotation.map normalizeForEmit) <|> inferredTy with
             | some t => { env with bindingEnv := env.bindingEnv.insert id.name t }
             | none   => env
           let bind := if info.mutated.contains id.name
@@ -1374,14 +1434,6 @@ partial def emitIfIO (env : EmitEnv) (cond : Expression) (thn : Statement)
 
 end
 
-/-- Normalize a TSType for use in emission: convert nullable unions to `option`. -/
-private def normalizeForEmit : TSType → TSType
-  | .union types =>
-    match normalizeNullableUnion types with
-    | some optTy => optTy
-    | none => .union types
-  | other => other
-
 /-- Emit a TypeScript function declaration. `total = true` emits a `def`
     (forcing Lean's termination checker); otherwise `partial def`. -/
 def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typeParams : List String)
@@ -1389,13 +1441,19 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     (body : Statement) (throws : List String := [])
     (funcThrowsEnv : Std.HashMap String (List String) := {})
     (funcParamTypes : Std.HashMap String (List TSType) := {})
-    (total : Bool := false) : Option LDecl :=
+    (total : Bool := false)
+    (funcRetTypes : Std.HashMap String TSType := {})
+    (topBindings : Std.HashMap String TSType := {}) : Option LDecl :=
   let normalizedRetTy := normalizeForEmit retTy
   let normalizedParams := params.map fun (n, t) => (n, normalizeForEmit t)
+  -- Seed with the top-level bindings (TH0032 forbids shadowing, so params
+  -- and locals can't collide with them in accepted programs); params win.
   let bindingEnv : Std.HashMap String TSType :=
-    normalizedParams.foldl (fun m (n, t) => m.insert n t) {}
+    normalizedParams.foldl (fun m (n, t) => m.insert n t)
+      (topBindings.fold (fun m k v => m.insert k (normalizeForEmit v)) {})
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
-                         throwTypes := throws, funcThrowsEnv, funcParamTypes }
+                         throwTypes := throws, funcThrowsEnv, funcParamTypes,
+                         funcRetTypes }
   let stmts := match body with
     | .blockStmt _ ss => ss
     | other           => [other]
@@ -1500,6 +1558,16 @@ private def buildFuncParamTypesEnv (body : List TSStatement) : Std.HashMap Strin
         env.insert name paramTys
     | _ => env) {}
 
+/-- Build a map from function name → declared return type (normalized for
+    emission, so `T | undefined` arrives as `.option T`). Feeds the
+    initializer-shape inference for un-annotated `const x = f(...)`. -/
+private def buildFuncRetTypesEnv (body : List TSStatement) : Std.HashMap String TSType :=
+  body.foldl (fun env ts =>
+    match ts with
+    | .annotatedFuncDecl _ name _ _ (some retAnn) _ _ _ _ _ =>
+        env.insert name (normalizeForEmit retAnn.type)
+    | _ => env) {}
+
 /-- Build a `TypeContext` for the emit pass: registers each top-level type
     alias and the declared type of each annotated `const`/`let`/`var`. Used
     to resolve type-level constructs like `__typeof X` and `__indexAccess`. -/
@@ -1533,6 +1601,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
   let resolvedAliases := resolveAliases prog.body
   let funcThrowsEnv := buildFuncThrowsEnv prog.body
   let funcParamTypes := buildFuncParamTypesEnv prog.body
+  let funcRetTypes := buildFuncRetTypesEnv prog.body
   let tsImports := collectImports prog.body
   -- Top-level binding env: every `annotatedVarDecl` with a declared type
   -- contributes a binding so that `console.log(a + b)` can detect refinement
@@ -1546,7 +1615,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
         acc.insert name .string
     | _ => acc) {}
   let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
-                            funcThrowsEnv, funcParamTypes }
+                            funcThrowsEnv, funcParamTypes, funcRetTypes }
   let optToList : Option LDecl → List LDecl := fun
     | some d => [d]
     | none => []
@@ -1570,7 +1639,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
         let throws : List String := match throwsAnn with
           | .declared ts => ts
           | .absent      => []
-        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total)
+        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total funcRetTypes topBindingEnv)
     | .annotatedVarDecl _ _kind name typeAnn (some init) =>
         match init with
         | .arrowFunctionExpr _ arrowParams body _isExpr async arrowRetAnn =>
@@ -1581,7 +1650,7 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
               let (simpleParams, retTy) := arrowFuncParts arrowParams effectiveAnn
               optToList (emitFuncDecl resolvedAliases name [] simpleParams retTy (match body with
                 | .inl e  => .blockStmt {} [.returnStmt {} (some e)]
-                | .inr s  => s) [] funcThrowsEnv funcParamTypes)
+                | .inr s  => s) [] funcThrowsEnv funcParamTypes false funcRetTypes topBindingEnv)
         | other =>
             -- Non-arrow const: prefer the user's annotation when present.
             -- Otherwise, attempt to infer a Lean type from the initializer

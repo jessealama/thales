@@ -57,3 +57,14 @@ def testIfElseReturn : IO Unit :=
 #eval testArrowFunction
 #eval testMultiLet
 #eval testIfElseReturn
+
+-- Pure path: an UN-annotated const bound to a call returning `T | undefined`
+-- records its binding from the callee's declared return type, so the
+-- null-test narrowing lowers to a match (parameters already did this; #43).
+def testPureLocalOptionNarrow : IO Unit :=
+  expectEmitFunc
+    "function pick(b: boolean): string | undefined { if (b) { return \"yes\"; } return undefined; }
+function f(b: boolean): string { const hit = pick(b); if (hit !== undefined) { return hit + \"!\"; } return \"none\"; }" "M"
+    ["match hit with", "some hit =>", "none =>"]
+
+#eval testPureLocalOptionNarrow

@@ -134,14 +134,14 @@ console.log(f(3));"
     ["def f"]
     (forbidden := ["Id.run do", "let mut"])
 
--- narrowing-dependent read (null-tested `x` read outside its test): no
--- do-mode; the pure path lowers the null test to an Option match
-def testNarrowedReadStaysPure : IO Unit :=
+-- null-tested `x` read outside its test no longer poisons do-mode: the
+-- statement-position match rebinds `x` and, because the THEN branch
+-- returns, the continuation joins the some-arm at the narrowed type
+def testNarrowedReadLowersInDo : IO Unit :=
   expectEmit
     "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }
 console.log(f(\"abc\"));"
-    ["def f", "match x with"]
-    (forbidden := ["Id.run do", "let mut"])
+    ["def f", "Id.run do", "let mut n", "match x with", ".none", ".some x", "x.length"]
 
 #eval testStraightLineDo
 #eval testPureStaysPure
@@ -154,4 +154,26 @@ console.log(f(\"abc\"));"
 #eval testEarlyReturnDo
 #eval testIfElseBothReturn
 #eval testTryBodyStaysPure
-#eval testNarrowedReadStaysPure
+#eval testNarrowedReadLowersInDo
+
+-- A const local bound to an element read narrows via a statement-position
+-- match in do-mode: the some-arm rebinds the name at the unwrapped type
+-- and `return` keeps do-notation's native early exit.
+def testDoModeOptionNarrow : IO Unit :=
+  expectEmit
+    "const cache: string[] = [\"\", \" \"];
+function f(n: number): string {
+  let out = \"\";
+  while (out.length < n) {
+    const hit = cache[n];
+    if (hit !== undefined) {
+      return hit;
+    }
+    out = out + \"x\";
+  }
+  return out;
+}"
+    ["match hit with", "some hit =>", "none =>"]
+    ["hit.isSome"]
+
+#eval testDoModeOptionNarrow
