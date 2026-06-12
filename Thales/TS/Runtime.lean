@@ -302,6 +302,13 @@ end Result
 /-- Safe array indexing. TS surface: `arr[i]` in Thales-TS returns `Option<T>`. -/
 @[inline] def Array.get? {α : Type} (arr : Array α) (i : Nat) : Option α := arr[i]?
 
+/-- JS array element read: `xs[i]` with a `number` index. Fractional,
+    negative, NaN, infinite, non-safe-integer, and out-of-bounds indices
+    all read as `undefined` (`none`); `-0` reads element 0. The `isNatural`
+    guard makes the `Float → Nat` conversion exact. -/
+@[inline] def indexRead {α : Type} (xs : Array α) (i : Float) : Option α :=
+  if isNatural i then xs[i.toUInt64.toNat]? else none
+
 /-- Strip trailing zeros from the fractional part of a `Float.toString` output,
     and drop the dot if nothing remains. `"42.000000" → "42"`,
     `"12.560000" → "12.56"`. -/
