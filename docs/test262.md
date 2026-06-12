@@ -50,9 +50,10 @@ on demand).
 
 ## Baseline
 
-thales `06796af` (after #25 for-of/canonical-for widening; previous
-measure `4177bd1` after #24 and the #40–#45 hardening), test262
-`fc32f3e8`, 2026-06-11:
+thales `0067add` (after the #26 while/do-while widening and the TH0026
+non-boolean-condition rejection from #55; previous measures `06796af`
+after #25 and `4177bd1` after #24 and the #40–#45 hardening), test262
+`fc32f3e8`, 2026-06-12:
 
 ```
 Slice                                             Total  Skip   OoS  Pass  Fail  InSubset   Pass%
@@ -84,6 +85,7 @@ TH0001            1179    213        0
 TS2304            1179     92        0
 TH0030            1179     48        0
 TH0007            1179     18        0
+TH0026            1179     17        0
 TH0063            1179      2        0
 TH0021            1179      0        0
 TH0031            1179      0        0
@@ -133,6 +135,16 @@ function-scoped, so every slice loop keeps drawing module-level TH0010.
 The widening #26 delivers is exercised by the conformance corpus
 (`loop-while-*`, `loop-do-while-*`, `loop-for-general-*`); test262
 movement on these slices is gated entirely on #49.
+
+The TH0026 re-measure (non-boolean conditions rejected, #55) leaves
+every other count byte-identical and adds one attribution row: TH0026
+blocks the shim — the `harness/assert.ts:34` truthy narrowing documented
+below now draws a structured rejection instead of silently mistyping —
+and 17 test bodies that branch on truthy conditions. Totals and OoS are
+unchanged: all 17 were already blocked by other codes, so this is
+attribution honesty, not new blockage. (The new row pushes TH0004 —
+0 shim / 5 body — past the runner's top-20 display; the table above
+retains it from the baseline measure.)
 
 New shim-attribution rows vs the pre-#24 baseline: TS2322 — #24's
 declared-type precision (unannotated/const bindings are no longer `any`)
