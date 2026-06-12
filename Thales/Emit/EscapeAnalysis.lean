@@ -51,8 +51,8 @@ structure MutationInfo where
   nullTested : Std.HashSet String := {}
   /-- Locals whose declaration lets the emitter record a binding type: an
       explicit annotation, a call-to-named-function initializer, or a
-      computed-member (element read) initializer. Mirrors the inference in
-      `emitVarDecl`/`emitVarDeclDo`; params are recordable by construction. -/
+      computed-member (element read) initializer. Mirrors the emitter's
+      `recordDeclBinding`; params are recordable by construction. -/
   typedDecls : Std.HashSet String := {}
   /-- Identifiers referenced in the own body outside narrow-test positions:
       the subject occurrence of `x === null` / `pred(x)` does not count,
@@ -285,7 +285,7 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
         match pat with
         | .identifier id =>
           -- Shapes whose binding type the emitter can record (must mirror
-          -- the initializer inference in `emitVarDecl`/`emitVarDeclDo`).
+          -- the emitter's `recordDeclBinding`).
           let recordable : Bool :=
             tyAnn.isSome ||
             (match init with

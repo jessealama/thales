@@ -107,9 +107,8 @@ def expectLowerable (src : String) (expected : Bool) : IO Unit := do
 def t14 : IO Unit := expectLowerable
   "function f(x: number): number { let n = 0; n = 1; try { return x; } catch (e) { return n; } }"
   false
--- a null-tested PARAM read outside its test is lowerable: do-mode lowers
--- the test to a statement-position match with pattern rebinding (the
--- param's binding type is always recorded, so the match can fire)
+-- a null-tested PARAM read outside its test is lowerable: the test lowers
+-- to a statement-position match with pattern rebinding
 def t15 : IO Unit := expectLowerable
   "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }"
   true

@@ -58,9 +58,9 @@ def testIfElseReturn : IO Unit :=
 #eval testMultiLet
 #eval testIfElseReturn
 
--- Pure path: an UN-annotated const bound to a call returning `T | undefined`
--- records its binding from the callee's declared return type, so the
--- null-test narrowing lowers to a match (parameters already did this; #43).
+-- Pure path: an un-annotated const bound to a call records its binding
+-- from the callee's declared return type, so the null test lowers to a
+-- match.
 def testPureLocalOptionNarrow : IO Unit :=
   expectEmitFunc
     "function pick(b: boolean): string | undefined { if (b) { return \"yes\"; } return undefined; }

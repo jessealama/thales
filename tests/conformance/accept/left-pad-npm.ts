@@ -1,11 +1,8 @@
-// Faithful port of npm left-pad v1.3.0 to `tsc --strict` — same algorithm:
-// cached pads for the common space case, logarithmic doubling loop
-// otherwise. Strictness rewrites, behavior unchanged:
-//   - typed signature (subsumes the untyped `str + ''` coercion and the
-//     `ch` default-and-coerce dance);
-//   - `(n & 1) === 1` for truthy `if (len & 1)` (TH0026);
-//   - the cache hit is bound and narrowed before use (TH0082) — for
-//     n in 1..9 the hit always exists, but the type system can't see that.
+// npm left-pad v1.3.0 ported to `tsc --strict`: cached pads for the space
+// case, logarithmic doubling loop otherwise. Strictness rewrites: typed
+// signature, `(n & 1) === 1` for the truthy bit-test (TH0026), and the
+// cache hit bound + narrowed before use (TH0082; the hit always exists
+// for n in 1..9, which the type system can't see).
 const cache: string[] = [
   '',
   ' ',

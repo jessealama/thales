@@ -405,17 +405,15 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
     let isRelationalOp : Bool := match op with
       | .lt | .leq | .gt | .geq => true
       | _ => false
+    let leftResolved ← resolveType leftTyped.type
+    let rightResolved ← resolveType rightTyped.type
     if isArithmeticOp op || isRelationalOp then
-      let leftResolved ← resolveType leftTyped.type
-      let rightResolved ← resolveType rightTyped.type
       if isNullable leftResolved then
         emitDiagnostic (.thales .possiblyUndefinedOperand) (exprLoc left)
       if isNullable rightResolved then
         emitDiagnostic (.thales .possiblyUndefinedOperand) (exprLoc right)
     if isArithmeticOp op then
       if isAddOp op then
-        let leftResolved ← resolveType leftTyped.type
-        let rightResolved ← resolveType rightTyped.type
         match leftResolved, rightResolved with
         | .string, _ | _, .string | .stringLit _, _ | _, .stringLit _ =>
           return mk .string #[leftTyped, rightTyped]
@@ -423,8 +421,6 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
         | _, _ => return mk .number #[leftTyped, rightTyped]
       else
         -- Non-add arithmetic: preserve bigint if both operands are bigint
-        let leftResolved ← resolveType leftTyped.type
-        let rightResolved ← resolveType rightTyped.type
         match leftResolved, rightResolved with
         | .bigint, _ | _, .bigint => return mk .bigint #[leftTyped, rightTyped]
         | _, _ => return mk .number #[leftTyped, rightTyped]

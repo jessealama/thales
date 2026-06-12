@@ -94,10 +94,9 @@ def testLogicalAssignStaysTH1 : IO Unit := expectCode
 -- exception path; TH0007 covers only mutation inside the try)
 def testMutationBesideTryTH1 : IO Unit := expectCode
   "function f(x: number): number { let n = 0; n = 5; try { return x; } catch (e) { return n; } }" 1
--- Mutation in a function that reads a null-tested variable outside its
--- test is now allowed: do-mode lowers the null test to a
--- statement-position match with pattern rebinding, so the mutation is
--- eligible and the read flows at the narrowed type
+-- mutation alongside a null-tested read: the null test lowers to a
+-- statement-position match, so the mutation stays eligible and the read
+-- flows at the narrowed type
 def testNarrowedReadMutationAllowed : IO Unit := expectNoCode
   "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }" 1
 -- Mutating an undefined-tested variable: TH0001 (#42 — undefined tests

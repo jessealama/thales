@@ -1,6 +1,6 @@
 // Element read inside a do-mode body (let-mutation + while): the Float
-// loop counter feeds indexRead directly (#52's untested combination), and
-// the narrowed early return exits the loop from inside the match arm.
+// loop counter feeds indexRead directly, and the narrowed early return
+// exits the loop from inside the match arm.
 const digits: string[] = ['a', 'b', 'c', 'd'];
 
 function nthOrGone(n: number): string {

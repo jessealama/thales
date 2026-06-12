@@ -115,4 +115,22 @@ function at1(i: number): string | undefined { return words[i]; }" "M"
     ["Thales.TS.indexRead", "words", "i"]
     ["Thales.TS.Array.get?"]
 
+-- A null test on a binding the emitter has no recorded type for (here: an
+-- element read off an inline callback's contextually-typed parameter) must
+-- still lower to the narrowing match: a plain `ite` would return the
+-- operand at `Option` type and fail elaboration.
+def testUnknownBindingNarrowingMatch : IO Unit :=
+  expectEmitWithout
+    "function apply(callback: (xs: number[]) => number): number { return callback([1, 2]); }
+const result = apply((xs) => {
+  const hit = xs[0];
+  if (hit !== undefined) {
+    return hit;
+  }
+  return 42;
+});" "M"
+    ["match hit with", ".some hit"]
+    ["if hit.isSome"]
+
 #eval testIndexReadLowering
+#eval testUnknownBindingNarrowingMatch

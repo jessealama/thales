@@ -134,9 +134,9 @@ console.log(f(3));"
     ["def f"]
     (forbidden := ["Id.run do", "let mut"])
 
--- null-tested `x` read outside its test no longer poisons do-mode: the
--- statement-position match rebinds `x` and, because the THEN branch
--- returns, the continuation joins the some-arm at the narrowed type
+-- null-tested param read outside its test: the statement-position match
+-- rebinds `x`, and the returning THEN branch puts the continuation in
+-- the some-arm at the narrowed type
 def testNarrowedReadLowersInDo : IO Unit :=
   expectEmit
     "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }
@@ -156,9 +156,8 @@ console.log(f(\"abc\"));"
 #eval testTryBodyStaysPure
 #eval testNarrowedReadLowersInDo
 
--- A const local bound to an element read narrows via a statement-position
--- match in do-mode: the some-arm rebinds the name at the unwrapped type
--- and `return` keeps do-notation's native early exit.
+-- element-read const in do-mode: the some-arm rebinds the name at the
+-- unwrapped type; `return` is do-notation's native early exit
 def testDoModeOptionNarrow : IO Unit :=
   expectEmit
     "const cache: string[] = [\"\", \" \"];
