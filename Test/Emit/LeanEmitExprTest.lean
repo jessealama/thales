@@ -105,3 +105,14 @@ def testAsChained : IO Unit :=
 #eval testArrowBody
 #eval testAsConstString
 #eval testAsChained
+
+-- xs[i] lowers to the JS-semantics indexRead (Float index, Option result),
+-- not the Nat-indexed Array.get?.
+def testIndexReadLowering : IO Unit :=
+  expectEmitWithout
+    "const words: string[] = [\"a\", \"b\"];
+function at1(i: number): string | undefined { return words[i]; }" "M"
+    ["Thales.TS.indexRead", "words", "i"]
+    ["Thales.TS.Array.get?"]
+
+#eval testIndexReadLowering

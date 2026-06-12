@@ -106,12 +106,16 @@ diverge from V8's output. This is a known v1 limitation.
 ### Array indexing and combinators
 
 ```lean
-def Thales.TS.Array.get? (arr : Array α) (i : Nat) : Option α
+def Thales.TS.indexRead (xs : Array α) (i : Float) : Option α
 ```
 
 `arr[i]` in Thales-TS compiles under `noUncheckedIndexedAccess`, so it
 returns `T | undefined`. The emitter lowers the indexing expression to
-`Thales.TS.Array.get? arr i`, which returns `Option T` in Lean.
+`Thales.TS.indexRead arr i`, which returns `Option T` in Lean. The index
+stays a `Float` (TS `number`): fractional, negative, NaN, infinite, and
+out-of-bounds indices all read as `undefined` (`none`), exactly as in JS.
+(`Thales.TS.Array.get?`, the `Nat`-indexed variant, remains in the runtime
+surface for hand-written Lean.)
 
 Array methods live in `Thales.TS.ArrayOps` and are referenced by the
 emitter via their qualified names:
@@ -159,7 +163,7 @@ end Input
 
 The `open Thales.TS` is what lets `consoleLog`, `Result`, and the
 error records appear unqualified. `Thales.TS.ArrayOps.*` and
-`Thales.TS.Array.get?` remain fully qualified in the emitted source
+`Thales.TS.indexRead` remain fully qualified in the emitted source
 because they intentionally do not live under the opened namespace.
 
 ## What the runtime does _not_ provide

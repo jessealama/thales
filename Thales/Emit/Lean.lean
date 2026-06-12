@@ -455,7 +455,7 @@ private def emitRefinementLiteral
 /-- Wrap a return expression in `.some` when the expected return type is `Option T`.
     If the expression is already `.none` (null literal) or refers to the bare
     `undefined` identifier, leave it as `.none`. Optional-typed accessors
-    (`arr[k]?`, `Thales.TS.Array.get?`) already produce `Option T` and are
+    (`arr[k]?`, `Thales.TS.indexRead`) already produce `Option T` and are
     passed through. Otherwise wrap in `.some`. -/
 private def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
   match retTy with
@@ -464,7 +464,7 @@ private def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
     | .ctor "none" [] => e
     | .var "undefined" => .ctor "none" []
     | .indexOpt _ _ => e
-    | .app (.var "Thales.TS.Array.get?") _ => e
+    | .app (.var "Thales.TS.indexRead") _ => e
     | other => .ctor "some" [other]
   | _ => e
 
@@ -754,7 +754,11 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .memberExpr _ obj (.identifier _ propName) false _ =>
       .proj (emitExprEnv env obj) propName
   | .memberExpr _ obj idx true _ =>
-      .app (.var "Thales.TS.Array.get?") [emitExprEnv env obj, emitExprEnv env idx]
+      -- `xs[i]`: JS-semantics element read; the index stays a Float and the
+      -- result is `Option α` (TS `T | undefined` under noUncheckedIndexedAccess).
+      -- A refinement-typed index (e.g. Natural) projects to its underlying Float.
+      let idxL := coerceToFloat env idx (emitExprEnv env idx)
+      .app (.var "Thales.TS.indexRead") [emitExprEnv env obj, idxL]
   | .memberExpr _ obj _ _ _ =>
       .proj (emitExprEnv env obj) "(unknown)"
   -- Array expression: emit as List.toArray applied to nested cons/nil
