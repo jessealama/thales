@@ -395,7 +395,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
   | .blockStmt _ body =>
     checkJSStatements body
   | .ifStmt _ test consequent alternate =>
-    let _ ← synthJSExpr test
+    let testTyped ← synthJSExpr test
+    requireBooleanCondition testTyped.type (exprLoc test)
     let ctx ← read
     let preBranchDA ← saveAssignmentState
     match Narrowing.extractGuard test with
@@ -425,7 +426,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
       | none =>
         restoreAssignmentState (intersectAssigned thenDA preBranchDA)
   | .whileStmt _ test body =>
-    let _ ← synthJSExpr test
+    let testTyped ← synthJSExpr test
+    requireBooleanCondition testTyped.type (exprLoc test)
     let preLoopDA ← saveAssignmentState
     -- Widen variables assigned in the loop body back to declared types
     let assignedInLoop := collectAssignedVars body
@@ -444,7 +446,8 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
     let assignedInLoop := collectAssignedVars body
     let widened ← widenAssignedVars assignedInLoop
     withScope widened (checkJSStatementRaw body)
-    let _ ← synthJSExpr test
+    let testTyped ← synthJSExpr test
+    requireBooleanCondition testTyped.type (exprLoc test)
     restoreAssignmentState preLoopDA
   | .forStmt _ init test update body =>
     -- Synth the init expression or bind the init declaration into scope for
@@ -459,7 +462,9 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
       -- test and update are synthed outside the widening scope; they see the declared
       -- (pre-body) types, matching tsc's treatment of the loop header.
       match test with
-      | some e => let _ ← synthJSExpr e
+      | some e =>
+        let testTyped ← synthJSExpr e
+        requireBooleanCondition testTyped.type (exprLoc e)
       | none => pure ()
       match update with
       | some e => let _ ← synthJSExpr e
@@ -480,7 +485,9 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
         -- test and update are synthed outside the widening scope; they see the declared
         -- (pre-body) types, matching tsc's treatment of the loop header.
         match test with
-        | some e => let _ ← synthJSExpr e
+        | some e =>
+          let testTyped ← synthJSExpr e
+          requireBooleanCondition testTyped.type (exprLoc e)
         | none => pure ()
         match update with
         | some e => let _ ← synthJSExpr e
@@ -494,7 +501,9 @@ partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
       -- test and update are synthed outside the widening scope; they see the declared
       -- (pre-body) types, matching tsc's treatment of the loop header.
       match test with
-      | some e => let _ ← synthJSExpr e
+      | some e =>
+        let testTyped ← synthJSExpr e
+        requireBooleanCondition testTyped.type (exprLoc e)
       | none => pure ()
       match update with
       | some e => let _ ← synthJSExpr e

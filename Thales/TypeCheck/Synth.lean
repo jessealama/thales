@@ -100,6 +100,16 @@ partial def tsExprSourceName : TSExpression → String
   | .satisfiesExpr inner _ => tsExprSourceName inner
   | .nonNullAssert inner => tsExprSourceName inner
 
+/-- Condition positions (`if`/`while`/`do-while`/`for` tests, the ternary)
+    must synthesize boolean (TH0026). JS truthiness — `0`, `''`, `NaN`,
+    `null`, `undefined` are falsy — has no Lean-side coercion, so a
+    non-boolean condition would emit a branch on a type Lean cannot
+    decide, failing after acceptance. -/
+def requireBooleanCondition (ty : TSType) (loc : Option SourceLocation)
+    : TypeCheckM Unit := do
+  unless (← isSubtype ty .boolean) do
+    emitDiagnostic (.thales (.conditionNotBoolean (formatType ty))) loc
+
 /-- Check if a type contains any typeVar -/
 private partial def containsTypeVar : TSType → Bool
   | .typeVar .. => true
@@ -448,6 +458,7 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
   -- Conditional (ternary)
   | .conditionalExpr _ test consequent alternate =>
     let testTyped ← synthJSExpr test
+    requireBooleanCondition testTyped.type (exprLoc test)
     let ctx ← read
     match Narrowing.extractGuard test with
     | some guard =>
