@@ -105,6 +105,9 @@ inductive ThalesKind where
   -- Refinement-type diagnostics (TH0080–TH0081)
   | literalOutOfRange (literal : Float) (typeName : String) (min : Option Float) (max : Option Float)
   | refinementNeedsEvidence (sourceName : String) (targetTypeName : String)
+  -- Computed-index diagnostics (TH0082–TH0083)
+  | possiblyUndefinedOperand
+  | computedIndexNotArray
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -147,6 +150,8 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .totalityUnverified _ => 70
   | .literalOutOfRange .. => 80
   | .refinementNeedsEvidence .. => 81
+  | .possiblyUndefinedOperand => 82
+  | .computedIndexNotArray => 83
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -216,6 +221,10 @@ def ThalesKind.message : ThalesKind → String
     s!"Literal {lit} out of range for {tyName}{bound}"
   | .refinementNeedsEvidence sourceName tyName =>
     s!"Value '{sourceName}' of type 'number' is not assignable to '{tyName}' without narrowing or constructor evidence"
+  | .possiblyUndefinedOperand =>
+    "Operand may be 'undefined' or 'null'; narrow it first (e.g. bind it and test `!== undefined`)"
+  | .computedIndexNotArray =>
+    "Computed index access is only supported on array values"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
