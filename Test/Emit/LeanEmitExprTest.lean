@@ -132,5 +132,15 @@ const result = apply((xs) => {
     ["match hit with", ".some hit"]
     ["if hit.isSome"]
 
+-- A definedness test on a recorded NON-Option binding (param `x : String`)
+-- is vacuous: it folds to `if true`/`if false`, never `x.isSome` (which
+-- does not exist on `String`).
+def testDefinednessFoldsOnNonOptionParam : IO Unit :=
+  expectEmitWithout
+    "function f(x: string): string { if (x !== undefined) { return x; } return \"none\"; }" "M"
+    ["def f", "if true then"]
+    ["isSome", "isNone"]
+
 #eval testIndexReadLowering
 #eval testUnknownBindingNarrowingMatch
+#eval testDefinednessFoldsOnNonOptionParam
