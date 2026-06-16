@@ -205,6 +205,25 @@ private def isNullishOperand : Expression → Bool
   | .identifier _ "undefined" => true
   | _ => false
 
+/-- The identifier subject of a definedness test (`x === null`,
+    `x !== undefined`, and `==`/`!=` variants, either operand order), or
+    `none`. Mirrors the shape `walkCond` records into `nullTested` and the
+    emitter's nullish-equality lowering; consumed by SubsetCheck's TH0084. -/
+def definednessTestSubject? : Expression → Option String
+  | .binaryExpr _ op l r =>
+      let nullishEqOp := match op with
+        | .seq | .sneq | .eq | .neq => true
+        | _ => false
+      if nullishEqOp then
+        let subjectOf : Expression → Expression → Option String := fun a b =>
+          match a with
+          | .identifier _ n =>
+              if isNullishOperand b && n != "undefined" then some n else none
+          | _ => none
+        subjectOf l r <|> subjectOf r l
+      else none
+  | _ => none
+
 /- Walk the function's OWN body: nested functions are not descended into —
    every identifier they mention lands in `capturedRefs` wholesale. -/
 mutual

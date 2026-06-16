@@ -108,6 +108,16 @@ def testUndefinedTestedMutationTH1 : IO Unit := expectCode
 def testPlainIdentSwitchTH1 : IO Unit := expectCode
   "function f(x: string): number { let n = 0; n = 1; switch (x) { case \"a\": return 1; case \"b\": return 2; } return n; }" 1
 
+-- A definedness test on a body-local whose type the emitter cannot record
+-- (concatenation initializer) is rejected with TH0084 — the emitter could
+-- neither fold (might be Option) nor narrow (might be non-Option) it.
+def testDefinednessUnrecordedRejected : IO Unit := expectCode
+  "function f(a: string, b: string): string { const x = a + b; if (x !== undefined) { return x; } return \"n\"; }" 84
+
+-- A recorded binding (literal const, param) is NOT rejected.
+def testDefinednessRecordedNotRejected : IO Unit := expectNoCode
+  "function f(x: string): string { const y = \"a\"; if (x !== undefined) { return y; } return \"n\"; }" 84
+
 #eval testReassignment
 #eval testCompoundAssignment
 #eval testIncrement
@@ -135,3 +145,5 @@ def testPlainIdentSwitchTH1 : IO Unit := expectCode
 #eval testNarrowedReadMutationAllowed
 #eval testUndefinedTestedMutationTH1
 #eval testPlainIdentSwitchTH1
+#eval testDefinednessUnrecordedRejected
+#eval testDefinednessRecordedNotRejected

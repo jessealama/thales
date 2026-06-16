@@ -216,8 +216,25 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
     calleeDiags ++ (arguments.foldl (fun acc arg => acc ++ checkExpr ctx arg) #[])
   | .unaryExpr _ _ _ argument =>
     checkExpr ctx argument
-  | .binaryExpr _ _ left right =>
-    checkExpr ctx left ++ checkExpr ctx right
+  | .binaryExpr b _ left right =>
+    -- TH0084: a definedness test on a body-local whose type the emitter
+    -- cannot record (not a param, not in `typedDecls`) can be neither
+    -- folded nor narrowed, so reject rather than emit uncompilable Lean.
+    -- Params and top-level bindings are recordable, so they never reach here.
+    let th84 : Array Diagnostic :=
+      match ctx.info with
+      | some info =>
+        match EscapeAnalysis.definednessTestSubject? expr with
+        | some subj =>
+          let isBodyLocal := info.initializedLets.contains subj
+            || info.uninitializedLets.contains subj || info.consts.contains subj
+          let isRecordable := info.params.contains subj || info.typedDecls.contains subj
+          if isBodyLocal && !isRecordable then
+            #[mkThalesDiag .definednessTestUnrecordedBinding b.loc]
+          else #[]
+        | none => #[]
+      | none => #[]
+    th84 ++ checkExpr ctx left ++ checkExpr ctx right
   | .logicalExpr _ _ left right =>
     checkExpr ctx left ++ checkExpr ctx right
   | .memberExpr _ obj prop _ _ =>
