@@ -642,6 +642,12 @@ private def recordDeclBinding (env : EmitEnv) (name : String)
     | some (.callExpr _ (.identifier _ f) _ _) => env.funcRetTypes.get? f
     | some (.memberExpr _ (.identifier _ arrName) _ true _) =>
         (arrayElemTy? env arrName).map (fun et => TSType.option et)
+    -- Literal initializers carry a knowable non-Option primitive type
+    -- (the smallest slice of RHS inference; #61 generalizes the rest).
+    | some (.literal _ (.string _) _)  => some .string
+    | some (.literal _ (.number _) _)  => some .number
+    | some (.literal _ (.bigint _) _)  => some .bigint
+    | some (.literal _ (.boolean _) _) => some .boolean
     | _ => none
   match (typeAnnotation.map normalizeForEmit) <|> inferredTy with
   | some t => { env with bindingEnv := env.bindingEnv.insert name t }

@@ -291,6 +291,10 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
             (match init with
              | some (.callExpr _ (.identifier _ _) _ _) => true
              | some (.memberExpr _ (.identifier _ _) _ true _) => true
+             | some (.literal _ (.string _) _)  => true
+             | some (.literal _ (.number _) _)  => true
+             | some (.literal _ (.bigint _) _)  => true
+             | some (.literal _ (.boolean _) _) => true
              | _ => false)
           let a := if recordable
             then { a with typedDecls := a.typedDecls.insert id.name }

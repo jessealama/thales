@@ -141,6 +141,17 @@ def testDefinednessFoldsOnNonOptionParam : IO Unit :=
     ["def f", "if true then"]
     ["isSome", "isNone"]
 
+-- An UN-annotated const with a literal initializer has a knowable
+-- non-Option type (`"a"` → string); its definedness test folds rather
+-- than emitting a `match` (which would project `.some`/`.none` off a
+-- non-Option value).
+def testDefinednessFoldsOnLiteralConst : IO Unit :=
+  expectEmitWithout
+    "function f(): string { const x = \"a\"; if (x !== undefined) { return x; } return \"b\"; }" "M"
+    ["def f", "if true then"]
+    ["isSome", "isNone", "match x"]
+
 #eval testIndexReadLowering
 #eval testUnknownBindingNarrowingMatch
 #eval testDefinednessFoldsOnNonOptionParam
+#eval testDefinednessFoldsOnLiteralConst
