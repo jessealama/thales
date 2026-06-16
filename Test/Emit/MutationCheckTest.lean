@@ -94,9 +94,10 @@ def testLogicalAssignStaysTH1 : IO Unit := expectCode
 -- exception path; TH0007 covers only mutation inside the try)
 def testMutationBesideTryTH1 : IO Unit := expectCode
   "function f(x: number): number { let n = 0; n = 5; try { return x; } catch (e) { return n; } }" 1
--- Mutation in a function that reads a null-tested variable outside its
--- test: TH0001 (#40 — do-mode's plain `if` carries no narrowing evidence)
-def testNarrowedReadMutationTH1 : IO Unit := expectCode
+-- mutation alongside a null-tested read: the null test lowers to a
+-- statement-position match, so the mutation stays eligible and the read
+-- flows at the narrowed type
+def testNarrowedReadMutationAllowed : IO Unit := expectNoCode
   "function f(x: string | null): number { let n = 0; n += 1; if (x === null) { return n; } return x.length; }" 1
 -- Mutating an undefined-tested variable: TH0001 (#42 — undefined tests
 -- count the same as null tests)
@@ -131,6 +132,6 @@ def testPlainIdentSwitchTH1 : IO Unit := expectCode
 #eval testUninitializedLet
 #eval testLogicalAssignStaysTH1
 #eval testMutationBesideTryTH1
-#eval testNarrowedReadMutationTH1
+#eval testNarrowedReadMutationAllowed
 #eval testUndefinedTestedMutationTH1
 #eval testPlainIdentSwitchTH1

@@ -149,6 +149,18 @@ references inside a negation went unrecorded; they now surface. (The new
 row pushes TH0004 — 0 shim / 5 body — past the runner's top-20 display;
 the table above retains it from the baseline measure.)
 
+The element-read re-measure (array `xs[i]` typed `T | undefined` and
+lowered to `indexRead`, TH0082/TH0083 added, #16's indexing slice) leaves
+totals and OoS byte-identical. It adds one attribution row: TH0083 blocks
+14 test bodies — computed index access on non-array bases (strings,
+objects) that the checker previously fell through as `any` and the
+emitter would have miscompiled. Body TS2304 moves 98 → 101: computed
+access bases and indices are now genuinely synthesized, so undeclared
+references inside them surface. All affected tests were already blocked
+by other codes — attribution honesty, not new blockage. No TH0082 row
+appears: the slices' arithmetic never meets an option-typed operand
+(their indexing bases are non-arrays, blocked upstream as TH0083).
+
 New shim-attribution rows vs the pre-#24 baseline: TS2322 — #24's
 declared-type precision (unannotated/const bindings are no longer `any`)
 exposes a pre-existing truthy-narrowing gap at `harness/assert.ts:34`

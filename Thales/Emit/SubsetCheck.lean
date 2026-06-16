@@ -156,13 +156,16 @@ private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
       #[mkThalesDiag (.cannotMutateCapturedVariable name) loc]
     else if info.uninitializedLets.contains name
             || info.narrowTested.contains name
+            || info.nullTested.contains name
             || !info.doModeLowerable then
       -- Still-rejected forms: `let` without initializer, variables whose
-      -- narrowing the emitter relies on, and functions whose body contains
-      -- a shape do-mode can't lower — an unlowerable switch, a
-      -- `try`/`catch` (#41), or a read of a narrow-tested variable outside
-      -- its test (#40). `doModeLowerable` is the same predicate
-      -- `emitFuncDecl` gates on; the two must never disagree.
+      -- narrowing the emitter relies on (refinement-tested or
+      -- null/undefined-tested — mutating through the match arm's pattern
+      -- rebinding is #36), and functions whose body contains a shape
+      -- do-mode can't lower — an unlowerable switch, a `try`/`catch`
+      -- (#41), or a narrowing-dependent read the emitter cannot rebind.
+      -- `doModeLowerable` is the same predicate `emitFuncDecl` gates on;
+      -- the two must never disagree.
       #[mkThalesDiag (.cannotReassignVariable name) loc]
     else if ctx.allowEligible && emittable then
       -- Eligible mutation (`=`, arithmetic `OP=`, `++`/`--`) in a declared

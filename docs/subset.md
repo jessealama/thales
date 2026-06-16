@@ -150,6 +150,22 @@ const updated = arr.slice(0, 1).concat([99]).concat(arr.slice(2));
 
 Lean's `Array` type supports functional update (`Array.set`), but index-assignment syntax implies in-place mutation semantics that cannot be expressed in pure Lean without threading state explicitly. 0.5 treats arrays as persistent.
 
+Element **reads** are supported: `xs[i]` is typed `T | undefined` (the
+contract pins `noUncheckedIndexedAccess`), and out-of-bounds, fractional,
+and negative indices evaluate to `undefined` exactly as in JS. The
+sanctioned access pattern is bind-then-narrow:
+
+```typescript
+const hit = xs[i];
+if (hit !== undefined) {
+  // hit : T here
+}
+```
+
+Arithmetic on the un-narrowed result is rejected (TH0082), and computed
+index access on non-arrays — string indexing, object bracket access — is
+out of subset (TH0083).
+
 ---
 
 ### TH0003 — Cannot assign to object property; construct a new object

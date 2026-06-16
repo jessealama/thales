@@ -239,6 +239,30 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
         emitDiagnostic (.propertyNotFound propName resolved) base.loc
         return mk .any #[objTyped]
 
+  -- Computed element access: xs[i]. Arrays only; the element type is
+  -- `T | undefined` (noUncheckedIndexedAccess is part of the contract,
+  -- docs/subset.md). Non-array bases and non-numeric indices are out of
+  -- subset (TH0083) — tsc may accept them, so this is a TH, not a TS code.
+  | .memberExpr base obj idx true _ =>
+    let objTyped ← synthJSExpr obj
+    let idxTyped ← synthJSExpr idx
+    let resolved ← resolveTypeGeneric objTyped.type
+    let idxResolved ← resolveTypeGeneric idxTyped.type
+    let idxIsNumeric : Bool := match idxResolved with
+      | .number | .numberLit _ | .refinement _ => true
+      | _ => false
+    match resolved with
+    | .array elem =>
+      if idxIsNumeric then
+        return mk (.option elem) #[objTyped, idxTyped]
+      else
+        emitDiagnostic (.thales .computedIndexNotArray) base.loc
+        return mk .any #[objTyped, idxTyped]
+    | .any => return mk .any #[objTyped, idxTyped]
+    | _ =>
+      emitDiagnostic (.thales .computedIndexNotArray) base.loc
+      return mk .any #[objTyped, idxTyped]
+
   -- Function call: callee(args)
   | .callExpr base callee args _ =>
     let calleeTyped ← synthJSExpr callee
@@ -374,10 +398,22 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
   | .binaryExpr _ op left right =>
     let leftTyped ← synthJSExpr left
     let rightTyped ← synthJSExpr right
+    -- TH0082: arithmetic/relational operators need definite operands. tsc
+    -- accepts e.g. `(string | undefined) + string`, but the emitter has no
+    -- JS-coercion lowering for Option operands, so the subset rejects it.
+    -- Equality ops are exempt: they are the narrowing primitives.
+    let isRelationalOp : Bool := match op with
+      | .lt | .leq | .gt | .geq => true
+      | _ => false
+    let leftResolved ← resolveType leftTyped.type
+    let rightResolved ← resolveType rightTyped.type
+    if isArithmeticOp op || isRelationalOp then
+      if isNullable leftResolved then
+        emitDiagnostic (.thales .possiblyUndefinedOperand) (exprLoc left)
+      if isNullable rightResolved then
+        emitDiagnostic (.thales .possiblyUndefinedOperand) (exprLoc right)
     if isArithmeticOp op then
       if isAddOp op then
-        let leftResolved ← resolveType leftTyped.type
-        let rightResolved ← resolveType rightTyped.type
         match leftResolved, rightResolved with
         | .string, _ | _, .string | .stringLit _, _ | _, .stringLit _ =>
           return mk .string #[leftTyped, rightTyped]
@@ -385,8 +421,6 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
         | _, _ => return mk .number #[leftTyped, rightTyped]
       else
         -- Non-add arithmetic: preserve bigint if both operands are bigint
-        let leftResolved ← resolveType leftTyped.type
-        let rightResolved ← resolveType rightTyped.type
         match leftResolved, rightResolved with
         | .bigint, _ | _, .bigint => return mk .bigint #[leftTyped, rightTyped]
         | _, _ => return mk .number #[leftTyped, rightTyped]

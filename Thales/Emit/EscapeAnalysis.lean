@@ -40,9 +40,20 @@ structure MutationInfo where
   consts : Std.HashSet String := {}
   /-- Parameter names. -/
   params : Std.HashSet String := {}
-  /-- Vars null/undefined-tested or refinement-predicate-tested in a
-      condition. -/
+  /-- Vars refinement-predicate-tested in a condition (`isNatural(x)` …).
+      Do-mode has no `dite` lowering, so these poison do-mode when
+      referenced outside their tests. -/
   narrowTested : Std.HashSet String := {}
+  /-- Vars null/undefined-tested in a condition (`x !== undefined` …).
+      Do-mode lowers these to a statement-position `match` (the
+      `emitBodyDo` ifStmt arm), so they only poison do-mode when the
+      emitter cannot record the binding's type (see `typedDecls`). -/
+  nullTested : Std.HashSet String := {}
+  /-- Locals whose declaration lets the emitter record a binding type: an
+      explicit annotation, a call-to-named-function initializer, or a
+      computed-member (element read) initializer. Mirrors the emitter's
+      `recordDeclBinding`; params are recordable by construction. -/
+  typedDecls : Std.HashSet String := {}
   /-- Identifiers referenced in the own body outside narrow-test positions:
       the subject occurrence of `x === null` / `pred(x)` does not count,
       every other occurrence does. Mutation targets are not references. -/
@@ -72,15 +83,26 @@ def MutationInfo.eligible (info : MutationInfo) (name : String) : Bool :=
   (info.params.contains name || info.initializedLets.contains name)
     && !info.capturedRefs.contains name
     && !info.narrowTested.contains name
+    -- Mutating a null-tested var would assign through the match arm's
+    -- immutable pattern rebinding (#36); keep it ineligible.
+    && !info.nullTested.contains name
 
-/-- A narrow-tested variable is referenced outside its test positions —
-    in the own body or from a nested function (#40). The pure path bakes
-    such narrowing into `dite`/`match` rebinding; do-mode's plain `if`
-    carries no evidence, so the read would elaborate at the unnarrowed
-    type. Such a function must stay on the pure emission path. -/
+/-- A narrowing-tested variable is referenced in a way do-mode cannot
+    lower. Refinement-predicate tests (`isNatural(x)`) poison do-mode
+    whenever the subject is referenced outside its tests — the pure path
+    bakes that narrowing into `dite` rebinding and do-mode has no
+    counterpart. Null/undefined tests lower in do-mode via a
+    statement-position `match` (pattern rebinding), so they only poison
+    when the emitter cannot record the subject's binding type (neither a
+    param nor a `typedDecls` shape) or the subject escapes into a nested
+    function. -/
 def MutationInfo.narrowingDependentBody (info : MutationInfo) : Bool :=
-  info.narrowTested.toList.any fun n =>
-    info.nonTestRefs.contains n || info.capturedRefs.contains n
+  (info.narrowTested.toList.any fun n =>
+    info.nonTestRefs.contains n || info.capturedRefs.contains n)
+  || (info.nullTested.toList.any fun n =>
+      info.capturedRefs.contains n
+        || (info.nonTestRefs.contains n
+              && !(info.params.contains n || info.typedDecls.contains n)))
 
 /-- Function-level do-mode admissibility (#25/#40/#41): the single predicate
     that BOTH SubsetCheck's mutation routing and `emitFuncDecl`'s do-mode
@@ -240,7 +262,7 @@ partial def walkCond (acc : MutationInfo) : Expression → MutationInfo
         | _ => none
       if nullishEqOp then
         match subjectOf l r <|> subjectOf r l with
-        | some n => { acc with narrowTested := acc.narrowTested.insert n }
+        | some n => { acc with nullTested := acc.nullTested.insert n }
         | none => walkExpr acc e
       else
         walkExpr acc e
@@ -258,10 +280,21 @@ partial def walkStmt (acc : MutationInfo) : Statement → MutationInfo
       match a with | some s => walkStmt acc s | none => acc
   | .returnStmt _ a => match a with | some e => walkExpr acc e | none => acc
   | .variableDecl (.mk _ decls kind) =>
-      decls.foldl (fun a (.mk _ pat init _) =>
+      decls.foldl (fun a (.mk _ pat init tyAnn) =>
         let a := match init with | some e => walkExpr a e | none => a
         match pat with
         | .identifier id =>
+          -- Shapes whose binding type the emitter can record (must mirror
+          -- the emitter's `recordDeclBinding`).
+          let recordable : Bool :=
+            tyAnn.isSome ||
+            (match init with
+             | some (.callExpr _ (.identifier _ _) _ _) => true
+             | some (.memberExpr _ (.identifier _ _) _ true _) => true
+             | _ => false)
+          let a := if recordable
+            then { a with typedDecls := a.typedDecls.insert id.name }
+            else a
           if kind == .const then { a with consts := a.consts.insert id.name }
           else match init with
             | some _ => { a with initializedLets := a.initializedLets.insert id.name }
