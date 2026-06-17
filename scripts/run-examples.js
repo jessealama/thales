@@ -2,6 +2,14 @@
 // scripts/run-examples.js
 // Drives the Thales-TS ↔ TypeScript conformance harness.
 //
+// Usage:
+//   node scripts/run-examples.js                 # full conformance corpus
+//   node scripts/run-examples.js <substr>        # only cases whose label
+//   node scripts/run-examples.js --filter <sub>  #   matches <substr> (e.g.
+//                                                #   `array-join`)
+//   node scripts/run-examples.js --self-test     # harness self-test fixtures
+//                                                #   (combinable with a filter)
+//
 // Environment assumptions (CI pins these; local runs may differ):
 //   NODE_VERSION 24.x, LC_ALL=C.UTF-8, TZ=UTC, lean-toolchain from repo.
 
@@ -420,7 +428,11 @@ function collectCases(rootDir, mode) {
 }
 
 function runCorpus(rootDir, opts = {}) {
-  const cases = collectCases(rootDir, opts.selfTest ? 'subdir' : 'flat');
+  let cases = collectCases(rootDir, opts.selfTest ? 'subdir' : 'flat');
+  if (opts.filter) {
+    const needle = opts.filter.toLowerCase();
+    cases = cases.filter((c) => c.label.toLowerCase().includes(needle));
+  }
   let passes = 0;
   let fails = 0;
   for (const c of cases) {
@@ -509,6 +521,22 @@ function runDirectHarnessChecks() {
 const args = process.argv.slice(2);
 const selfTest = args.includes('--self-test');
 
+// Optional single-example filter: a substring matched case-insensitively
+// against each case label (e.g. `accept/array-join.ts`, or just `array-join`).
+// Supply it as `--filter <substr>` / `--filter=<substr>` or as a bare
+// positional argument, to iterate on one example without the whole suite.
+function parseFilter(argv) {
+  const idx = argv.findIndex(
+    (a) => a === '--filter' || a.startsWith('--filter='),
+  );
+  if (idx !== -1) {
+    const a = argv[idx];
+    return a.includes('=') ? a.slice(a.indexOf('=') + 1) : argv[idx + 1];
+  }
+  return argv.find((a) => !a.startsWith('-'));
+}
+const filter = parseFilter(args);
+
 const problems = preflight();
 if (problems.length > 0) {
   console.error('Preflight failed:');
@@ -522,18 +550,37 @@ if (selfTest) {
     console.log(`(no fixtures directory yet at ${fixturesDir})`);
     process.exit(0);
   }
-  const { passes, fails } = runCorpus(fixturesDir, { selfTest: true });
+  const { passes, fails } = runCorpus(fixturesDir, { selfTest: true, filter });
+  if (filter && passes + fails === 0) {
+    console.error(`No fixtures matched filter '${filter}'.`);
+    process.exit(2);
+  }
   console.log(`\n${passes} passed, ${fails} failed`);
   process.exit(fails > 0 ? 1 : 0);
 }
 
-const directFail = runDirectHarnessChecks();
-if (directFail) {
-  console.error('Direct harness check failed:\n  ' + directFail);
-  process.exit(1);
+// The direct harness checks aren't tied to a single example; skip them when
+// the run is narrowed to one.
+if (!filter) {
+  const directFail = runDirectHarnessChecks();
+  if (directFail) {
+    console.error('Direct harness check failed:\n  ' + directFail);
+    process.exit(1);
+  }
 }
 
-console.log('Running conformance corpus...\n');
-const { passes, fails } = runCorpus(conformanceDir, { selfTest: false });
+console.log(
+  filter
+    ? `Running conformance corpus (filter: ${filter})...\n`
+    : 'Running conformance corpus...\n',
+);
+const { passes, fails } = runCorpus(conformanceDir, {
+  selfTest: false,
+  filter,
+});
+if (filter && passes + fails === 0) {
+  console.error(`No examples matched filter '${filter}'.`);
+  process.exit(2);
+}
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails > 0 ? 1 : 0);

@@ -60,6 +60,12 @@ structure MutCtx where
   /-- Binding environment for the enclosing function's typed parameters;
       used to check that for-of RHS resolves to an array type. -/
   bindingEnv : Std.HashMap String TSType := {}
+  /-- Annotation-derived types of identifiers in scope (module-level consts,
+      typed parameters, body-local typed declarators), used solely to resolve
+      an array-method receiver's element type for TH0085. Kept separate from
+      `bindingEnv` on purpose: `bindingEnv` feeds the intentionally
+      conservative (params-only) loop-admission check, which must not widen. -/
+  recvEnv : Std.HashMap String TSType := {}
 
 /-- Parameter names of a JS-level function/arrow (typed params live on
     `annotatedFuncDecl` and are handled separately). -/
@@ -129,6 +135,20 @@ private def identIsArray (ctx : MutCtx) (name : String) : Bool :=
       | .array _ => true
       | _ => false
   | none => false
+
+/-- Record a statement's body-local typed declarators into `recvEnv` so a
+    later array-method call on them can resolve the element type (TH0085).
+    Only explicit annotations are tracked; resolving inferred/initializer-shape
+    types is the emitter's job and is tracked separately. -/
+private def recordRecvDecls (ctx : MutCtx) (s : Statement) : MutCtx :=
+  match s with
+  | .variableDecl (VariableDeclaration.mk _ decls _) =>
+      decls.foldl (fun ctx decl =>
+        match decl with
+        | VariableDeclarator.mk _ (.identifier idn) _ (some ty) =>
+            { ctx with recvEnv := ctx.recvEnv.insert idn.name ty }
+        | _ => ctx) ctx
+  | _ => ctx
 
 /-- Route a statement-position mutation of identifier `name`.
     Returns the rejection diagnostics; `#[]` means the mutation is allowed.
@@ -210,14 +230,28 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
         if mutatingMethodNames.elem propName then
           #[mkThalesDiag (.cannotCallMutatingMethod propName) loc]
             ++ checkExpr ctx obj
-        -- TH0085: join/indexOf/includes lower only for an identifier receiver
-        -- recorded as number[]/string[]; any other receiver (call, member
-        -- chain, etc.) cannot be statically typed by the emitter, so reject
-        -- rather than emit uncompilable Lean.
-        else if (propName == "join" || propName == "indexOf" || propName == "includes")
-            && !(match obj with | .identifier _ _ => true | _ => false) then
-          #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName) loc]
-            ++ checkExpr ctx obj
+        -- TH0085: join/indexOf/includes lower only when the emitter can
+        -- statically resolve the receiver to `number[]`/`string[]`. Reject the
+        -- two receiver shapes that would otherwise emit uncompilable Lean:
+        --   (a) a non-identifier receiver (call result, member chain, …);
+        --   (b) an identifier whose declared element type is an array of some
+        --       other type (`boolean[]`, `number[][]`, an object array, …).
+        -- Receivers SubsetCheck cannot resolve here (string methods, arrays
+        -- whose type is only inferred from an initializer) are left to the
+        -- existing path and tracked under separate issues.
+        else if propName == "join" || propName == "indexOf" || propName == "includes" then
+          match obj with
+          | .identifier _ recv =>
+              match (ctx.recvEnv.get? recv).map (resolveType ctx.aliasEnv) with
+              | some (.array .number) => checkExpr ctx callee
+              | some (.array .string) => checkExpr ctx callee
+              | some (.array _) =>
+                  #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName) loc]
+                    ++ checkExpr ctx obj
+              | _ => checkExpr ctx callee
+          | _ =>
+              #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName) loc]
+                ++ checkExpr ctx obj
         else
           checkExpr ctx callee
       | _ => checkExpr ctx callee
@@ -328,7 +362,11 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
       routeIdentMutation ctx b.loc name false true
     | _ => checkExpr ctx expr
   | .blockStmt _ body =>
-    body.foldl (fun acc s => acc ++ checkStmt ctx s) #[]
+    -- Thread `recvEnv` so a body-local typed array declarator is visible to a
+    -- later array-method call on it (TH0085); declarations stay scoped to the
+    -- block because the accumulator resets per `checkStmt` recursion.
+    (body.foldl (fun (st : Array Diagnostic × MutCtx) s =>
+      (st.1 ++ checkStmt st.2 s, recordRecvDecls st.2 s)) (#[], ctx)).1
   | .ifStmt _ test consequent alternate =>
     checkExpr ctx test
       ++ checkStmt ctx consequent
@@ -839,6 +877,15 @@ private def buildAliasEnv (body : List TSStatement) : Std.HashMap String TSType 
     | .declareStmt _ (.typeAliasDecl _ name _ ty) => env.insert name ty
     | _ => env) {}
 
+/-- Module-level annotation-derived bindings (top-level typed `const`/`let`),
+    seeded into `recvEnv` for the array-method receiver check (TH0085). -/
+private def buildTopRecvEnv (body : List TSStatement) : Std.HashMap String TSType :=
+  body.foldl (fun env ts =>
+    match ts with
+    | .annotatedVarDecl _ _ name (some ann) _ => env.insert name ann.type
+    | .declareStmt _ (.annotatedVarDecl _ _ name (some ann) _) => env.insert name ann.type
+    | _ => env) {}
+
 /-- Build a binding environment from annotated function parameters. -/
 private def buildParamEnv
     (params : List (String × Option TypeAnnotation × Bool × Bool))
@@ -849,10 +896,12 @@ private def buildParamEnv
     | none => env) {}
 
 /-- Check a TS-level statement for mutation violations.
-    `aliasEnv` is threaded in for for-of array-type resolution. -/
-def checkTSStmt (aliasEnv : Std.HashMap String TSType) (ts : TSStatement) : Array Diagnostic :=
+    `aliasEnv` is threaded in for for-of array-type resolution; `topRecvEnv`
+    carries module-level annotation types for the TH0085 receiver check. -/
+def checkTSStmt (aliasEnv : Std.HashMap String TSType)
+    (topRecvEnv : Std.HashMap String TSType) (ts : TSStatement) : Array Diagnostic :=
   match ts with
-  | .js s => checkStmt {} s ++ shadowStmts {} [s]
+  | .js s => checkStmt { aliasEnv := aliasEnv, recvEnv := topRecvEnv } s ++ shadowStmts {} [s]
   | .annotatedVarDecl b _ _ typeAnn initOpt =>
     checkAnn b.loc typeAnn
       ++ (match initOpt with
@@ -861,13 +910,16 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType) (ts : TSStatement) : Arra
   -- TH0012: async annotated function declarations — emit diagnostic, still recurse body.
   -- TH0060 is no longer SubsetCheck's responsibility, so no suppression filter is needed.
   | .annotatedFuncDecl b _ _ params returnType body _ async throwsAnn isTotal =>
+    let paramEnv := buildParamEnv params
     let ctx : MutCtx :=
       { info := some (EscapeAnalysis.analyze (params.map (·.1)) body),
         noMutZone := throwsAnn != .absent,
         allowEligible := true,
         inTotalFn := isTotal,
         aliasEnv := aliasEnv,
-        bindingEnv := buildParamEnv params }
+        bindingEnv := paramEnv,
+        -- Typed params override module-level bindings of the same name.
+        recvEnv := paramEnv.fold (fun m k v => m.insert k v) topRecvEnv }
     let paramTypeDiags := params.foldl (fun acc (_, ann, _, _) =>
       acc ++ checkAnn b.loc ann) #[]
     let bodyDiags := checkStmt ctx body
@@ -885,7 +937,7 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType) (ts : TSStatement) : Arra
           acc ++ pd ++ checkType b.loc ret) #[]
   | .typeAliasDecl b _ _ ty => checkType b.loc ty
   | .enumDecl _ _ _ _ => #[]
-  | .declareStmt _ inner => checkTSStmt aliasEnv inner
+  | .declareStmt _ inner => checkTSStmt aliasEnv topRecvEnv inner
   | .importDecl _ _ _ => #[]
 
 /-- Check a TS-level statement for switch lowerability and exhaustiveness
@@ -908,8 +960,9 @@ def checkTSStmtSwitch (aliasEnv : Std.HashMap String TSType) (ts : TSStatement)
     without directive post-processing). -/
 def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
   let aliasEnv := buildAliasEnv prog.body
+  let topRecvEnv := buildTopRecvEnv prog.body
   prog.body.foldl (fun acc ts =>
-    acc ++ checkTSStmt aliasEnv ts ++ checkTSStmtSwitch aliasEnv ts) #[]
+    acc ++ checkTSStmt aliasEnv topRecvEnv ts ++ checkTSStmtSwitch aliasEnv ts) #[]
 
 /-- Subset check with `@thales-expect-error` directives applied.
     Suppresses TH diagnostics on lines covered by matching directives and

@@ -900,15 +900,21 @@ emitter's RHS type inference (issue #61) will let more of these compile.
 
 ### TH0085 — Array method on an unlowerable receiver
 
-**Message:** `Array method '<name>' is only supported on a \`number[]\` or \`string[]\` variable; this receiver's element type cannot be determined statically`
+**Message:** `Array method '<name>' is only supported on a \`number[]\` or \`string[]\` receiver`
 
-`join`, `indexOf`, and `includes` are lowered only when the receiver is a
-variable statically known to be `number[]` or `string[]`. A receiver that is a
-function call, a member-access chain, or any other non-identifier expression
-cannot have its element type resolved at emit time, so it is rejected rather
-than miscompiled. `tsc` accepts these.
+`join`, `indexOf`, and `includes` are lowered only when the receiver is an
+identifier the emitter can statically resolve to `number[]` or `string[]` (a
+module-level const, a typed parameter, or a body-local typed declarator). Two
+receiver shapes are out of subset and rejected rather than miscompiled — `tsc`
+accepts both:
 
-Example (rejected):
+- a non-identifier receiver (a function-call result, a member-access chain, …),
+  whose element type cannot be resolved at emit time; and
+- an identifier whose declared element type is an array of any other type — a
+  `boolean[]`, a nested `number[][]`, an object array — for which no runtime
+  lowering exists.
+
+Examples (rejected):
 
 ```typescript
 function getArr(): number[] {
@@ -916,8 +922,13 @@ function getArr(): number[] {
 }
 // @thales-expect-error TH0085
 console.log(getArr().join(','));
+
+const flags: boolean[] = [true, false];
+// @thales-expect-error TH0085
+console.log(flags.includes(true));
 ```
 
-Fix: assign the array to a typed local first
-(`const arr: number[] = getArr(); arr.join(',')`). Generalizing the emitter's
-receiver type inference (issue #61) will let more of these compile.
+Fix: for a non-identifier receiver, assign the array to a typed local first
+(`const arr: number[] = getArr(); arr.join(',')`). A `boolean[]`/nested-array
+receiver has no equivalent lowering today. Generalizing the emitter's receiver
+type inference (issue #61) will let more of these compile.

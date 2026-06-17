@@ -233,7 +233,7 @@ def ThalesKind.message : ThalesKind → String
   | .definednessTestUnrecordedBinding =>
     "Cannot determine whether this binding may be 'undefined'; annotate it or bind it from a recognized initializer before testing it"
   | .arrayMethodReceiverNotLowerable methodName =>
-    s!"Array method '{methodName}' is only supported on a `number[]` or `string[]` variable; this receiver's element type cannot be determined statically"
+    s!"Array method '{methodName}' is only supported on a `number[]` or `string[]` receiver"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
