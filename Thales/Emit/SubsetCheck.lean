@@ -210,6 +210,14 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
         if mutatingMethodNames.elem propName then
           #[mkThalesDiag (.cannotCallMutatingMethod propName) loc]
             ++ checkExpr ctx obj
+        -- TH0085: join/indexOf/includes lower only for an identifier receiver
+        -- recorded as number[]/string[]; any other receiver (call, member
+        -- chain, etc.) cannot be statically typed by the emitter, so reject
+        -- rather than emit uncompilable Lean.
+        else if (propName == "join" || propName == "indexOf" || propName == "includes")
+            && !(match obj with | .identifier _ _ => true | _ => false) then
+          #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName) loc]
+            ++ checkExpr ctx obj
         else
           checkExpr ctx callee
       | _ => checkExpr ctx callee
