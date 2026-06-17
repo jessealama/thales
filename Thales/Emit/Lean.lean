@@ -642,6 +642,12 @@ private def recordDeclBinding (env : EmitEnv) (name : String)
     | some (.callExpr _ (.identifier _ f) _ _) => env.funcRetTypes.get? f
     | some (.memberExpr _ (.identifier _ arrName) _ true _) =>
         (arrayElemTy? env arrName).map (fun et => TSType.option et)
+    -- Literal initializers carry a knowable non-Option primitive type
+    -- (the smallest slice of RHS inference; #61 generalizes the rest).
+    | some (.literal _ (.string _) _)  => some .string
+    | some (.literal _ (.number _) _)  => some .number
+    | some (.literal _ (.bigint _) _)  => some .bigint
+    | some (.literal _ (.boolean _) _) => some .boolean
     | _ => none
   match (typeAnnotation.map normalizeForEmit) <|> inferredTy with
   | some t => { env with bindingEnv := env.bindingEnv.insert name t }
@@ -673,7 +679,11 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .binaryExpr _ .eq  (.identifier _ varName) (.identifier _ "undefined")
   | .binaryExpr _ .seq (.identifier _ "undefined") (.identifier _ varName)
   | .binaryExpr _ .eq  (.identifier _ "undefined") (.identifier _ varName) =>
-      .proj (.var varName) "isNone"
+      -- A definedness test on a recorded non-Option binding is vacuous:
+      -- `x === null`/`=== undefined` is always false. Fold so we never
+      -- emit `.isNone` on a non-Option value (which does not elaborate).
+      if knownNonOptionBinding env varName then .bool false
+      else .proj (.var varName) "isNone"
   -- `x !== null` / `x !== undefined` (and reverses, with `!=` too) → x.isSome
   | .binaryExpr _ .sneq (.identifier _ varName) (.literal _ .null _)
   | .binaryExpr _ .neq  (.identifier _ varName) (.literal _ .null _)
@@ -683,7 +693,10 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .binaryExpr _ .neq  (.identifier _ varName) (.identifier _ "undefined")
   | .binaryExpr _ .sneq (.identifier _ "undefined") (.identifier _ varName)
   | .binaryExpr _ .neq  (.identifier _ "undefined") (.identifier _ varName) =>
-      .proj (.var varName) "isSome"
+      -- `x !== null`/`!== undefined` is always true for a recorded
+      -- non-Option binding. Fold (see the `isNone` arm above).
+      if knownNonOptionBinding env varName then .bool true
+      else .proj (.var varName) "isSome"
   -- General binary expressions: when the op is arithmetic, relational, or
   -- equality, project `.val` off any refinement-typed identifier operands
   -- so the operation elaborates on plain `Float`. `%`, bitwise, and shift

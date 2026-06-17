@@ -132,5 +132,26 @@ const result = apply((xs) => {
     ["match hit with", ".some hit"]
     ["if hit.isSome"]
 
+-- A definedness test on a recorded NON-Option binding (param `x : String`)
+-- is vacuous: it folds to `if true`/`if false`, never `x.isSome` (which
+-- does not exist on `String`).
+def testDefinednessFoldsOnNonOptionParam : IO Unit :=
+  expectEmitWithout
+    "function f(x: string): string { if (x !== undefined) { return x; } return \"none\"; }" "M"
+    ["def f", "if true then"]
+    ["isSome", "isNone"]
+
+-- An UN-annotated const with a literal initializer has a knowable
+-- non-Option type (`"a"` → string); its definedness test folds rather
+-- than emitting a `match` (which would project `.some`/`.none` off a
+-- non-Option value).
+def testDefinednessFoldsOnLiteralConst : IO Unit :=
+  expectEmitWithout
+    "function f(): string { const x = \"a\"; if (x !== undefined) { return x; } return \"b\"; }" "M"
+    ["def f", "if true then"]
+    ["isSome", "isNone", "match x"]
+
 #eval testIndexReadLowering
 #eval testUnknownBindingNarrowingMatch
+#eval testDefinednessFoldsOnNonOptionParam
+#eval testDefinednessFoldsOnLiteralConst

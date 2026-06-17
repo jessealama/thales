@@ -42,47 +42,48 @@ soundness check).
 
 ## Summary
 
-| Code   | Category     | Short Message                                       |
-| ------ | ------------ | --------------------------------------------------- |
-| TH0001 | Mutation     | Cannot reassign variable                            |
-| TH0002 | Mutation     | Cannot assign to array element                      |
-| TH0003 | Mutation     | Cannot assign to object property                    |
-| TH0004 | Mutation     | Cannot call mutating method                         |
-| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope  |
-| TH0006 | Mutation     | Assignment only supported in statement position     |
-| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`     |
-| TH0010 | Control flow | Loop not supported                                  |
-| TH0012 | Control flow | async/await not supported                           |
-| TH0020 | Types        | `any` not permitted                                 |
-| TH0021 | Types        | `unknown` not permitted in user code                |
-| TH0022 | Types        | Union must be discriminated                         |
-| TH0023 | Types        | Intersection types not supported                    |
-| TH0024 | Types        | keyof/conditional/mapped types not supported        |
-| TH0025 | Types        | null/undefined types not supported                  |
-| TH0026 | Types        | Condition must be boolean                           |
-| TH0030 | Declarations | `class` not supported                               |
-| TH0031 | Declarations | Inheritance (`extends`) not supported               |
-| TH0032 | Declarations | Shadowing declaration not supported                 |
-| TH0040 | Matching     | Non-exhaustive switch on discriminated union        |
-| TH0041 | Matching     | Switch shape not lowerable                          |
-| TH0050 | Recursion    | Cannot verify termination                           |
-| TH0066 | Totality     | `@total` and `@throws` declared together            |
-| TH0067 | Totality     | `@total` function has uncaught throw                |
-| TH0068 | Totality     | `@total` function contains an unverifiable loop     |
-| TH0070 | Totality     | `@total` asserted but Lean rejects termination      |
-| TH0060 | Exceptions   | Unannotated `throw`                                 |
-| TH0061 | Exceptions   | Unused `@throws` annotation                         |
-| TH0063 | Exceptions   | Thrown value must be a record type                  |
-| TH0064 | Exceptions   | Undeclared propagation                              |
-| TH0080 | Refinement   | Literal value out of range for refinement type      |
-| TH0081 | Refinement   | Value not assignable to refinement without evidence |
-| TH0082 | Subset       | Possibly-undefined operand; narrow before use       |
-| TH0083 | Subset       | Computed index access only supported on arrays      |
-| TH9000 | Directive    | Unused `@thales-expect-error` directive             |
-| TH9001 | Directive    | Directive code mismatch                             |
-| TH9002 | Directive    | Cannot emit: subset violations suppressed           |
-| TH9003 | Directive    | Malformed `@thales-expect-error` directive          |
-| TH9004 | Directive    | Emitted Lean code contains `sorry`                  |
+| Code   | Category     | Short Message                                        |
+| ------ | ------------ | ---------------------------------------------------- |
+| TH0001 | Mutation     | Cannot reassign variable                             |
+| TH0002 | Mutation     | Cannot assign to array element                       |
+| TH0003 | Mutation     | Cannot assign to object property                     |
+| TH0004 | Mutation     | Cannot call mutating method                          |
+| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope   |
+| TH0006 | Mutation     | Assignment only supported in statement position      |
+| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`      |
+| TH0010 | Control flow | Loop not supported                                   |
+| TH0012 | Control flow | async/await not supported                            |
+| TH0020 | Types        | `any` not permitted                                  |
+| TH0021 | Types        | `unknown` not permitted in user code                 |
+| TH0022 | Types        | Union must be discriminated                          |
+| TH0023 | Types        | Intersection types not supported                     |
+| TH0024 | Types        | keyof/conditional/mapped types not supported         |
+| TH0025 | Types        | null/undefined types not supported                   |
+| TH0026 | Types        | Condition must be boolean                            |
+| TH0030 | Declarations | `class` not supported                                |
+| TH0031 | Declarations | Inheritance (`extends`) not supported                |
+| TH0032 | Declarations | Shadowing declaration not supported                  |
+| TH0040 | Matching     | Non-exhaustive switch on discriminated union         |
+| TH0041 | Matching     | Switch shape not lowerable                           |
+| TH0050 | Recursion    | Cannot verify termination                            |
+| TH0066 | Totality     | `@total` and `@throws` declared together             |
+| TH0067 | Totality     | `@total` function has uncaught throw                 |
+| TH0068 | Totality     | `@total` function contains an unverifiable loop      |
+| TH0070 | Totality     | `@total` asserted but Lean rejects termination       |
+| TH0060 | Exceptions   | Unannotated `throw`                                  |
+| TH0061 | Exceptions   | Unused `@throws` annotation                          |
+| TH0063 | Exceptions   | Thrown value must be a record type                   |
+| TH0064 | Exceptions   | Undeclared propagation                               |
+| TH0080 | Refinement   | Literal value out of range for refinement type       |
+| TH0081 | Refinement   | Value not assignable to refinement without evidence  |
+| TH0082 | Subset       | Possibly-undefined operand; narrow before use        |
+| TH0083 | Subset       | Computed index access only supported on arrays       |
+| TH0084 | Subset       | Definedness test on a binding of undeterminable type |
+| TH9000 | Directive    | Unused `@thales-expect-error` directive              |
+| TH9001 | Directive    | Directive code mismatch                              |
+| TH9002 | Directive    | Cannot emit: subset violations suppressed            |
+| TH9003 | Directive    | Malformed `@thales-expect-error` directive           |
+| TH9004 | Directive    | Emitted Lean code contains `sorry`                   |
 
 ## Future of this table
 
@@ -865,3 +866,33 @@ function firstChar(s: string): string | undefined {
 
 Fix: for strings, use the supported string methods; for objects, use dot
 access with a statically-known property name.
+
+### TH0084 — Definedness test on a binding of undeterminable type
+
+**Message:** `Cannot determine whether this binding may be 'undefined'; annotate it or bind it from a recognized initializer before testing it`
+
+Emitted when a definedness test (`x === null`, `x !== undefined`, and the
+`==`/`!=` variants) is applied to a body-local binding whose type the
+emitter cannot record — i.e. an unannotated `let`/`const` whose initializer
+is not a call, element read, or literal. The emitter cannot tell whether the
+binding is `Option`-typed, so it can neither narrow the test nor fold it
+away, and rejects rather than emit Lean that fails to elaborate. `tsc`
+accepts these. Parameters and annotated or literal-initialized bindings are
+recordable and are not rejected.
+
+Example (rejected):
+
+```typescript
+function f(a: string, b: string): string {
+  const x = a + b;
+  // @thales-expect-error TH0084
+  if (x !== undefined) {
+    return x;
+  }
+  return 'n';
+}
+```
+
+Fix: annotate the binding (`const x: string = a + b;`), or restructure so
+the tested value comes from a recognized initializer. Generalizing the
+emitter's RHS type inference (issue #61) will let more of these compile.

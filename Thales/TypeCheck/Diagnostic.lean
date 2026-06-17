@@ -108,6 +108,7 @@ inductive ThalesKind where
   -- Computed-index diagnostics (TH0082–TH0083)
   | possiblyUndefinedOperand
   | computedIndexNotArray
+  | definednessTestUnrecordedBinding
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -152,6 +153,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .refinementNeedsEvidence .. => 81
   | .possiblyUndefinedOperand => 82
   | .computedIndexNotArray => 83
+  | .definednessTestUnrecordedBinding => 84
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -225,6 +227,8 @@ def ThalesKind.message : ThalesKind → String
     "Operand may be 'undefined' or 'null'; narrow it first (e.g. bind it and test `!== undefined`)"
   | .computedIndexNotArray =>
     "Computed index access is only supported on array values"
+  | .definednessTestUnrecordedBinding =>
+    "Cannot determine whether this binding may be 'undefined'; annotate it or bind it from a recognized initializer before testing it"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
