@@ -418,6 +418,35 @@ instance : JSShow Nat    := ⟨toString⟩
 instance : JSShow String := ⟨id⟩
 instance : JSShow Bool   := ⟨fun b => if b then "true" else "false"⟩
 
+/-! ### Array stdlib methods (#28)
+
+`join`/`indexOf`/`includes` for `number[]` (`Array Float`) and `string[]`
+(`Array String`). The emitter dispatches on the receiver's element type. -/
+
+/-- `Array.prototype.join`: stringify each element via `JSShow` and join with
+    `sep`. Empty array → `""`. JS number→string goes through `jsNumberToString`,
+    so output is byte-identical to Node. -/
+def Array.joinJS {α : Type} [JSShow α] (xs : Array α) (sep : String) : String :=
+  String.intercalate sep (xs.toList.map JSShow.jsShow)
+
+/-- `Array.prototype.indexOf`: first index whose element `=== x`, else `-1`, as
+    a JS number (`Float`). Lean `Float` `BEq` is IEEE (`NaN ≠ NaN`, `+0 = -0`),
+    matching JS strict equality; `String` `BEq` matches too. -/
+def Array.indexOfJS {α : Type} [BEq α] (xs : Array α) (x : α) : Float :=
+  match xs.findIdx? (· == x) with
+  | some i => i.toFloat
+  | none   => -1.0
+
+/-- `Array.prototype.includes` for numbers: SameValueZero, so `NaN` matches
+    `NaN` (unlike `indexOf`) and `+0`/`-0` match. -/
+def Array.includesFloat (xs : Array Float) (x : Float) : Bool :=
+  if x.isNaN then xs.any (·.isNaN) else xs.any (· == x)
+
+/-- `Array.prototype.includes` for strings: structural equality (no NaN
+    subtlety). -/
+def Array.includesStr (xs : Array String) (x : String) : Bool :=
+  xs.any (· == x)
+
 /-- Emitted counterpart of JS `console.log(x)`. Prints `x` using
     `JSShow.jsShow` so the Lean path's stdout matches the VM's without any
     post-processing by the conformance harness. -/
