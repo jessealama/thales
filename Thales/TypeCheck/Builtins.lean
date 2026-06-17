@@ -203,6 +203,12 @@ where
           .any),
          ("init", .any)]
         .any)
+    -- #28: join/indexOf/includes. `elem` is the element type. The emitter
+    -- lowers these for `number[]`/`string[]` identifier receivers; other
+    -- receivers are rejected by TH0085 (SubsetCheck) per the strict-subset rule.
+    | "join" => some (fnTypeOpt [("separator", .string, true)] .string)
+    | "indexOf" => some (fnType [("searchElement", elem)] .number)
+    | "includes" => some (fnType [("searchElement", elem)] .boolean)
     | _ => none
 
 /-- Create the initial type context with built-in bindings -/
