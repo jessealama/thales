@@ -80,6 +80,7 @@ soundness check).
 | TH0083 | Subset       | Computed index access only supported on arrays         |
 | TH0084 | Subset       | Definedness test on a binding of undeterminable type   |
 | TH0085 | Subset       | Array method on a receiver of unlowerable element type |
+| TH0086 | Subset       | Definedness test on a non-identifier subject           |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                |
 | TH9001 | Directive    | Directive code mismatch                                |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed              |
@@ -932,3 +933,34 @@ Fix: for a non-identifier receiver, assign the array to a typed local first
 (`const arr: number[] = getArr(); arr.join(',')`). A `boolean[]`/nested-array
 receiver has no equivalent lowering today. Generalizing the emitter's receiver
 type inference (issue #61) will let more of these compile.
+
+### TH0086 — Definedness test on a non-identifier subject
+
+**Message:** `A definedness test against 'undefined'/'null' is only supported when its subject is a variable; bind this expression to a variable first`
+
+A definedness test (`=== undefined`, `!== undefined`, and the `null` forms) is
+lowered only when its subject is a variable: the emitter narrows or folds the
+test based on the variable's recorded type. When the subject is any other
+expression — a function call, a member access, a computed index — the emitter
+cannot narrow it and would emit a literal `undefined` (an unknown Lean
+identifier) or a bare `.none`, so the test is rejected rather than miscompiled.
+`tsc` accepts these.
+
+Example (rejected):
+
+```typescript
+function g(): string {
+  return 'a';
+}
+function f(): string {
+  // @thales-expect-error TH0086
+  if (g() !== undefined) {
+    return g();
+  }
+  return 'n';
+}
+```
+
+Fix: bind the subject to a variable first
+(`const s = g(); if (s !== undefined) { … }`). Generalizing the emitter's RHS
+type inference (issue #61) will let more of these narrow directly.

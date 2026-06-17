@@ -276,7 +276,15 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
           else #[]
         | none => #[]
       | none => #[]
-    th84 ++ checkExpr ctx left ++ checkExpr ctx right
+    -- TH0086: a definedness test whose subject is a non-identifier expression
+    -- (call, member access, computed index) cannot be narrowed by the emitter,
+    -- which would emit a literal `undefined`/`.none`. Independent of TH0084,
+    -- which only fires on identifier subjects.
+    let th86 : Array Diagnostic :=
+      if EscapeAnalysis.definednessTestHasNonIdentifierSubject expr then
+        #[mkThalesDiag .definednessTestNonIdentifierSubject b.loc]
+      else #[]
+    th84 ++ th86 ++ checkExpr ctx left ++ checkExpr ctx right
   | .logicalExpr _ _ left right =>
     checkExpr ctx left ++ checkExpr ctx right
   | .memberExpr _ obj prop _ _ =>
