@@ -631,9 +631,23 @@ private def nullTestArms {β : Type} (name : String) (positive : Bool)
   if positive then [(noneArm, thnBody), (someArm, otherBody)]
   else [(someArm, thnBody), (noneArm, otherBody)]
 
+/-- Infer `number[]`/`string[]` from a homogeneous array literal — every
+    element a numeric, or every element a string, literal. Returns `none` for an
+    empty, mixed, or non-literal-element array, so callers keep their
+    conservative fallback. Mirrors tsc's element-type inference for the cases
+    the emitter can lower (#70). -/
+private def arrayLiteralType? (elems : List (Option Expression)) : Option TSType :=
+  if elems.isEmpty then none
+  else if elems.all (fun | some (.literal _ (.number _) _) => true | _ => false) then
+    some (.array .number)
+  else if elems.all (fun | some (.literal _ (.string _) _) => true | _ => false) then
+    some (.array .string)
+  else none
+
 /-- Record a declarator's binding type in `env.bindingEnv`: the normalized
     annotation when present, else a type inferred from the initializer shape
-    (call to a declared function / element read on a typed array binding).
+    (call to a declared function / element read on a typed array binding /
+    homogeneous array literal).
     Shared by `emitVarDecl` and `emitVarDeclDo` so the pure and do-mode
     paths cannot drift. -/
 private def recordDeclBinding (env : EmitEnv) (name : String)
@@ -648,6 +662,7 @@ private def recordDeclBinding (env : EmitEnv) (name : String)
     | some (.literal _ (.number _) _)  => some .number
     | some (.literal _ (.bigint _) _)  => some .bigint
     | some (.literal _ (.boolean _) _) => some .boolean
+    | some (.arrayExpr _ elems) => arrayLiteralType? elems
     | _ => none
   match (typeAnnotation.map normalizeForEmit) <|> inferredTy with
   | some t => { env with bindingEnv := env.bindingEnv.insert name t }
@@ -1651,9 +1666,17 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
     match ts with
     | .annotatedVarDecl _ _ name (some typeAnn) _ => acc.insert name typeAnn.type
     | .annotatedVarDecl _ _ name none (some (.arrayExpr _ elems)) =>
-        acc.insert name (.tuple (List.replicate elems.length .any))
+        -- A homogeneous numeric/string literal infers number[]/string[] (so the
+        -- array-method override can lower it, #70); otherwise the conservative
+        -- tuple-of-any placeholder.
+        acc.insert name
+          ((arrayLiteralType? elems).getD (.tuple (List.replicate elems.length .any)))
     | .annotatedVarDecl _ _ name none (some (.literal _ (.string _) _)) =>
         acc.insert name .string
+    | .annotatedVarDecl _ _ name none (some (.callExpr _ (.identifier _ f) _ _)) =>
+        match funcRetTypes.get? f with
+        | some t => acc.insert name t
+        | none => acc
     | _ => acc) {}
   let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
                             funcThrowsEnv, funcParamTypes, funcRetTypes }
