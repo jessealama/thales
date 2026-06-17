@@ -1516,7 +1516,7 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
       -- A body that can fall off the end (void function) needs an explicit
       -- unit return; appending one after an always-returning body would be
       -- dead code at the wrong type.
-      let core := if doStmtsTerminate core then core else core ++ [.ret (.var "()")]
+      let core := finalizeDoBody core
       .idRunDo core
     else
       emitBodyEnv env stmts

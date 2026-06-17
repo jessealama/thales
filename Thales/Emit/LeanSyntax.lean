@@ -118,6 +118,37 @@ partial def doStmtsTerminate (stmts : List LDoStmt) : Bool :=
   -- no trailing return, so all three stay conservatively non-terminating.
   | some _ => false
 
+/-- Whether `stmts` contains a `break` that targets the *current* loop level —
+    not one nested inside another loop, which captures its own `break`.
+    Descends through `if`/`match` arms only. -/
+partial def hasOwnBreakDo (stmts : List LDoStmt) : Bool :=
+  stmts.any fun s => match s with
+    | .breakDo => true
+    | .ifDo _ thn els => hasOwnBreakDo thn || hasOwnBreakDo els
+    | .matchDo _ arms => arms.any fun (_, ss) => hasOwnBreakDo ss
+    | _ => false
+
+/-- A `while (true)` loop with no `break` for this loop: it never completes
+    normally, so control after it is unreachable. (The `do … while (true)`
+    form lowers to `repeat … until`, which must be the last `do` element and
+    so cannot take a trailing tail — that case is tracked separately.) -/
+def loopNeverCompletes : LDoStmt → Bool
+  | .whileDo (.bool true) body => !hasOwnBreakDo body
+  | _ => false
+
+/-- Append the synthetic tail an `Id.run do` body needs so the block has a
+    value on every path. Nothing when it already `return`s everywhere; an
+    unreachable (correctly-typed) tail after a never-completing loop — whose
+    Lean type would otherwise be `PUnit`, mismatching a non-unit return type;
+    or `return ()` for a plain void fall-through. -/
+def finalizeDoBody (stmts : List LDoStmt) : List LDoStmt :=
+  if doStmtsTerminate stmts then stmts
+  else match stmts.getLast? with
+    | some s =>
+        if loopNeverCompletes s then stmts ++ [.ret (.var "unreachable!")]
+        else stmts ++ [.ret (.var "()")]
+    | none => stmts ++ [.ret (.var "()")]
+
 /-- Top-level declaration. -/
 inductive LDecl where
   | def_ (name : String)
