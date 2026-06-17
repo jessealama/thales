@@ -224,6 +224,25 @@ def definednessTestSubject? : Expression → Option String
       else none
   | _ => none
 
+/-- True when `expr` is a definedness test (`=== / !== / == / !=` against
+    `null`/`undefined`) whose subject — the non-nullish operand — is not a bare
+    identifier (a call result, member access, computed index, …).
+    `definednessTestSubject?` handles the identifier case (folded or narrowed);
+    the emitter cannot narrow these, and would emit a literal `undefined` /
+    `.none`, so SubsetCheck rejects them (TH0086). -/
+def definednessTestHasNonIdentifierSubject : Expression → Bool
+  | .binaryExpr _ op l r =>
+      let nullishEqOp := match op with
+        | .seq | .sneq | .eq | .neq => true
+        | _ => false
+      if nullishEqOp then
+        let nonIdentSubject : Expression → Expression → Bool := fun subj other =>
+          isNullishOperand other && !isNullishOperand subj
+            && (match subj with | .identifier _ _ => false | _ => true)
+        nonIdentSubject l r || nonIdentSubject r l
+      else false
+  | _ => false
+
 /- Walk the function's OWN body: nested functions are not descended into —
    every identifier they mention lands in `capturedRefs` wholesale. -/
 mutual
