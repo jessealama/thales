@@ -667,7 +667,11 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .literal _ (.boolean b) _ => .bool b
   | .literal _ .null _       => .ctor "none" []
   | .literal _ (.regex _ _) _ => .var "(unsupported: regex literal)"
-  -- Identifier
+  -- Identifier. The JS numeric globals `NaN`/`Infinity` are `number`-typed but
+  -- have no bare Lean counterpart, so lower them to the runtime `Float`
+  -- constants (`-Infinity` lowers as the negation of `Infinity`).
+  | .identifier _ "NaN"      => .var "tsNaN"
+  | .identifier _ "Infinity" => .var "tsInfinity"
   | .identifier _ name => .var name
   -- Binary expressions — null-equality checks emit isNone/isSome on Option values
   -- `x === null` / `x === undefined` (and reverses, with `==` too) → x.isNone
