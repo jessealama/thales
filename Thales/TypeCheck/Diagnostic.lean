@@ -113,6 +113,8 @@ inductive ThalesKind where
   | arrayMethodReceiverNotLowerable (methodName : String)
   -- Definedness test on a non-identifier subject (TH0086)
   | definednessTestNonIdentifierSubject
+  -- Unsupported String.prototype method (TH0087)
+  | stringMethodNotSupported (methodName : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -160,6 +162,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .definednessTestUnrecordedBinding => 84
   | .arrayMethodReceiverNotLowerable _ => 85
   | .definednessTestNonIdentifierSubject => 86
+  | .stringMethodNotSupported _ => 87
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -239,6 +242,8 @@ def ThalesKind.message : ThalesKind → String
     s!"Array method '{methodName}' is only supported on a `number[]` or `string[]` receiver"
   | .definednessTestNonIdentifierSubject =>
     "A definedness test against 'undefined'/'null' is only supported when its subject is a variable; bind this expression to a variable first"
+  | .stringMethodNotSupported methodName =>
+    s!"String method '{methodName}' is not supported; the available string operations are 'startsWith', 'endsWith', and 'split'"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"

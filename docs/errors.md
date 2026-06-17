@@ -81,6 +81,7 @@ soundness check).
 | TH0084 | Subset       | Definedness test on a binding of undeterminable type   |
 | TH0085 | Subset       | Array method on a receiver of unlowerable element type |
 | TH0086 | Subset       | Definedness test on a non-identifier subject           |
+| TH0087 | Subset       | Unsupported `String.prototype` method                  |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                |
 | TH9001 | Directive    | Directive code mismatch                                |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed              |
@@ -964,3 +965,28 @@ function f(): string {
 Fix: bind the subject to a variable first
 (`const s = g(); if (s !== undefined) { … }`). Generalizing the emitter's RHS
 type inference (issue #61) will let more of these narrow directly.
+
+### TH0087 — Unsupported `String.prototype` method
+
+**Message:** `String method '<name>' is not supported; the available string operations are 'startsWith', 'endsWith', and 'split'`
+
+Most `String.prototype` methods type-check — they are declared so that calling
+them is not a spurious `tsc`-style error — but the emitter has no correct Lean
+lowering for them. Some would emit a nonexistent `String.<m>` (e.g. `charAt`,
+`toUpperCase`, `slice`, `padStart`), and some have diverging semantics: JS
+`replace` replaces only the first match, whereas Lean's `String.replace`
+replaces every occurrence. Rather than miscompile (or silently produce wrong
+output), these are rejected. Only `length`, `startsWith`, `endsWith`, and
+`split` are supported today. `tsc` accepts the rejected methods.
+
+Example (rejected):
+
+```typescript
+const s: string = 'abcabc';
+// @thales-expect-error TH0087
+console.log(s.toUpperCase());
+```
+
+Fix: restructure to avoid the method, or use one of the supported operations.
+Sound lowerings (UTF-16-faithful where it matters) are future stdlib work
+(issue #28).

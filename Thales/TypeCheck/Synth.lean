@@ -82,6 +82,14 @@ private partial def lookupProperty (objType : TSType) (propName : String) (depth
     return builtinProperty objType propName
   | _ => return none
 
+/-- String members with a correct Lean lowering today. `length` is a property;
+    `startsWith`/`endsWith`/`split` lower to byte-identical Lean operations.
+    Every other declared `String.prototype` member is rejected (TH0087) — see
+    the member-access arm of `synthJSExpr`. -/
+def stringMethodSupported (name : String) : Bool :=
+  name == "length" || name == "startsWith" || name == "endsWith"
+    || name == "split"
+
 /-- Best-effort extraction of a "source name" for a JS expression, used in
     TH0081 diagnostics (`Value '<name>' of type 'number' is not assignable…`).
     Returns the identifier name for a bare identifier, the dotted path for a
@@ -231,7 +239,19 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
     let objTyped ← synthJSExpr obj
     let resolved ← resolveTypeGeneric objTyped.type
     match ← lookupProperty resolved propName with
-    | some ty => return mk ty #[objTyped]
+    | some ty =>
+      -- TH0087: most `String.prototype` methods type-check (they are declared
+      -- in `Builtins.stringProperty`) but have no correct Lean lowering — the
+      -- emitter would produce a nonexistent `String.<m>` or a semantically
+      -- divergent one (e.g. `replace` replaces all, not the first match). Only
+      -- `length`/`startsWith`/`endsWith`/`split` are sound today; reject the
+      -- rest here, where the receiver type is fully known. `tsc` accepts them.
+      let unsupportedStringMethod := match resolved with
+        | .string | .stringLit _ => !stringMethodSupported propName
+        | _ => false
+      if unsupportedStringMethod then
+        emitDiagnostic (.thales (.stringMethodNotSupported propName)) base.loc
+      return mk ty #[objTyped]
     | none =>
       match resolved with
       | .any => return mk .any #[objTyped]
