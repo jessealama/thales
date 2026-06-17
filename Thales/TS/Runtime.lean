@@ -394,8 +394,16 @@ def jsMod (a b : Float) : Float :=
     form) fall through to Lean's `%f` formatting. -/
 def jsNumberToString (x : Float) : String :=
   if x.isNaN then "NaN"
+  else if x.isInf then (if x < 0.0 then "-Infinity" else "Infinity")
   else if x == 0.0 then "0"
   else stripTrailingZerosAfterDot (toString x)
+
+/-- JS global `NaN` as a Lean `Float` (the emitter lowers the `NaN` identifier
+    here so it is never a bare, unresolved name). -/
+def tsNaN : Float := 0.0 / 0.0
+
+/-- JS global `Infinity` as a Lean `Float`; `-Infinity` lowers to its negation. -/
+def tsInfinity : Float := 1.0 / 0.0
 
 /-- Typeclass for values printable by `console.log`. Instances implement the
     small subset of JS ToString semantics v1 actually exercises. -/
