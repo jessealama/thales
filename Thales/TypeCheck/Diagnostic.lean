@@ -109,6 +109,8 @@ inductive ThalesKind where
   | possiblyUndefinedOperand
   | computedIndexNotArray
   | definednessTestUnrecordedBinding
+  -- Array stdlib-method diagnostic (TH0085)
+  | arrayMethodReceiverNotLowerable (methodName : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -154,6 +156,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .possiblyUndefinedOperand => 82
   | .computedIndexNotArray => 83
   | .definednessTestUnrecordedBinding => 84
+  | .arrayMethodReceiverNotLowerable _ => 85
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -229,6 +232,8 @@ def ThalesKind.message : ThalesKind → String
     "Computed index access is only supported on array values"
   | .definednessTestUnrecordedBinding =>
     "Cannot determine whether this binding may be 'undefined'; annotate it or bind it from a recognized initializer before testing it"
+  | .arrayMethodReceiverNotLowerable methodName =>
+    s!"Array method '{methodName}' is only supported on a `number[]` or `string[]` receiver"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"

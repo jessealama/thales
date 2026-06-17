@@ -42,48 +42,49 @@ soundness check).
 
 ## Summary
 
-| Code   | Category     | Short Message                                        |
-| ------ | ------------ | ---------------------------------------------------- |
-| TH0001 | Mutation     | Cannot reassign variable                             |
-| TH0002 | Mutation     | Cannot assign to array element                       |
-| TH0003 | Mutation     | Cannot assign to object property                     |
-| TH0004 | Mutation     | Cannot call mutating method                          |
-| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope   |
-| TH0006 | Mutation     | Assignment only supported in statement position      |
-| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`      |
-| TH0010 | Control flow | Loop not supported                                   |
-| TH0012 | Control flow | async/await not supported                            |
-| TH0020 | Types        | `any` not permitted                                  |
-| TH0021 | Types        | `unknown` not permitted in user code                 |
-| TH0022 | Types        | Union must be discriminated                          |
-| TH0023 | Types        | Intersection types not supported                     |
-| TH0024 | Types        | keyof/conditional/mapped types not supported         |
-| TH0025 | Types        | null/undefined types not supported                   |
-| TH0026 | Types        | Condition must be boolean                            |
-| TH0030 | Declarations | `class` not supported                                |
-| TH0031 | Declarations | Inheritance (`extends`) not supported                |
-| TH0032 | Declarations | Shadowing declaration not supported                  |
-| TH0040 | Matching     | Non-exhaustive switch on discriminated union         |
-| TH0041 | Matching     | Switch shape not lowerable                           |
-| TH0050 | Recursion    | Cannot verify termination                            |
-| TH0066 | Totality     | `@total` and `@throws` declared together             |
-| TH0067 | Totality     | `@total` function has uncaught throw                 |
-| TH0068 | Totality     | `@total` function contains an unverifiable loop      |
-| TH0070 | Totality     | `@total` asserted but Lean rejects termination       |
-| TH0060 | Exceptions   | Unannotated `throw`                                  |
-| TH0061 | Exceptions   | Unused `@throws` annotation                          |
-| TH0063 | Exceptions   | Thrown value must be a record type                   |
-| TH0064 | Exceptions   | Undeclared propagation                               |
-| TH0080 | Refinement   | Literal value out of range for refinement type       |
-| TH0081 | Refinement   | Value not assignable to refinement without evidence  |
-| TH0082 | Subset       | Possibly-undefined operand; narrow before use        |
-| TH0083 | Subset       | Computed index access only supported on arrays       |
-| TH0084 | Subset       | Definedness test on a binding of undeterminable type |
-| TH9000 | Directive    | Unused `@thales-expect-error` directive              |
-| TH9001 | Directive    | Directive code mismatch                              |
-| TH9002 | Directive    | Cannot emit: subset violations suppressed            |
-| TH9003 | Directive    | Malformed `@thales-expect-error` directive           |
-| TH9004 | Directive    | Emitted Lean code contains `sorry`                   |
+| Code   | Category     | Short Message                                          |
+| ------ | ------------ | ------------------------------------------------------ |
+| TH0001 | Mutation     | Cannot reassign variable                               |
+| TH0002 | Mutation     | Cannot assign to array element                         |
+| TH0003 | Mutation     | Cannot assign to object property                       |
+| TH0004 | Mutation     | Cannot call mutating method                            |
+| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope     |
+| TH0006 | Mutation     | Assignment only supported in statement position        |
+| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`        |
+| TH0010 | Control flow | Loop not supported                                     |
+| TH0012 | Control flow | async/await not supported                              |
+| TH0020 | Types        | `any` not permitted                                    |
+| TH0021 | Types        | `unknown` not permitted in user code                   |
+| TH0022 | Types        | Union must be discriminated                            |
+| TH0023 | Types        | Intersection types not supported                       |
+| TH0024 | Types        | keyof/conditional/mapped types not supported           |
+| TH0025 | Types        | null/undefined types not supported                     |
+| TH0026 | Types        | Condition must be boolean                              |
+| TH0030 | Declarations | `class` not supported                                  |
+| TH0031 | Declarations | Inheritance (`extends`) not supported                  |
+| TH0032 | Declarations | Shadowing declaration not supported                    |
+| TH0040 | Matching     | Non-exhaustive switch on discriminated union           |
+| TH0041 | Matching     | Switch shape not lowerable                             |
+| TH0050 | Recursion    | Cannot verify termination                              |
+| TH0066 | Totality     | `@total` and `@throws` declared together               |
+| TH0067 | Totality     | `@total` function has uncaught throw                   |
+| TH0068 | Totality     | `@total` function contains an unverifiable loop        |
+| TH0070 | Totality     | `@total` asserted but Lean rejects termination         |
+| TH0060 | Exceptions   | Unannotated `throw`                                    |
+| TH0061 | Exceptions   | Unused `@throws` annotation                            |
+| TH0063 | Exceptions   | Thrown value must be a record type                     |
+| TH0064 | Exceptions   | Undeclared propagation                                 |
+| TH0080 | Refinement   | Literal value out of range for refinement type         |
+| TH0081 | Refinement   | Value not assignable to refinement without evidence    |
+| TH0082 | Subset       | Possibly-undefined operand; narrow before use          |
+| TH0083 | Subset       | Computed index access only supported on arrays         |
+| TH0084 | Subset       | Definedness test on a binding of undeterminable type   |
+| TH0085 | Subset       | Array method on a receiver of unlowerable element type |
+| TH9000 | Directive    | Unused `@thales-expect-error` directive                |
+| TH9001 | Directive    | Directive code mismatch                                |
+| TH9002 | Directive    | Cannot emit: subset violations suppressed              |
+| TH9003 | Directive    | Malformed `@thales-expect-error` directive             |
+| TH9004 | Directive    | Emitted Lean code contains `sorry`                     |
 
 ## Future of this table
 
@@ -896,3 +897,38 @@ function f(a: string, b: string): string {
 Fix: annotate the binding (`const x: string = a + b;`), or restructure so
 the tested value comes from a recognized initializer. Generalizing the
 emitter's RHS type inference (issue #61) will let more of these compile.
+
+### TH0085 — Array method on an unlowerable receiver
+
+**Message:** `Array method '<name>' is only supported on a \`number[]\` or \`string[]\` receiver`
+
+`join`, `indexOf`, and `includes` are lowered only when the receiver is an
+identifier the emitter can statically resolve to `number[]` or `string[]` (a
+module-level const, a typed parameter, or a body-local typed declarator). Two
+receiver shapes are out of subset and rejected rather than miscompiled — `tsc`
+accepts both:
+
+- a non-identifier receiver (a function-call result, a member-access chain, …),
+  whose element type cannot be resolved at emit time; and
+- an identifier whose declared element type is an array of any other type — a
+  `boolean[]`, a nested `number[][]`, an object array — for which no runtime
+  lowering exists.
+
+Examples (rejected):
+
+```typescript
+function getArr(): number[] {
+  return [3, 1, 2];
+}
+// @thales-expect-error TH0085
+console.log(getArr().join(','));
+
+const flags: boolean[] = [true, false];
+// @thales-expect-error TH0085
+console.log(flags.includes(true));
+```
+
+Fix: for a non-identifier receiver, assign the array to a typed local first
+(`const arr: number[] = getArr(); arr.join(',')`). A `boolean[]`/nested-array
+receiver has no equivalent lowering today. Generalizing the emitter's receiver
+type inference (issue #61) will let more of these compile.
