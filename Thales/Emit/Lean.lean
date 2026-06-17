@@ -760,6 +760,36 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
           .app (.proj (emitExprEnv env obj) "foldl")
             [emitExprEnv env cb, emitExprEnv env initArg]
       | _, _ =>
+      -- #28: array-method overrides. `xs.join/indexOf/includes(...)` on an
+      -- identifier receiver recorded as `number[]`/`string[]`. Non-identifier
+      -- receivers are rejected earlier by TH0085, so they never reach here;
+      -- unsupported element types fall through to the generic emission below
+      -- (a Lean compile error if ever exercised — never a silent miscompile).
+      let arrayMethodOverride : Option LExpr :=
+        match callee with
+        | .memberExpr _ (.identifier _ recv) (.identifier _ m) false _ =>
+            let elemTy? := env.bindingEnv.get? recv
+            let firstArg? : Option LExpr := match args with
+              | a :: _ => some (emitExprEnv env a)
+              | [] => none
+            match elemTy?, m with
+            | some (.array .number), "join" =>
+                some (.app (.var "Array.joinJS") [.var recv, firstArg?.getD (.str ",")])
+            | some (.array .string), "join" =>
+                some (.app (.var "Array.joinJS") [.var recv, firstArg?.getD (.str ",")])
+            | some (.array .number), "indexOf" =>
+                firstArg?.map (fun a => .app (.var "Array.indexOfJS") [.var recv, a])
+            | some (.array .string), "indexOf" =>
+                firstArg?.map (fun a => .app (.var "Array.indexOfJS") [.var recv, a])
+            | some (.array .number), "includes" =>
+                firstArg?.map (fun a => .app (.var "Array.includesFloat") [.var recv, a])
+            | some (.array .string), "includes" =>
+                firstArg?.map (fun a => .app (.var "Array.includesStr") [.var recv, a])
+            | _, _ => none
+        | _ => none
+      match arrayMethodOverride with
+      | some e => e
+      | none =>
       let calleeFnName : Option String := match callee with
         | .identifier _ name => some name
         | _ => none
