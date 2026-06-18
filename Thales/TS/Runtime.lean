@@ -484,6 +484,46 @@ def Array.includesStrFrom (xs : Array String) (x : String) (fromIndex : Float) :
 def Array.includesStr (xs : Array String) (x : String) : Bool :=
   Array.includesStrFrom xs x 0.0
 
+/-- `Array.prototype.findIndex(p)`: index of the first element satisfying `p`,
+    else `-1`, as a JS number (`Float`). -/
+def Array.findIndexJS {α : Type} (xs : Array α) (p : α → Bool) : Float :=
+  match xs.toList.findIdx? p with
+  | some i => i.toFloat
+  | none   => -1.0
+
+/-- The inclusive upper search bound `k` for `lastIndexOf(x, fromIndex)` over an
+    array of length `len`: `NaN → 0`; truncate toward zero; non-negative values
+    clamp to `len-1`; a negative `fromIndex` counts back from the end
+    (`len + n`). `none` when the search window is empty (`len = 0` or the
+    negative offset lands before index 0). -/
+def Array.lastStartJS (len : Nat) (fromIndex : Float) : Option Nat :=
+  if len == 0 then none
+  else if fromIndex.isNaN then some 0
+  else if fromIndex ≥ 0.0 then
+    if fromIndex ≥ len.toFloat then some (len - 1)
+    else some (min fromIndex.toUInt64.toNat (len - 1))
+  else
+    let magN := (-fromIndex).toUInt64.toNat
+    if magN > len then none else some (len - magN)
+
+/-- `Array.prototype.lastIndexOf(x, fromIndex)`: highest index `≤ fromIndex`
+    whose element `=== x`, else `-1`. Same `===`/`Float` `BEq` semantics as
+    `indexOf`. -/
+def Array.lastIndexOfFromJS {α : Type} [BEq α] (xs : Array α) (x : α) (fromIndex : Float) : Float :=
+  match Array.lastStartJS xs.size fromIndex with
+  | none   => -1.0
+  | some k =>
+    -- search the prefix `0..k` from the top: reverse it, find the first match,
+    -- and map the reversed position `j` back to the original index `k - j`.
+    match ((xs.toList.take (k + 1)).reverse).findIdx? (· == x) with
+    | some j => (k - j).toFloat
+    | none   => -1.0
+
+/-- `Array.prototype.lastIndexOf(x)`: the single-argument form (search from the
+    last element). -/
+def Array.lastIndexOfJS {α : Type} [BEq α] (xs : Array α) (x : α) : Float :=
+  Array.lastIndexOfFromJS xs x (xs.size.toFloat - 1.0)
+
 /-- Emitted counterpart of JS `console.log(x)`. Prints `x` using
     `JSShow.jsShow` so the Lean path's stdout matches the VM's without any
     post-processing by the conformance harness. -/

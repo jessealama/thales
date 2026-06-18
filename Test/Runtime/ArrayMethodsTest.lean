@@ -62,6 +62,33 @@ def tIncludes : IO Unit := do
   expectBool "strs.includes(a,1)" (Array.includesStrFrom strs "a" 1.0) false
   expectBool "strs.includes(c,-1)" (Array.includesStrFrom strs "c" (-1.0)) true
 
+private def rep : Array Float := #[1.0, 2.0, 1.0, 2.0]
+private def strs4 : Array String := #["a", "b", "c", "b"]
+
+def tFindIndex : IO Unit := do
+  expectFloat "nums.findIndex(>1)" (Array.findIndexJS nums (· > 1.0)) 0.0
+  expectFloat "nums.findIndex(>5)" (Array.findIndexJS nums (· > 5.0)) (-1.0)
+  expectFloat "rep.findIndex(==2)" (Array.findIndexJS rep (· == 2.0)) 1.0
+  expectBool "nums.some(>1)" (nums.any (· > 1.0)) true
+  expectBool "nums.every(>1)" (nums.all (· > 1.0)) false
+  expectBool "nums.every(>0)" (nums.all (· > 0.0)) true
+
+def tLastIndexOf : IO Unit := do
+  expectFloat "rep.lastIndexOf(1)" (Array.lastIndexOfJS rep 1.0) 2.0
+  expectFloat "rep.lastIndexOf(2)" (Array.lastIndexOfJS rep 2.0) 3.0
+  expectFloat "rep.lastIndexOf(9)" (Array.lastIndexOfJS rep 9.0) (-1.0)
+  expectFloat "rep.lastIndexOf(1,1)" (Array.lastIndexOfFromJS rep 1.0 1.0) 0.0
+  expectFloat "rep.lastIndexOf(2,-1)" (Array.lastIndexOfFromJS rep 2.0 (-1.0)) 3.0
+  expectFloat "rep.lastIndexOf(2,-3)" (Array.lastIndexOfFromJS rep 2.0 (-3.0)) 1.0
+  expectFloat "rep.lastIndexOf(2,-5)" (Array.lastIndexOfFromJS rep 2.0 (-5.0)) (-1.0)
+  expectFloat "strs4.lastIndexOf(b)" (Array.lastIndexOfJS strs4 "b") 3.0
+  expectFloat "strs4.lastIndexOf(b,2)" (Array.lastIndexOfFromJS strs4 "b" 2.0) 1.0
+  expectFloat "strs4.lastIndexOf(z)" (Array.lastIndexOfJS strs4 "z") (-1.0)
+  -- empty array: no valid search window.
+  expectFloat "[].lastIndexOf(1)" (Array.lastIndexOfJS (#[] : Array Float) 1.0) (-1.0)
+
 #eval tJoin
 #eval tIndexOf
 #eval tIncludes
+#eval tFindIndex
+#eval tLastIndexOf

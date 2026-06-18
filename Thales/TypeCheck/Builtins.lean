@@ -211,6 +211,32 @@ where
       some (fnTypeOpt [("searchElement", elem, false), ("fromIndex", .number, true)] .number)
     | "includes" =>
       some (fnTypeOpt [("searchElement", elem, false), ("fromIndex", .number, true)] .boolean)
+    -- lastIndexOf mirrors indexOf, searching from the end.
+    | "lastIndexOf" =>
+      some (fnTypeOpt [("searchElement", elem, false), ("fromIndex", .number, true)] .number)
+    -- Predicate methods (callback shape mirrors `filter`'s): `some`/`every`
+    -- return boolean, `findIndex` returns the matching index (or -1).
+    | "some" =>
+      some (fnType
+        [("predicate", .function
+          [.mk "value" elem false false,
+           .mk "index" (.refinement .natural) false false]
+          .boolean)]
+        .boolean)
+    | "every" =>
+      some (fnType
+        [("predicate", .function
+          [.mk "value" elem false false,
+           .mk "index" (.refinement .natural) false false]
+          .boolean)]
+        .boolean)
+    | "findIndex" =>
+      some (fnType
+        [("predicate", .function
+          [.mk "value" elem false false,
+           .mk "index" (.refinement .natural) false false]
+          .boolean)]
+        .number)
     | _ => none
 
 /-- Create the initial type context with built-in bindings -/
