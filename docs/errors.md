@@ -904,11 +904,11 @@ emitter's RHS type inference (issue #61) will let more of these compile.
 
 **Message:** `Array method '<name>' is only supported on a \`number[]\` or \`string[]\` receiver`
 
-`join`, `indexOf`, and `includes` are lowered only when the receiver is an
-identifier the emitter can statically resolve to `number[]` or `string[]` (a
-module-level const, a typed parameter, or a body-local typed declarator). Two
-receiver shapes are out of subset and rejected rather than miscompiled — `tsc`
-accepts both:
+`join`, `indexOf`, `includes`, `lastIndexOf`, `some`, `every`, and `findIndex`
+are lowered only when the receiver is an identifier the emitter can statically
+resolve to `number[]` or `string[]` (a module-level const, a typed parameter, or
+a body-local typed declarator). Two receiver shapes are out of subset and
+rejected rather than miscompiled — `tsc` accepts both:
 
 - a non-identifier receiver (a function-call result, a member-access chain, …),
   whose element type cannot be resolved at emit time; and
