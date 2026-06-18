@@ -791,19 +791,62 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
             let firstArg? : Option LExpr := match args with
               | a :: _ => some (emitExprEnv env a)
               | [] => none
+            -- #67: indexOf/includes accept an optional `fromIndex`. When present
+            -- it routes to the `…From` runtime helper; otherwise the
+            -- single-argument helper. `join`'s second argument is not part of
+            -- the subset, so it ignores anything past the separator.
+            let secondArg? : Option LExpr := match args with
+              | _ :: b :: _ => some (emitExprEnv env b)
+              | _ => none
+            let indexOfExpr : LExpr → LExpr := fun a =>
+              match secondArg? with
+              | some b => .app (.var "Array.indexOfFromJS") [.var recv, a, b]
+              | none   => .app (.var "Array.indexOfJS") [.var recv, a]
+            let includesExpr : String → LExpr → LExpr := fun helper a =>
+              match secondArg? with
+              | some b => .app (.var (helper ++ "From")) [.var recv, a, b]
+              | none   => .app (.var helper) [.var recv, a]
+            -- lastIndexOf mirrors indexOf's optional-fromIndex routing.
+            let lastIndexOfExpr : LExpr → LExpr := fun a =>
+              match secondArg? with
+              | some b => .app (.var "Array.lastIndexOfFromJS") [.var recv, a, b]
+              | none   => .app (.var "Array.lastIndexOfJS") [.var recv, a]
+            -- some/every/findIndex take a predicate (the first argument) and
+            -- lower to the generic Lean primitives `Array.any`/`Array.all` and
+            -- the `Array.findIndexJS` helper. Element type is irrelevant to
+            -- these, but the receiver is still resolved to number[]/string[]
+            -- so unlowerable shapes are rejected (TH0085) rather than emitted.
+            let predExpr : String → LExpr → LExpr := fun helper cb =>
+              .app (.var helper) [.var recv, cb]
             match elemTy?, m with
             | some (.array .number), "join" =>
                 some (.app (.var "Array.joinJS") [.var recv, firstArg?.getD (.str ",")])
             | some (.array .string), "join" =>
                 some (.app (.var "Array.joinJS") [.var recv, firstArg?.getD (.str ",")])
             | some (.array .number), "indexOf" =>
-                firstArg?.map (fun a => .app (.var "Array.indexOfJS") [.var recv, a])
+                firstArg?.map indexOfExpr
             | some (.array .string), "indexOf" =>
-                firstArg?.map (fun a => .app (.var "Array.indexOfJS") [.var recv, a])
+                firstArg?.map indexOfExpr
             | some (.array .number), "includes" =>
-                firstArg?.map (fun a => .app (.var "Array.includesFloat") [.var recv, a])
+                firstArg?.map (includesExpr "Array.includesFloat")
             | some (.array .string), "includes" =>
-                firstArg?.map (fun a => .app (.var "Array.includesStr") [.var recv, a])
+                firstArg?.map (includesExpr "Array.includesStr")
+            | some (.array .number), "lastIndexOf" =>
+                firstArg?.map lastIndexOfExpr
+            | some (.array .string), "lastIndexOf" =>
+                firstArg?.map lastIndexOfExpr
+            | some (.array .number), "some" =>
+                firstArg?.map (predExpr "Array.any")
+            | some (.array .string), "some" =>
+                firstArg?.map (predExpr "Array.any")
+            | some (.array .number), "every" =>
+                firstArg?.map (predExpr "Array.all")
+            | some (.array .string), "every" =>
+                firstArg?.map (predExpr "Array.all")
+            | some (.array .number), "findIndex" =>
+                firstArg?.map (predExpr "Array.findIndexJS")
+            | some (.array .string), "findIndex" =>
+                firstArg?.map (predExpr "Array.findIndexJS")
             | _, _ => none
         | _ => none
       match arrayMethodOverride with

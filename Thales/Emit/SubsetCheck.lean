@@ -239,7 +239,9 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
         -- Receivers SubsetCheck cannot resolve here (string methods, arrays
         -- whose type is only inferred from an initializer) are left to the
         -- existing path and tracked under separate issues.
-        else if propName == "join" || propName == "indexOf" || propName == "includes" then
+        else if propName == "join" || propName == "indexOf" || propName == "includes"
+            || propName == "lastIndexOf" || propName == "some" || propName == "every"
+            || propName == "findIndex" then
           match obj with
           | .identifier _ recv =>
               match (ctx.recvEnv.get? recv).map (resolveType ctx.aliasEnv) with
