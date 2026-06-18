@@ -38,6 +38,14 @@ def tIndexOf : IO Unit := do
   expectFloat "strs.indexOf(z)" (Array.indexOfJS strs "z") (-1.0)
   -- indexOf uses ===, so NaN never matches:
   expectFloat "[NaN].indexOf(NaN)" (Array.indexOfJS #[nan] nan) (-1.0)
+  -- #67: optional fromIndex (truncates toward zero, negative counts from end):
+  expectFloat "nums.indexOf(2,1)" (Array.indexOfFromJS nums 2.0 1.0) 2.0
+  expectFloat "nums.indexOf(3,1)" (Array.indexOfFromJS nums 3.0 1.0) (-1.0)
+  expectFloat "nums.indexOf(3,-100)" (Array.indexOfFromJS nums 3.0 (-100.0)) 0.0
+  expectFloat "nums.indexOf(2,5)" (Array.indexOfFromJS nums 2.0 5.0) (-1.0)
+  expectFloat "nums.indexOf(2,1.9)" (Array.indexOfFromJS nums 2.0 1.9) 2.0
+  expectFloat "strs.indexOf(c,1)" (Array.indexOfFromJS strs "c" 1.0) 2.0
+  expectFloat "strs.indexOf(a,1)" (Array.indexOfFromJS strs "a" 1.0) (-1.0)
 
 def tIncludes : IO Unit := do
   expectBool "nums.includes(3)" (Array.includesFloat nums 3.0) true
@@ -46,6 +54,13 @@ def tIncludes : IO Unit := do
   expectBool "[NaN].includes(NaN)" (Array.includesFloat #[nan] nan) true
   expectBool "strs.includes(a)" (Array.includesStr strs "a") true
   expectBool "strs.includes(z)" (Array.includesStr strs "z") false
+  -- #67: optional fromIndex:
+  expectBool "nums.includes(2,1)" (Array.includesFloatFrom nums 2.0 1.0) true
+  expectBool "nums.includes(3,1)" (Array.includesFloatFrom nums 3.0 1.0) false
+  expectBool "nums.includes(2,5)" (Array.includesFloatFrom nums 2.0 5.0) false
+  expectBool "[NaN].includes(NaN,-1)" (Array.includesFloatFrom #[nan] nan (-1.0)) true
+  expectBool "strs.includes(a,1)" (Array.includesStrFrom strs "a" 1.0) false
+  expectBool "strs.includes(c,-1)" (Array.includesStrFrom strs "c" (-1.0)) true
 
 #eval tJoin
 #eval tIndexOf

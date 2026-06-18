@@ -791,19 +791,34 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
             let firstArg? : Option LExpr := match args with
               | a :: _ => some (emitExprEnv env a)
               | [] => none
+            -- #67: indexOf/includes accept an optional `fromIndex`. When present
+            -- it routes to the `…From` runtime helper; otherwise the
+            -- single-argument helper. `join`'s second argument is not part of
+            -- the subset, so it ignores anything past the separator.
+            let secondArg? : Option LExpr := match args with
+              | _ :: b :: _ => some (emitExprEnv env b)
+              | _ => none
+            let indexOfExpr : LExpr → LExpr := fun a =>
+              match secondArg? with
+              | some b => .app (.var "Array.indexOfFromJS") [.var recv, a, b]
+              | none   => .app (.var "Array.indexOfJS") [.var recv, a]
+            let includesExpr : String → LExpr → LExpr := fun helper a =>
+              match secondArg? with
+              | some b => .app (.var (helper ++ "From")) [.var recv, a, b]
+              | none   => .app (.var helper) [.var recv, a]
             match elemTy?, m with
             | some (.array .number), "join" =>
                 some (.app (.var "Array.joinJS") [.var recv, firstArg?.getD (.str ",")])
             | some (.array .string), "join" =>
                 some (.app (.var "Array.joinJS") [.var recv, firstArg?.getD (.str ",")])
             | some (.array .number), "indexOf" =>
-                firstArg?.map (fun a => .app (.var "Array.indexOfJS") [.var recv, a])
+                firstArg?.map indexOfExpr
             | some (.array .string), "indexOf" =>
-                firstArg?.map (fun a => .app (.var "Array.indexOfJS") [.var recv, a])
+                firstArg?.map indexOfExpr
             | some (.array .number), "includes" =>
-                firstArg?.map (fun a => .app (.var "Array.includesFloat") [.var recv, a])
+                firstArg?.map (includesExpr "Array.includesFloat")
             | some (.array .string), "includes" =>
-                firstArg?.map (fun a => .app (.var "Array.includesStr") [.var recv, a])
+                firstArg?.map (includesExpr "Array.includesStr")
             | _, _ => none
         | _ => none
       match arrayMethodOverride with

@@ -207,8 +207,10 @@ where
     -- lowers these for `number[]`/`string[]` identifier receivers; other
     -- receivers are rejected by TH0085 (SubsetCheck) per the strict-subset rule.
     | "join" => some (fnTypeOpt [("separator", .string, true)] .string)
-    | "indexOf" => some (fnType [("searchElement", elem)] .number)
-    | "includes" => some (fnType [("searchElement", elem)] .boolean)
+    | "indexOf" =>
+      some (fnTypeOpt [("searchElement", elem, false), ("fromIndex", .number, true)] .number)
+    | "includes" =>
+      some (fnTypeOpt [("searchElement", elem, false), ("fromIndex", .number, true)] .boolean)
     | _ => none
 
 /-- Create the initial type context with built-in bindings -/

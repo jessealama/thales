@@ -437,23 +437,52 @@ instance : JSShow Bool   := ⟨fun b => if b then "true" else "false"⟩
 def Array.joinJS {α : Type} [JSShow α] (xs : Array α) (sep : String) : String :=
   String.intercalate sep (xs.toList.map JSShow.jsShow)
 
-/-- `Array.prototype.indexOf`: first index whose element `=== x`, else `-1`, as
-    a JS number (`Float`). Lean `Float` `BEq` is IEEE (`NaN ≠ NaN`, `+0 = -0`),
-    matching JS strict equality; `String` `BEq` matches too. -/
-def Array.indexOfJS {α : Type} [BEq α] (xs : Array α) (x : α) : Float :=
-  match xs.findIdx? (· == x) with
-  | some i => i.toFloat
+/-- JS `ToIntegerOrInfinity` clamped to a search start offset `k`
+    (`0 ≤ k ≤ len`) for the `indexOf`/`includes` `fromIndex` argument over an
+    array of length `len`. `NaN → 0`; the value truncates toward zero; a
+    negative `fromIndex` counts back from the end (`max(len + n, 0)`); a value
+    at or beyond `len` starts past the end (empty search). -/
+def Array.startIndexJS (len : Nat) (fromIndex : Float) : Nat :=
+  if fromIndex.isNaN then 0
+  else if fromIndex < 0.0 then
+    let mag := -fromIndex
+    if mag ≥ len.toFloat then 0 else len - mag.toUInt64.toNat
+  else
+    if fromIndex ≥ len.toFloat then len else fromIndex.toUInt64.toNat
+
+/-- `Array.prototype.indexOf(x, fromIndex)`: first index `≥ fromIndex` whose
+    element `=== x`, else `-1`, as a JS number (`Float`). Lean `Float` `BEq` is
+    IEEE (`NaN ≠ NaN`, `+0 = -0`), matching JS strict equality; `String` `BEq`
+    matches too. -/
+def Array.indexOfFromJS {α : Type} [BEq α] (xs : Array α) (x : α) (fromIndex : Float) : Float :=
+  let k := Array.startIndexJS xs.size fromIndex
+  match (xs.toList.drop k).findIdx? (· == x) with
+  | some i => (k + i).toFloat
   | none   => -1.0
 
-/-- `Array.prototype.includes` for numbers: SameValueZero, so `NaN` matches
-    `NaN` (unlike `indexOf`) and `+0`/`-0` match. -/
-def Array.includesFloat (xs : Array Float) (x : Float) : Bool :=
-  if x.isNaN then xs.any (·.isNaN) else xs.any (· == x)
+/-- `Array.prototype.indexOf(x)`: the single-argument form (search from 0). -/
+def Array.indexOfJS {α : Type} [BEq α] (xs : Array α) (x : α) : Float :=
+  Array.indexOfFromJS xs x 0.0
 
-/-- `Array.prototype.includes` for strings: structural equality (no NaN
-    subtlety). -/
+/-- `Array.prototype.includes(x, fromIndex)` for numbers: SameValueZero from
+    `fromIndex`, so `NaN` matches `NaN` (unlike `indexOf`) and `+0`/`-0`
+    match. -/
+def Array.includesFloatFrom (xs : Array Float) (x : Float) (fromIndex : Float) : Bool :=
+  let tail := xs.toList.drop (Array.startIndexJS xs.size fromIndex)
+  if x.isNaN then tail.any (·.isNaN) else tail.any (· == x)
+
+/-- `Array.prototype.includes(x)` for numbers: the single-argument form. -/
+def Array.includesFloat (xs : Array Float) (x : Float) : Bool :=
+  Array.includesFloatFrom xs x 0.0
+
+/-- `Array.prototype.includes(x, fromIndex)` for strings: structural equality
+    (no NaN subtlety), searching from `fromIndex`. -/
+def Array.includesStrFrom (xs : Array String) (x : String) (fromIndex : Float) : Bool :=
+  (xs.toList.drop (Array.startIndexJS xs.size fromIndex)).any (· == x)
+
+/-- `Array.prototype.includes(x)` for strings: the single-argument form. -/
 def Array.includesStr (xs : Array String) (x : String) : Bool :=
-  xs.any (· == x)
+  Array.includesStrFrom xs x 0.0
 
 /-- Emitted counterpart of JS `console.log(x)`. Prints `x` using
     `JSShow.jsShow` so the Lean path's stdout matches the VM's without any
