@@ -22,6 +22,29 @@ inductive TSInterfaceMember where
   | method (name : String) (params : List TSParamType) (returnType : TSType) (optional : Bool)
   deriving Inhabited
 
+/-- One named-import / named-export binding: `imported as local`.
+    For `import { a } …` both fields are `"a"`; for `import { a as b } …`
+    `imported = "a"`, `local = "b"`. -/
+structure ModuleSpecifier where
+  imported : String
+  localName : String
+  deriving Repr, Inhabited
+
+/-- Which ESM import form was written. Only `.named` is in-subset (v1);
+    the others are parsed so the subset checker can reject them precisely. -/
+inductive ImportForm where
+  | named           -- import { a, b as c } from '…'
+  | defaultImport   -- import D from '…'
+  | namespaceImport -- import * as ns from '…'
+  | sideEffect      -- import '…'
+  deriving Repr, Inhabited, BEq
+
+/-- Which ESM export form was written. `.inline` and `.named` are in-subset (v1). -/
+inductive ExportForm where
+  | defaultExport   -- export default …
+  | reexport        -- export { … } from '…'  /  export * from '…'
+  deriving Repr, Inhabited, BEq
+
 /-- TS-augmented statement: either a plain JS statement or a TS-specific one -/
 inductive TSStatement where
   | js (s : Statement)
@@ -42,10 +65,18 @@ inductive TSStatement where
   | enumDecl (base : NodeBase) (name : String)
       (members : List TSEnumMember) (isConst : Bool)
   | declareStmt (base : NodeBase) (inner : TSStatement)
-  /-- ES module import declaration: `import { Foo, Bar } from './geom';`
-      `source` is the raw module specifier string (e.g. `"./geom"`).
-      `specifiers` holds the local names (empty for side-effect imports). -/
-  | importDecl (base : NodeBase) (source : String) (specifiers : List String)
+  /-- ES module import. `source` is the raw specifier (e.g. `"./geom"`).
+      `specs` are the named bindings (empty for side-effect / namespace).
+      `form` records the written form; `typeOnly` is `import type { … }`. -/
+  | importDecl (base : NodeBase) (source : String)
+      (specs : List ModuleSpecifier) (form : ImportForm) (typeOnly : Bool)
+  /-- Inline export on a declaration: `export function f …`, `export const …`,
+      `export type …`, `export interface …`. Wraps the inner declaration. -/
+  | exportDecl (base : NodeBase) (inner : TSStatement)
+  /-- Trailing named export: `export { f, g as h };`. -/
+  | exportNamedDecl (base : NodeBase) (specs : List ModuleSpecifier)
+  /-- An unsupported export form, parsed only so the subset checker can reject it. -/
+  | exportUnsupported (base : NodeBase) (form : ExportForm)
 
 instance : Inhabited TSStatement := ⟨.js (.emptyStmt {})⟩
 

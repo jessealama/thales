@@ -948,7 +948,10 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
   | .typeAliasDecl b _ _ ty => checkType b.loc ty
   | .enumDecl _ _ _ _ => #[]
   | .declareStmt _ inner => checkTSStmt aliasEnv topRecvEnv inner
-  | .importDecl _ _ _ => #[]
+  | .importDecl _ _ _ _ _ => #[]
+  | .exportDecl _ inner => checkTSStmt aliasEnv topRecvEnv inner
+  | .exportNamedDecl _ _ => #[]
+  | .exportUnsupported _ _ => #[]
 
 /-- Check a TS-level statement for switch lowerability and exhaustiveness
     (TH0041/TH0040). Requires a SwitchEnv with type alias and binding

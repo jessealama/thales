@@ -1626,7 +1626,7 @@ private def pathToLeanModule (path : String) : String :=
 /-- Translate relative TS imports into Lean module names; bare specifiers are skipped. -/
 private def collectImports (body : List TSStatement) : List String :=
   body.filterMap fun
-    | .importDecl _ source _ =>
+    | .importDecl _ source _ _ _ =>
         if source.startsWith "./" || source.startsWith "../" then
           let m := pathToLeanModule source
           if m.isEmpty then none else some m

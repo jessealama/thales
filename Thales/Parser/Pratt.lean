@@ -3427,39 +3427,56 @@ partial def parseTSEnumDecl (p : ParserState) (isConst : Bool) :
 private def skipSemicolon (p : ParserState) : ParseResult ParserState :=
   if p.check .semicolon then p.advance else return p
 
-/-- Parse an ES module import declaration. Handles all four forms:
-      import { A, B } from 'specifier';
-      import DefaultName from 'specifier';
-      import * as NS from 'specifier';
-      import 'specifier';   (side-effect)
-    Returns `.importDecl source specifiers`. -/
+/-- Advance until a semicolon or EOF, consuming the semicolon if present. -/
+private partial def skipToSemicolonOrEnd (p : ParserState) : ParseResult ParserState := do
+  let mut ps := p
+  while !ps.check .semicolon && !ps.atEnd do
+    ps ← ps.advance
+  if ps.check .semicolon then ps ← ps.advance
+  return ps
+
+/-- Parse an ES module import declaration. Handles all four forms, recording the
+    written form and per-specifier aliases:
+      import { a, b as c } from 'specifier';   (named)
+      import DefaultName from 'specifier';      (default)
+      import * as NS from 'specifier';          (namespace)
+      import 'specifier';                       (side-effect)
+    `import type { … }` sets `typeOnly`. -/
 partial def parseTSImportDecl (p : ParserState) : ParseResult (ParserState × TSStatement) := do
+  let startPos := p.current.pos
   -- Current token is the identifier "import"; advance past it.
-  let p1 ← p.advance
+  let p0 ← p.advance
+  -- Detect `import type { … }`. `type` lexes as the `.type` keyword; treat it as
+  -- type-only. (`import type from '…'` — `type` as a default binding — is out of
+  -- subset and not distinguished here.)
+  let typeOnly := p0.current.kind == .type
+  let p1 ← if typeOnly then p0.advance else pure p0
+  let base := makeBase startPos startPos
   -- Determine which form we have by looking at the next token.
   match p1.current.kind with
   -- Side-effect import: import 'specifier';
   | .string source =>
     let p2 ← p1.advance
     let p3 ← skipSemicolon p2
-    return (p3, .importDecl {} source [])
-  -- Named import: import { A, B } from 'specifier';
+    return (p3, .importDecl base source [] .sideEffect false)
+  -- Named import: import { a, b as c } from 'specifier';
   | .lbrace =>
     let mut ps := p1
     ps ← ps.advance  -- skip '{'
-    let mut names : List String := []
+    let mut specs : List ModuleSpecifier := []
     -- Parse comma-separated list of specifiers until '}'
     while !ps.check .rbrace && !ps.atEnd do
       match ps.current.kind with
       | .identifier n =>
-        names := names ++ [n]
         ps ← ps.advance
-        -- Skip optional 'as' alias: identifier as localName
+        let mut localName := n
+        -- Optional 'as' alias: imported as localName
         if ps.check .as_ then
           ps ← ps.advance  -- skip 'as'
           match ps.current.kind with
-          | .identifier _ => ps ← ps.advance  -- skip alias (local name not needed for emit)
+          | .identifier a => localName := a; ps ← ps.advance
           | _ => pure ()
+        specs := specs ++ [{ imported := n, localName := localName }]
         if ps.check .comma then ps ← ps.advance
       | _ => ps ← ps.advance  -- skip unexpected tokens
     ps ← ps.expect .rbrace "Expected '}' in import specifiers"
@@ -3471,7 +3488,7 @@ partial def parseTSImportDecl (p : ParserState) : ParseResult (ParserState × TS
       | .string source =>
         ps ← ps.advance
         ps ← skipSemicolon ps
-        return (ps, .importDecl {} source names)
+        return (ps, .importDecl base source specs .named typeOnly)
       | _ => throw "Expected string literal after 'from' in import"
     | _ => throw "Expected 'from' after import specifiers"
   -- Namespace import: import * as NS from 'specifier';
@@ -3492,7 +3509,8 @@ partial def parseTSImportDecl (p : ParserState) : ParseResult (ParserState × TS
         | .string source =>
           ps ← ps.advance
           ps ← skipSemicolon ps
-          return (ps, .importDecl {} source [nsName])
+          return (ps, .importDecl base source
+            [{ imported := nsName, localName := nsName }] .namespaceImport typeOnly)
         | _ => throw "Expected string literal after 'from' in namespace import"
       | _ => throw "Expected 'from' after 'import * as NS'"
     | _ => throw "Expected 'as' after '*' in import"
@@ -3507,13 +3525,65 @@ partial def parseTSImportDecl (p : ParserState) : ParseResult (ParserState × TS
       | .string source =>
         ps ← ps.advance
         ps ← skipSemicolon ps
-        return (ps, .importDecl {} source [defName])
+        return (ps, .importDecl base source
+          [{ imported := defName, localName := defName }] .defaultImport typeOnly)
       | _ => throw "Expected string literal after 'from' in default import"
     | _ => throw "Expected 'from' after default import name"
   | _ =>
     -- Unknown form: skip to semicolon / end
     let p2 ← skipSemicolon p1
-    return (p2, .importDecl {} "" [])
+    return (p2, .importDecl base "" [] .sideEffect false)
+
+mutual
+
+/-- Parse an ES module export declaration:
+      export function f … / export const … / export type … / export interface …  (inline)
+      export { a, b as c };                                                       (named)
+      export default … / export … from '…' / export *                            (unsupported → routed for rejection)
+-/
+partial def parseTSExportDecl (p : ParserState) : ParseResult (ParserState × TSStatement) := do
+  let startPos := p.current.pos
+  let p1 ← p.advance  -- skip 'export'
+  let base := makeBase startPos startPos
+  match p1.current.kind with
+  | .«default» =>            -- export default …  (consume to end of statement)
+    let p2 ← skipToSemicolonOrEnd p1
+    return (p2, .exportUnsupported base .defaultExport)
+  | .star =>                 -- export * …  (re-export)
+    let p2 ← skipToSemicolonOrEnd p1
+    return (p2, .exportUnsupported base .reexport)
+  | .lbrace =>
+    -- export { a, b as c };  OR  export { a } from '…';  (the latter is a re-export)
+    let mut ps := p1
+    ps ← ps.advance  -- skip '{'
+    let mut specs : List ModuleSpecifier := []
+    while !ps.check .rbrace && !ps.atEnd do
+      match ps.current.kind with
+      | .identifier n =>
+        ps ← ps.advance
+        let mut exportedName := n
+        if ps.check .as_ then
+          ps ← ps.advance
+          match ps.current.kind with
+          | .identifier a => exportedName := a; ps ← ps.advance
+          | _ => pure ()
+        -- For `export { local as exported }`, `imported` holds the local name,
+        -- `localName` holds the exported (public) name.
+        specs := specs ++ [{ imported := n, localName := exportedName }]
+        if ps.check .comma then ps ← ps.advance
+      | _ => ps ← ps.advance
+    ps ← ps.expect .rbrace "Expected '}' in export specifiers"
+    match ps.current.kind with
+    | .identifier "from" =>          -- re-export: export { … } from '…'
+      let ps2 ← skipToSemicolonOrEnd ps
+      return (ps2, .exportUnsupported base .reexport)
+    | _ =>
+      let ps2 ← skipSemicolon ps
+      return (ps2, .exportNamedDecl base specs)
+  | _ =>
+    -- Inline export on a declaration: parse the inner statement and wrap it.
+    let (p2, inner) ← parseTSStatement p1
+    return (p2, .exportDecl base inner)
 
 /-- Parse a single TS statement -/
 partial def parseTSStatement (p : ParserState) : ParseResult (ParserState × TSStatement) := do
@@ -3542,7 +3612,9 @@ partial def parseTSStatement (p : ParserState) : ParseResult (ParserState × TSS
     let (p2, inner) ← parseTSStatement p1
     return (p2, .declareStmt {} inner)
   | .identifier n =>
-    if n == "import" then
+    if n == "export" then
+      parseTSExportDecl p
+    else if n == "import" then
       parseTSImportDecl p
     -- `abstract class Foo ...` — skip the `abstract` modifier and parse the class
     else if n == "abstract" then
@@ -3563,6 +3635,8 @@ partial def parseTSStatement (p : ParserState) : ParseResult (ParserState × TSS
   | _ =>
     let (p1, stmt) ← parseStatement p
     return (p1, .js stmt)
+
+end
 
 /-- Parse a TS program (list of TS statements) -/
 partial def parseTSProgram (p : ParserState) : ParseResult (ParserState × TSProgram) := do
