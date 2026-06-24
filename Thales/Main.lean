@@ -1,6 +1,7 @@
 import Thales.Parser.Native
 import Thales.TypeCheck.Check
 import Thales.TypeCheck.TSAST
+import Thales.TypeCheck.ModuleExports
 import Thales.TypeCheck.Diagnostic
 import Thales.Emit.SubsetCheck
 import Thales.Emit.DirectiveApply
@@ -69,6 +70,40 @@ private def dirnameOf (path : String) : String :=
   let parts := path.splitOn "/"
   let dirParts := parts.dropLast
   if dirParts.isEmpty then "." else String.intercalate "/" dirParts
+
+/-- Resolve a relative module specifier against the importing file's directory.
+    Returns the sibling `.ts` path, or `none` for bare/non-relative specifiers
+    (e.g. `@thales/prelude`, handled inside the checker). v1 fixtures use
+    same-directory `./x` specifiers. -/
+private def resolveSiblingPath (importerFile : String) (spec : String) : Option String :=
+  if spec.startsWith "./" then
+    some (dirnameOf importerFile ++ "/" ++ spec.drop 2 ++ ".ts")
+  else if spec.startsWith "../" then
+    some (dirnameOf importerFile ++ "/" ++ spec ++ ".ts")  -- literal join; v1 fixtures are same-dir
+  else none
+
+/-- Seed a type context with one imported module's exported surface: bind the
+    explicitly-imported value names under their local alias, and merge ALL of the
+    module's exported types so imported signatures that reference them resolve. -/
+private def addExportsToCtx (ctx : TypeContext) (imp : List ModuleSpecifier)
+    (exp : ModuleExports) : TypeContext := Id.run do
+  let mut c := ctx
+  -- bind explicitly-imported value names under their local alias
+  for sp in imp do
+    match exp.values.find? (·.1 == sp.imported) with
+    | some (_, ty) => c := { c with bindings := c.bindings.insert sp.localName ty }
+    | none => pure ()   -- not exported: TS2305 handled in Phase 5
+  -- merge ALL exported types so imported signatures referencing them resolve
+  for (n, idef) in exp.interfaces do c := { c with interfaces := c.interfaces.insert n idef }
+  for (n, adef) in exp.aliases do c := { c with typeAliases := c.typeAliases.insert n adef }
+  -- also bind imported type names (interface/alias) under their alias when imported
+  for sp in imp do
+    match exp.interfaces.find? (·.1 == sp.imported) with
+    | some (_, idef) => c := { c with interfaces := c.interfaces.insert sp.localName idef }
+    | none => match exp.aliases.find? (·.1 == sp.imported) with
+      | some (_, adef) => c := { c with typeAliases := c.typeAliases.insert sp.localName adef }
+      | none => pure ()
+  return c
 
 /-- Collect names and locations of `@total`-annotated functions from a program body. -/
 private def totalFuncEntries (prog : TSProgram)
@@ -178,7 +213,22 @@ def main (args : List String) : IO UInt32 := do
       IO.eprintln s!"Parse error: {e}"
       return 1
     | .ok tsProg =>
-      let tsDiags := typeCheck tsProg
+      -- Resolve relative sibling imports: harvest each imported module's
+      -- exported signatures and seed an augmented type context. (TS2305/TS2307
+      -- and cycle detection land in Phase 5.)
+      let mut ctx := builtinContext
+      for stmt in tsProg.body do
+        match stmt with
+        | .importDecl _ source specs .named _ =>
+          match resolveSiblingPath filename source with
+          | none => pure ()
+          | some sibPath =>
+            if (← System.FilePath.pathExists sibPath) then
+              match (← Thales.Parser.parseTSFileNative sibPath) with
+              | .error _ => pure ()
+              | .ok sibProg => ctx := addExportsToCtx ctx specs (collectModuleExports sibProg)
+        | _ => pure ()
+      let tsDiags := typeCheck tsProg ctx
       let propDiags := throwsAnnotationCheck tsProg
       let throwsListDiags := throwsTypeListCheck tsProg
       let totalDiags := totalAnnotationCheck tsProg

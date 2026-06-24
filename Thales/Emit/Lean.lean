@@ -1633,6 +1633,20 @@ private def collectImports (body : List TSStatement) : List String :=
         else none
     | _ => none
 
+/-- Produce a selective `open` clause per relative named import, so imported
+    names are usable unqualified. v1 (no aliasing) opens the names verbatim:
+    `import { inc } from './a'` → `A (inc)`, rendered by `renderModule` as
+    `open A (inc)`. Import aliasing (`renaming`) is added in a later phase. -/
+private def collectOpens (body : List TSStatement) : List String :=
+  body.filterMap fun
+    | .importDecl _ source specs .named _ =>
+        if (source.startsWith "./" || source.startsWith "../") && !specs.isEmpty then
+          let m := pathToLeanModule source
+          if m.isEmpty then none
+          else some s!"{m} ({String.intercalate " " (specs.map (·.imported))})"
+        else none
+    | _ => none
+
 /-- Build a map from function name → throws list from annotated function declarations. -/
 private def buildFuncThrowsEnv (body : List TSStatement) : Std.HashMap String (List String) :=
   body.foldl (fun env ts =>
@@ -1695,6 +1709,23 @@ private def resolveAliases (body : List TSStatement) : Std.HashMap String TSType
         env.insert name resolved
     | _ => env) {}
 
+/-- The declared name of a top-level statement, for export/privacy bookkeeping. -/
+private def declName : TSStatement → Option String
+  | .annotatedFuncDecl _ n .. => some n
+  | .annotatedVarDecl _ _ n .. => some n
+  | .interfaceDecl _ n .. => some n
+  | .typeAliasDecl _ n .. => some n
+  | .enumDecl _ n .. => some n
+  | _ => none
+
+/-- The name an emitted decl binds, for privacy marking (`eval_`/`instance_` bind none). -/
+private def ldeclName : LDecl → Option String
+  | .def_ n .. => some n
+  | .struct n .. => some n
+  | .inductive_ n .. => some n
+  | .abbrev_ n .. => some n
+  | _ => none
+
 /-- Walk the program and produce a Lean module string. -/
 def emit (prog : TSProgram) (moduleName : String) : String :=
   let resolvedAliases := resolveAliases prog.body
@@ -1734,7 +1765,22 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
   -- can be seeded distinctly per item (two top-level `if`s would otherwise
   -- both start at `h0` and collide). `16` leaves generous headroom for the
   -- number of `dite` binders any single top-level statement could introduce.
-  let decls : List LDecl := prog.body.zipIdx.flatMap fun (ts, idx) =>
+  -- Names that are publicly exported (inline `export <decl>` or trailing
+  -- `export { … }`). When a module has any exports, every other top-level decl
+  -- is emitted `private` so it cannot leak into an importer via `import A`.
+  let exportedNames : List String := prog.body.foldl (fun acc s => match s with
+    | .exportDecl _ inner => acc ++ (declName inner).toList
+    | .exportNamedDecl _ specs => acc ++ specs.map (·.imported)
+    | _ => acc) []
+  let hasExports : Bool := prog.body.any fun s => match s with
+    | .exportDecl _ _ | .exportNamedDecl _ _ => true
+    | _ => false
+  -- Unwrap `export <decl>` to its inner declaration so the existing arms emit it
+  -- unchanged; `exportNamedDecl`/`exportUnsupported` carry no decl (catch-all).
+  let bodyForEmit : List TSStatement := prog.body.map fun s => match s with
+    | .exportDecl _ inner => inner
+    | other => other
+  let decls : List LDecl := bodyForEmit.zipIdx.flatMap fun (ts, idx) =>
     match ts with
     | .typeAliasDecl _ name tps ty =>
         let bodyTy := resolvedAliases.getD name ty
@@ -1891,12 +1937,19 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
         let ifEnv : EmitEnv := { topEnv with diteBinderCounter := idx * 16 }
         [.eval_ (emitIfIO ifEnv cond thn elsOpt [])]
     | _ => []
+  -- Mark non-exported named decls `private` (only in modules that export).
+  let decls : List LDecl :=
+    if hasExports then
+      decls.map fun d => match ldeclName d with
+        | some n => if exportedNames.contains n then d else .private_ d
+        | none => d
+    else decls
   let body : LDecl :=
     if moduleName.isEmpty then .namespace_ "Input" decls
     else .namespace_ moduleName decls
   renderModule {
     imports := "Thales.TS.Runtime" :: tsImports
-    opens := ["Thales.TS"]
+    opens := "Thales.TS" :: collectOpens prog.body
     decls := [body]
   }
 
