@@ -1633,19 +1633,31 @@ private def collectImports (body : List TSStatement) : List String :=
         else none
     | _ => none
 
-/-- Produce a selective `open` clause per relative named import, so imported
-    names are usable unqualified. v1 (no aliasing) opens the names verbatim:
-    `import { inc } from './a'` → `A (inc)`, rendered by `renderModule` as
-    `open A (inc)`. Import aliasing (`renaming`) is added in a later phase. -/
+/-- Produce selective `open` clauses per relative named import, so imported
+    names are usable unqualified. Specifiers split by whether they alias:
+    `import { inc, makeFoo as build } from './a'` →
+    `A (inc)` and `A renaming makeFoo → build`, rendered as two `open` lines.
+    A single combined `open` cannot mix plain and renaming, so they stay separate. -/
 private def collectOpens (body : List TSStatement) : List String :=
-  body.filterMap fun
+  body.flatMap fun
     | .importDecl _ source specs .named _ =>
         if (source.startsWith "./" || source.startsWith "../") && !specs.isEmpty then
           let m := pathToLeanModule source
-          if m.isEmpty then none
-          else some s!"{m} ({String.intercalate " " (specs.map (·.imported))})"
-        else none
-    | _ => none
+          if m.isEmpty then []
+          else
+            let plain := specs.filter fun sp => sp.imported == sp.localName
+            let renamed := specs.filter fun sp => sp.imported != sp.localName
+            let plainOpen : List String :=
+              if plain.isEmpty then []
+              else [s!"{m} ({String.intercalate " " (plain.map (·.imported))})"]
+            let renameOpen : List String :=
+              if renamed.isEmpty then []
+              else
+                let pairs := renamed.map fun sp => s!"{sp.imported} → {sp.localName}"
+                [s!"{m} renaming {String.intercalate ", " pairs}"]
+            plainOpen ++ renameOpen
+        else []
+    | _ => []
 
 /-- Build a map from function name → throws list from annotated function declarations. -/
 private def buildFuncThrowsEnv (body : List TSStatement) : Std.HashMap String (List String) :=
@@ -1768,9 +1780,12 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
   -- Names that are publicly exported (inline `export <decl>` or trailing
   -- `export { … }`). When a module has any exports, every other top-level decl
   -- is emitted `private` so it cannot leak into an importer via `import A`.
+  -- For trailing `export { local as public }`, the PUBLIC name (`localName`) is
+  -- the export; the local decl (`imported`) stays private and gets a public
+  -- alias `def public := local` (below). For `export { g }` the two coincide.
   let exportedNames : List String := prog.body.foldl (fun acc s => match s with
     | .exportDecl _ inner => acc ++ (declName inner).toList
-    | .exportNamedDecl _ specs => acc ++ specs.map (·.imported)
+    | .exportNamedDecl _ specs => acc ++ specs.map (·.localName)
     | _ => acc) []
   let hasExports : Bool := prog.body.any fun s => match s with
     | .exportDecl _ _ | .exportNamedDecl _ _ => true
@@ -1937,6 +1952,17 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
         let ifEnv : EmitEnv := { topEnv with diteBinderCounter := idx * 16 }
         [.eval_ (emitIfIO ifEnv cond thn elsOpt [])]
     | _ => []
+  -- For each trailing `export { local as public }` (local ≠ public), emit a
+  -- public alias `def public := local`, appended after the originals so the
+  -- referenced local decl is already in scope.
+  let exportAliasDecls : List LDecl := prog.body.flatMap fun s => match s with
+    | .exportNamedDecl _ specs =>
+        specs.filterMap fun sp =>
+          if sp.imported != sp.localName then
+            some (.def_ sp.localName [] [] .inferred (.var sp.imported))
+          else none
+    | _ => []
+  let decls : List LDecl := decls ++ exportAliasDecls
   -- Mark non-exported named decls `private` (only in modules that export).
   let decls : List LDecl :=
     if hasExports then
