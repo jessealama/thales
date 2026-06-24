@@ -3435,6 +3435,32 @@ private partial def skipToSemicolonOrEnd (p : ParserState) : ParseResult ParserS
   if ps.check .semicolon then ps ← ps.advance
   return ps
 
+/-- Parse a brace-enclosed specifier list `{ a, b as c }`, starting at the `{`,
+    and consuming the closing `}`. Each entry becomes `⟨imported, local⟩` where
+    `local` is the `as` alias when present and the bare name otherwise. Shared by
+    named imports and trailing named exports — for `export { local as public }`
+    the same shape carries `imported = local`, `localName = public`. `what` names
+    the construct for the closing-brace error. -/
+private partial def parseBraceSpecifierList (p : ParserState) (what : String) :
+    ParseResult (ParserState × List ModuleSpecifier) := do
+  let mut ps ← p.advance  -- skip '{'
+  let mut specs : List ModuleSpecifier := []
+  while !ps.check .rbrace && !ps.atEnd do
+    match ps.current.kind with
+    | .identifier n =>
+      ps ← ps.advance
+      let mut localName := n
+      if ps.check .as_ then
+        ps ← ps.advance  -- skip 'as'
+        match ps.current.kind with
+        | .identifier a => localName := a; ps ← ps.advance
+        | _ => pure ()
+      specs := specs ++ [{ imported := n, localName := localName }]
+      if ps.check .comma then ps ← ps.advance
+    | _ => ps ← ps.advance  -- skip unexpected tokens
+  ps ← ps.expect .rbrace s!"Expected '}}' in {what}"
+  return (ps, specs)
+
 /-- Parse an ES module import declaration. Handles all four forms, recording the
     written form and per-specifier aliases:
       import { a, b as c } from 'specifier';   (named)
@@ -3461,25 +3487,8 @@ partial def parseTSImportDecl (p : ParserState) : ParseResult (ParserState × TS
     return (p3, .importDecl base source [] .sideEffect false)
   -- Named import: import { a, b as c } from 'specifier';
   | .lbrace =>
-    let mut ps := p1
-    ps ← ps.advance  -- skip '{'
-    let mut specs : List ModuleSpecifier := []
-    -- Parse comma-separated list of specifiers until '}'
-    while !ps.check .rbrace && !ps.atEnd do
-      match ps.current.kind with
-      | .identifier n =>
-        ps ← ps.advance
-        let mut localName := n
-        -- Optional 'as' alias: imported as localName
-        if ps.check .as_ then
-          ps ← ps.advance  -- skip 'as'
-          match ps.current.kind with
-          | .identifier a => localName := a; ps ← ps.advance
-          | _ => pure ()
-        specs := specs ++ [{ imported := n, localName := localName }]
-        if ps.check .comma then ps ← ps.advance
-      | _ => ps ← ps.advance  -- skip unexpected tokens
-    ps ← ps.expect .rbrace "Expected '}' in import specifiers"
+    let (p2, specs) ← parseBraceSpecifierList p1 "import specifiers"
+    let mut ps := p2
     -- Expect 'from'
     match ps.current.kind with
     | .identifier "from" =>
@@ -3558,25 +3567,7 @@ partial def parseTSExportDecl (p : ParserState) : ParseResult (ParserState × TS
     return (p2, .exportUnsupported base .reexport)
   | .lbrace =>
     -- export { a, b as c };  OR  export { a } from '…';  (the latter is a re-export)
-    let mut ps := p1
-    ps ← ps.advance  -- skip '{'
-    let mut specs : List ModuleSpecifier := []
-    while !ps.check .rbrace && !ps.atEnd do
-      match ps.current.kind with
-      | .identifier n =>
-        ps ← ps.advance
-        let mut exportedName := n
-        if ps.check .as_ then
-          ps ← ps.advance
-          match ps.current.kind with
-          | .identifier a => exportedName := a; ps ← ps.advance
-          | _ => pure ()
-        -- For `export { local as exported }`, `imported` holds the local name,
-        -- `localName` holds the exported (public) name.
-        specs := specs ++ [{ imported := n, localName := exportedName }]
-        if ps.check .comma then ps ← ps.advance
-      | _ => ps ← ps.advance
-    ps ← ps.expect .rbrace "Expected '}' in export specifiers"
+    let (ps, specs) ← parseBraceSpecifierList p1 "export specifiers"
     match ps.current.kind with
     | .identifier "from" =>          -- re-export: export { … } from '…'
       let ps2 ← skipToSemicolonOrEnd ps

@@ -22,9 +22,9 @@ inductive TSInterfaceMember where
   | method (name : String) (params : List TSParamType) (returnType : TSType) (optional : Bool)
   deriving Inhabited
 
-/-- One named-import / named-export binding: `imported as local`.
+/-- One named-import / named-export binding: `imported as localName`.
     For `import { a } …` both fields are `"a"`; for `import { a as b } …`
-    `imported = "a"`, `local = "b"`. -/
+    `imported = "a"`, `localName = "b"`. -/
 structure ModuleSpecifier where
   imported : String
   localName : String
@@ -39,7 +39,10 @@ inductive ImportForm where
   | sideEffect      -- import '…'
   deriving Repr, Inhabited, BEq
 
-/-- Which ESM export form was written. `.inline` and `.named` are in-subset (v1). -/
+/-- Which unsupported ESM export form was written, carried by `exportUnsupported`
+    so the subset checker can reject it precisely (TH0089). The in-subset forms —
+    inline `export <decl>` and trailing `export { … }` — are their own
+    `TSStatement` constructors (`exportDecl`/`exportNamedDecl`), not listed here. -/
 inductive ExportForm where
   | defaultExport   -- export default …
   | reexport        -- export { … } from '…'  /  export * from '…'

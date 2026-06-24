@@ -45,10 +45,46 @@ private def merge (a b : ModuleExports) : ModuleExports :=
     aliases := a.aliases ++ b.aliases
     interfaces := a.interfaces ++ b.interfaces }
 
-/-- A local-name → public-name table for trailing `export { local as public }`.
-    `sp.imported` is the local declared name; `sp.localName` is the exported name. -/
-private def renameTable (specs : List ModuleSpecifier) : List (String × String) :=
-  specs.map fun sp => (sp.imported, sp.localName)
+namespace ModuleExports
+
+/-- Re-export the member named `localName` under `publicName`, searching values,
+    then interfaces, then aliases. Empty when `localName` isn't declared. -/
+def reexportAs (m : ModuleExports) (localName publicName : String) : ModuleExports :=
+  match m.values.find? (·.1 == localName) with
+  | some (_, ty) => { values := [(publicName, ty)] }
+  | none => match m.interfaces.find? (·.1 == localName) with
+    | some (_, idef) => { interfaces := [(publicName, idef)] }
+    | none => match m.aliases.find? (·.1 == localName) with
+      | some (_, adef) => { aliases := [(publicName, adef)] }
+      | none => {}
+
+/-- Is `name` part of this module's exported surface (value, interface, or alias)? -/
+def member? (m : ModuleExports) (name : String) : Bool :=
+  m.values.any (·.1 == name) || m.interfaces.any (·.1 == name) || m.aliases.any (·.1 == name)
+
+/-- Seed `ctx` with this module's exported surface for an importer: bind each
+    explicitly-imported value (and type) name under its local alias, and merge ALL
+    exported types so imported signatures that reference them resolve. Names not
+    exported are left unbound — the import site raises TS2305 for them. -/
+def seedContext (exp : ModuleExports) (ctx : TypeContext)
+    (imp : List ModuleSpecifier) : TypeContext := Id.run do
+  let mut c := ctx
+  -- merge ALL exported types so imported signatures referencing them resolve
+  for (n, idef) in exp.interfaces do c := { c with interfaces := c.interfaces.insert n idef }
+  for (n, adef) in exp.aliases do c := { c with typeAliases := c.typeAliases.insert n adef }
+  -- bind each imported name (value or type) under its local alias
+  for sp in imp do
+    match exp.values.find? (·.1 == sp.imported) with
+    | some (_, ty) => c := { c with bindings := c.bindings.insert sp.localName ty }
+    | none => pure ()
+    match exp.interfaces.find? (·.1 == sp.imported) with
+    | some (_, idef) => c := { c with interfaces := c.interfaces.insert sp.localName idef }
+    | none => match exp.aliases.find? (·.1 == sp.imported) with
+      | some (_, adef) => c := { c with typeAliases := c.typeAliases.insert sp.localName adef }
+      | none => pure ()
+  return c
+
+end ModuleExports
 
 /-- Collect the full exported surface of a parsed module. -/
 def collectModuleExports (prog : TSProgram) : ModuleExports := Id.run do
@@ -58,23 +94,15 @@ def collectModuleExports (prog : TSProgram) : ModuleExports := Id.run do
     match s with
     | .exportDecl _ inner => acc := merge acc (exportOne inner)
     | _ => pure ()
-  -- 2) trailing `export { … }` over already-declared top-level names
-  let renames := prog.body.foldl (fun r s => match s with
-    | .exportNamedDecl _ specs => r ++ renameTable specs
-    | _ => r) []
-  if renames.isEmpty then return acc
-  -- `declared` intentionally indexes ALL top-level decls so a trailing
+  -- 2) trailing `export { local as public }` over already-declared top-level
+  -- names. `declared` intentionally indexes ALL top-level decls so a trailing
   -- `export { g }` can find a `g` that was declared without inline `export`.
   let declared := prog.body.foldl (fun (m : ModuleExports) s => merge m (exportOne s)) {}
-  for (localName, publicName) in renames do
-    match declared.values.find? (·.1 == localName) with
-    | some (_, ty) => acc := merge acc { values := [(publicName, ty)] }
-    | none =>
-      match declared.interfaces.find? (·.1 == localName) with
-      | some (_, idef) => acc := merge acc { interfaces := [(publicName, idef)] }
-      | none => match declared.aliases.find? (·.1 == localName) with
-        | some (_, adef) => acc := merge acc { aliases := [(publicName, adef)] }
-        | none => pure ()
+  for s in prog.body do
+    match s with
+    | .exportNamedDecl _ specs =>
+      for sp in specs do acc := merge acc (declared.reexportAs sp.imported sp.localName)
+    | _ => pure ()
   return acc
 
 end Thales.TypeCheck
