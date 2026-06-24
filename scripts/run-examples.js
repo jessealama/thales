@@ -252,7 +252,7 @@ function runThcIgnoringDirectives(inputPath) {
  *                       |'tsc-unexpected'|'directive-check'|'directive-coverage',
  *     detail: string}
  */
-function evaluateCase(inputPath) {
+function evaluateCase(inputPath, opts = {}) {
   if (hasDirective(inputPath)) {
     // Subset-rejected example (with @thales-expect-error directives): tsc must
     // be clean, thales --no-emit must exit 0 silent (directives suppressed all
@@ -330,7 +330,7 @@ function evaluateCase(inputPath) {
   }
 
   const tsx = runTsx(inputPath);
-  const ours = runThcThenLean(inputPath);
+  const ours = runThcThenLean(inputPath, { dir: opts.dir });
 
   // Relaxed throw-iff equivalence for programs that use @thales/prelude.
   //
@@ -403,10 +403,23 @@ function collectCases(rootDir, mode) {
       if (!fs.existsSync(bucketDir)) continue;
       const files = fs.readdirSync(bucketDir).sort();
       for (const name of files) {
+        const full = path.join(bucketDir, name);
+        // A bucket subdirectory containing `entry.ts` is a multi-file case.
+        if (fs.statSync(full).isDirectory()) {
+          const entry = path.join(full, 'entry.ts');
+          if (!fs.existsSync(entry)) continue; // not a recognized fixture
+          cases.push({
+            label: `${bucket}/${name}`,
+            inputPath: entry,
+            dir: full,
+            multiFile: true,
+          });
+          continue;
+        }
         if (!name.endsWith('.ts')) continue;
         cases.push({
           label: `${bucket}/${name}`,
-          inputPath: path.join(bucketDir, name),
+          inputPath: full,
         });
       }
     }
@@ -417,10 +430,17 @@ function collectCases(rootDir, mode) {
       if (!fs.statSync(dir).isDirectory()) continue;
       const inputPath = path.join(dir, 'input.ts');
       if (!fs.existsSync(inputPath)) continue;
+      // A self-test fixture with sibling `.ts` files beyond `input.ts` is a
+      // multi-file case (entry = input.ts).
+      const siblingTs = fs
+        .readdirSync(dir)
+        .filter((f) => /\.[mc]?ts$/.test(f) && f !== 'input.ts');
+      const multiFile = siblingTs.length > 0;
       cases.push({
         label: name,
         inputPath,
         expectedPath: path.join(dir, 'expected-outcome.txt'),
+        ...(multiFile ? { dir, multiFile: true } : {}),
       });
     }
   }
@@ -439,7 +459,7 @@ function runCorpus(rootDir, opts = {}) {
     process.stdout.write(`${c.label}: `);
     let outcome;
     try {
-      outcome = evaluateCase(c.inputPath);
+      outcome = evaluateCase(c.inputPath, { dir: c.dir });
     } catch (e) {
       outcome = { kind: 'fail', label: 'crash', detail: e.stack || e.message };
     }

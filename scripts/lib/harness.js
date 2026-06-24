@@ -18,6 +18,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const repoRoot = path.resolve(__dirname, '..', '..');
 export const thalesBin = path.join(repoRoot, '.lake', 'build', 'bin', 'thales');
 
+// Lake's LEAN_PATH (toolchain + dependency lib dirs), resolved once. Multi-file
+// fixtures prepend the emit temp dir to this so a dependency's `import X`
+// resolves to the freshly-built `X.olean`.
+let _leanPath = null;
+export function leanEnvPath() {
+  if (_leanPath !== null) return _leanPath;
+  const r = spawnSync('lake', ['env', 'sh', '-c', 'echo $LEAN_PATH'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  _leanPath = (r.status === 0 ? (r.stdout || '').trim() : '') || '';
+  return _leanPath;
+}
+
 // ---- diagnostics ----
 
 /**
@@ -250,31 +264,54 @@ export function checkNoSorry(leanPath) {
   return null;
 }
 
+// `thales -o <dir> foo.ts` writes `<dir>/Foo.lean` — basename capitalized,
+// extension stripped, non-alphanumerics removed (matches inputToModuleName).
+function moduleNameOf(p) {
+  const base = path.basename(p).replace(/\.[mc]?ts$/, '');
+  return (
+    base.charAt(0).toUpperCase() + base.slice(1).replace(/[^A-Za-z0-9]/g, '')
+  );
+}
+
 /**
- * Emit inputPath with thales --overwrite into a fresh temp dir, then run the resulting
- * .lean via lake env lean. Always cleans up the temp dir on exit.
+ * Emit inputPath with thales --overwrite into a fresh temp dir, then run the
+ * resulting .lean via lake env lean. Always cleans up the temp dir on exit.
+ *
+ * Multi-file (directory) fixtures: when `opts.dir` is set, every `*.ts` in that
+ * directory is emitted, each non-entry module is compiled to a `.olean` (so the
+ * entry's `import X` resolves), and the entry runs with the temp dir prepended
+ * to LEAN_PATH. Dependency oleans are compiled in filename order, which suffices
+ * for the flat (entry → siblings) module graphs the corpus uses; a deeper graph
+ * would need topological ordering.
  */
 export function runThcThenLean(inputPath, opts = {}) {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'thales-emit-'));
   try {
-    const r1 = runCapture(thalesBin, ['--overwrite', '-o', outDir, inputPath], {
-      timeout: opts.timeout,
-    });
-    if (r1.code !== 0) {
-      return {
-        code: r1.code,
-        stdout: r1.stdout,
-        stderr: r1.stderr,
-        stage: 'emit',
-        timedOut: r1.timedOut,
-      };
+    const tsFiles = opts.dir
+      ? fs
+          .readdirSync(opts.dir)
+          .filter((f) => /\.[mc]?ts$/.test(f))
+          .sort()
+          .map((f) => path.join(opts.dir, f))
+      : [inputPath];
+
+    for (const f of tsFiles) {
+      const r = runCapture(thalesBin, ['--overwrite', '-o', outDir, f], {
+        timeout: opts.timeout,
+      });
+      if (r.code !== 0) {
+        return {
+          code: r.code,
+          stdout: r.stdout,
+          stderr: r.stderr,
+          stage: 'emit',
+          timedOut: r.timedOut,
+        };
+      }
     }
-    // `thales -o <dir> foo.ts` writes `<dir>/Foo.lean` — basename capitalized, extension stripped,
-    // non-alphanumerics removed (matches thales's inputToModuleName).
-    const base = path.basename(inputPath).replace(/\.[mc]?ts$/, '');
-    const moduleName =
-      base.charAt(0).toUpperCase() + base.slice(1).replace(/[^A-Za-z0-9]/g, '');
-    const leanPath = path.join(outDir, moduleName + '.lean');
+
+    const entryModule = moduleNameOf(inputPath);
+    const leanPath = path.join(outDir, entryModule + '.lean');
     // TH9004: post-emit noSorry check — applied only to files emitted by thales.
     const sorryFail = checkNoSorry(leanPath);
     if (sorryFail) {
@@ -286,6 +323,50 @@ export function runThcThenLean(inputPath, opts = {}) {
         timedOut: false,
       };
     }
+
+    if (opts.dir) {
+      const baseLeanPath = leanEnvPath();
+      const env = {
+        ...process.env,
+        LEAN_PATH: baseLeanPath ? `${outDir}:${baseLeanPath}` : outDir,
+      };
+      // Build dependency oleans so the entry's `import X` resolves. `lean --root
+      // <outDir>` names each module after its basename relative to outDir; a bare
+      // `lean -o` rejects an input file outside the repo root.
+      for (const f of tsFiles) {
+        const mod = moduleNameOf(f);
+        if (mod === entryModule) continue;
+        const dep = path.join(outDir, mod + '.lean');
+        if (!fs.existsSync(dep)) continue;
+        const c = runCapture(
+          'lean',
+          ['--root', outDir, '-o', path.join(outDir, mod + '.olean'), dep],
+          { cwd: repoRoot, env, timeout: opts.timeout },
+        );
+        if (c.code !== 0) {
+          return {
+            code: c.code,
+            stdout: c.stdout,
+            stderr: c.stderr,
+            stage: 'deps',
+            timedOut: c.timedOut,
+          };
+        }
+      }
+      const r2 = runCapture('lake', ['env', 'lean', leanPath], {
+        cwd: repoRoot,
+        env,
+        timeout: opts.timeout,
+      });
+      return {
+        code: r2.code,
+        stdout: r2.stdout,
+        stderr: r2.stderr,
+        stage: 'run',
+        timedOut: r2.timedOut,
+      };
+    }
+
     const r2 = runCapture('lake', ['env', 'lean', leanPath], {
       cwd: repoRoot,
       timeout: opts.timeout,
