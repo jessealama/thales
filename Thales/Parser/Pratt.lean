@@ -3546,9 +3546,13 @@ partial def parseTSExportDecl (p : ParserState) : ParseResult (ParserState × TS
   let p1 ← p.advance  -- skip 'export'
   let base := makeBase startPos startPos
   match p1.current.kind with
-  | .«default» =>            -- export default …  (consume to end of statement)
-    let p2 ← skipToSemicolonOrEnd p1
-    return (p2, .exportUnsupported base .defaultExport)
+  | .«default» =>            -- export default <decl-or-expr>
+    -- Parse the default-exported declaration/expression with the full parser so
+    -- a function/class body (with internal semicolons) is consumed correctly,
+    -- then discard it — the form is rejected wholesale (TH0089).
+    let p2 ← p1.advance      -- skip 'default'
+    let (p3, _) ← parseTSStatement p2
+    return (p3, .exportUnsupported base .defaultExport)
   | .star =>                 -- export * …  (re-export)
     let p2 ← skipToSemicolonOrEnd p1
     return (p2, .exportUnsupported base .reexport)

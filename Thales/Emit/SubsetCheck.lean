@@ -948,10 +948,18 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
   | .typeAliasDecl b _ _ ty => checkType b.loc ty
   | .enumDecl _ _ _ _ => #[]
   | .declareStmt _ inner => checkTSStmt aliasEnv topRecvEnv inner
-  | .importDecl _ _ _ _ _ => #[]
+  | .importDecl b _ _ form _ =>
+    match form with
+    | .named => #[]
+    | .defaultImport => #[mkThalesDiag (.unsupportedImportForm "default import") b.loc]
+    | .namespaceImport => #[mkThalesDiag (.unsupportedImportForm "import * as ns") b.loc]
+    | .sideEffect => #[mkThalesDiag (.unsupportedImportForm "side-effect import") b.loc]
   | .exportDecl _ inner => checkTSStmt aliasEnv topRecvEnv inner
   | .exportNamedDecl _ _ => #[]
-  | .exportUnsupported _ _ => #[]
+  | .exportUnsupported b form =>
+    match form with
+    | .defaultExport => #[mkThalesDiag (.unsupportedExportForm "export default") b.loc]
+    | .reexport => #[mkThalesDiag (.unsupportedExportForm "re-export") b.loc]
 
 /-- Check a TS-level statement for switch lowerability and exhaustiveness
     (TH0041/TH0040). Requires a SwitchEnv with type alias and binding
