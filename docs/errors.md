@@ -42,51 +42,54 @@ soundness check).
 
 ## Summary
 
-| Code   | Category     | Short Message                                          |
-| ------ | ------------ | ------------------------------------------------------ |
-| TH0001 | Mutation     | Cannot reassign variable                               |
-| TH0002 | Mutation     | Cannot assign to array element                         |
-| TH0003 | Mutation     | Cannot assign to object property                       |
-| TH0004 | Mutation     | Cannot call mutating method                            |
-| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope     |
-| TH0006 | Mutation     | Assignment only supported in statement position        |
-| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`        |
-| TH0010 | Control flow | Loop not supported                                     |
-| TH0012 | Control flow | async/await not supported                              |
-| TH0020 | Types        | `any` not permitted                                    |
-| TH0021 | Types        | `unknown` not permitted in user code                   |
-| TH0022 | Types        | Union must be discriminated                            |
-| TH0023 | Types        | Intersection types not supported                       |
-| TH0024 | Types        | keyof/conditional/mapped types not supported           |
-| TH0025 | Types        | null/undefined types not supported                     |
-| TH0026 | Types        | Condition must be boolean                              |
-| TH0030 | Declarations | `class` not supported                                  |
-| TH0031 | Declarations | Inheritance (`extends`) not supported                  |
-| TH0032 | Declarations | Shadowing declaration not supported                    |
-| TH0040 | Matching     | Non-exhaustive switch on discriminated union           |
-| TH0041 | Matching     | Switch shape not lowerable                             |
-| TH0050 | Recursion    | Cannot verify termination                              |
-| TH0066 | Totality     | `@total` and `@throws` declared together               |
-| TH0067 | Totality     | `@total` function has uncaught throw                   |
-| TH0068 | Totality     | `@total` function contains an unverifiable loop        |
-| TH0070 | Totality     | `@total` asserted but Lean rejects termination         |
-| TH0060 | Exceptions   | Unannotated `throw`                                    |
-| TH0061 | Exceptions   | Unused `@throws` annotation                            |
-| TH0063 | Exceptions   | Thrown value must be a record type                     |
-| TH0064 | Exceptions   | Undeclared propagation                                 |
-| TH0080 | Refinement   | Literal value out of range for refinement type         |
-| TH0081 | Refinement   | Value not assignable to refinement without evidence    |
-| TH0082 | Subset       | Possibly-undefined operand; narrow before use          |
-| TH0083 | Subset       | Computed index access only supported on arrays         |
-| TH0084 | Subset       | Definedness test on a binding of undeterminable type   |
-| TH0085 | Subset       | Array method on a receiver of unlowerable element type |
-| TH0086 | Subset       | Definedness test on a non-identifier subject           |
-| TH0087 | Subset       | Unsupported `String.prototype` method                  |
-| TH9000 | Directive    | Unused `@thales-expect-error` directive                |
-| TH9001 | Directive    | Directive code mismatch                                |
-| TH9002 | Directive    | Cannot emit: subset violations suppressed              |
-| TH9003 | Directive    | Malformed `@thales-expect-error` directive             |
-| TH9004 | Directive    | Emitted Lean code contains `sorry`                     |
+| Code   | Category     | Short Message                                             |
+| ------ | ------------ | --------------------------------------------------------- |
+| TH0001 | Mutation     | Cannot reassign variable                                  |
+| TH0002 | Mutation     | Cannot assign to array element                            |
+| TH0003 | Mutation     | Cannot assign to object property                          |
+| TH0004 | Mutation     | Cannot call mutating method                               |
+| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope        |
+| TH0006 | Mutation     | Assignment only supported in statement position           |
+| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`           |
+| TH0010 | Control flow | Loop not supported                                        |
+| TH0012 | Control flow | async/await not supported                                 |
+| TH0020 | Types        | `any` not permitted                                       |
+| TH0021 | Types        | `unknown` not permitted in user code                      |
+| TH0022 | Types        | Union must be discriminated                               |
+| TH0023 | Types        | Intersection types not supported                          |
+| TH0024 | Types        | keyof/conditional/mapped types not supported              |
+| TH0025 | Types        | null/undefined types not supported                        |
+| TH0026 | Types        | Condition must be boolean                                 |
+| TH0030 | Declarations | `class` not supported                                     |
+| TH0031 | Declarations | Inheritance (`extends`) not supported                     |
+| TH0032 | Declarations | Shadowing declaration not supported                       |
+| TH0040 | Matching     | Non-exhaustive switch on discriminated union              |
+| TH0041 | Matching     | Switch shape not lowerable                                |
+| TH0050 | Recursion    | Cannot verify termination                                 |
+| TH0066 | Totality     | `@total` and `@throws` declared together                  |
+| TH0067 | Totality     | `@total` function has uncaught throw                      |
+| TH0068 | Totality     | `@total` function contains an unverifiable loop           |
+| TH0070 | Totality     | `@total` asserted but Lean rejects termination            |
+| TH0060 | Exceptions   | Unannotated `throw`                                       |
+| TH0061 | Exceptions   | Unused `@throws` annotation                               |
+| TH0063 | Exceptions   | Thrown value must be a record type                        |
+| TH0064 | Exceptions   | Undeclared propagation                                    |
+| TH0080 | Refinement   | Literal value out of range for refinement type            |
+| TH0081 | Refinement   | Value not assignable to refinement without evidence       |
+| TH0082 | Subset       | Possibly-undefined operand; narrow before use             |
+| TH0083 | Subset       | Computed index access only supported on arrays            |
+| TH0084 | Subset       | Definedness test on a binding of undeterminable type      |
+| TH0085 | Subset       | Array method on a receiver of unlowerable element type    |
+| TH0086 | Subset       | Definedness test on a non-identifier subject              |
+| TH0087 | Subset       | Unsupported `String.prototype` method                     |
+| TH0088 | Subset       | Unsupported `import` form (default/namespace/side-effect) |
+| TH0089 | Subset       | Unsupported `export` form (default/re-export)             |
+| TH0090 | Subset       | Circular imports                                          |
+| TH9000 | Directive    | Unused `@thales-expect-error` directive                   |
+| TH9001 | Directive    | Directive code mismatch                                   |
+| TH9002 | Directive    | Cannot emit: subset violations suppressed                 |
+| TH9003 | Directive    | Malformed `@thales-expect-error` directive                |
+| TH9004 | Directive    | Emitted Lean code contains `sorry`                        |
 
 ## Future of this table
 
@@ -990,3 +993,75 @@ console.log(s.toUpperCase());
 Fix: restructure to avoid the method, or use one of the supported operations.
 Sound lowerings (UTF-16-faithful where it matters) are future stdlib work
 (issue #28).
+
+### TH0088 — Unsupported `import` form
+
+**Message:** `This import form (<form>) is not supported; use named imports like `import { a, b } from './m'``
+
+Only **named** imports — `import { a, b as c } from './m'` — are in the subset.
+Default imports (`import D from './m'`), namespace imports
+(`import * as ns from './m'`), and side-effect imports (`import './m'`) are
+rejected. The subset binds each imported name to a specific exported
+declaration, which the named form makes explicit; the other forms either bind a
+module's default/whole-namespace object (no Lean analogue in the selective-`open`
+lowering) or import purely for side effects (the subset has none at module
+scope). `import type { … }` is accepted. `tsc` accepts all of these forms.
+
+Example (rejected):
+
+```typescript
+// @thales-expect-error TH0088
+import * as ns from './a';
+export const v: bigint = 1n;
+```
+
+Fix: rewrite as a named import listing the specific bindings you use.
+
+### TH0089 — Unsupported `export` form
+
+**Message:** `This export form (<form>) is not supported; use inline `export`on a declaration or`export { a, b };``
+
+Only inline `export` on a declaration (`export function f …`, `export const …`,
+`export interface …`, `export type …`) and trailing named exports
+(`export { a, b as c };`) are in the subset. `export default …` and re-exports
+(`export { … } from './m'`, `export * from './m'`) are rejected: a default
+export has no named binding for the selective-`open` lowering, and re-exports
+would require threading another module's surface through this one. `tsc` accepts
+these forms.
+
+Example (rejected):
+
+```typescript
+// @thales-expect-error TH0089
+export default function f(): bigint {
+  return 1n;
+}
+```
+
+Fix: give the declaration a name and export it inline or via `export { … }`.
+
+### TH0090 — Circular imports
+
+**Message:** `Circular imports are not supported because the emitted Lean modules cannot form an import cycle (<path>)`
+
+Each TypeScript module lowers to one Lean module, and Lean's module import graph
+must be acyclic. When the resolver follows imports and re-enters a file already
+on the current import chain, it reports the cycle rather than emit Lean modules
+that cannot compile. `tsc` accepts circular imports (its module graph permits
+cycles), so this is a Thales-only restriction.
+
+Example (rejected): `a.ts` imports from `./entry` while `entry.ts` imports from
+`./a`.
+
+```typescript
+// entry.ts
+// @thales-expect-error TH0090
+import { a } from './a';
+export function b(): bigint {
+  return 1n;
+}
+console.log(a());
+```
+
+Fix: break the cycle by moving the shared declarations into a third module that
+both import, so the dependency graph is acyclic.

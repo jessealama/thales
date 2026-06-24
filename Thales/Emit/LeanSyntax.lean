@@ -173,6 +173,9 @@ inductive LDecl where
   | instance_ (classApp : LType)
               (fieldName : String)
               (body : LExpr)
+  -- `private <inner>` — restricts a module-level decl to its own file, so a
+  -- non-exported declaration does not leak into an importing module's scope.
+  | private_ (inner : LDecl)
   deriving Inhabited
 
 /-- A pretty-printed Lean module. -/
@@ -391,6 +394,8 @@ partial def renderDecl : LDecl → String
       s!"#eval {renderExpr expr}"
   | .instance_ classApp fieldName body =>
       s!"instance : {renderType classApp} where\n  {fieldName} := {renderExpr body}"
+  | .private_ inner =>
+      "private " ++ renderDecl inner
 
 /-- Render a complete Lean module to a source string. -/
 def renderModule (m : LModule) : String :=

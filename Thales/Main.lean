@@ -1,6 +1,7 @@
 import Thales.Parser.Native
 import Thales.TypeCheck.Check
 import Thales.TypeCheck.TSAST
+import Thales.TypeCheck.ModuleExports
 import Thales.TypeCheck.Diagnostic
 import Thales.Emit.SubsetCheck
 import Thales.Emit.DirectiveApply
@@ -69,6 +70,91 @@ private def dirnameOf (path : String) : String :=
   let parts := path.splitOn "/"
   let dirParts := parts.dropLast
   if dirParts.isEmpty then "." else String.intercalate "/" dirParts
+
+/-- Resolve a relative module specifier against the importing file's directory.
+    Returns the sibling `.ts` path, or `none` for bare/non-relative specifiers
+    (e.g. `@thales/prelude`, handled inside the checker). v1 fixtures use
+    same-directory `./x` specifiers. -/
+private def resolveSiblingPath (importerFile : String) (spec : String) : Option String :=
+  if spec.startsWith "./" then
+    some (dirnameOf importerFile ++ "/" ++ spec.drop 2 ++ ".ts")
+  else if spec.startsWith "../" then
+    some (dirnameOf importerFile ++ "/" ++ spec ++ ".ts")  -- literal join; v1 fixtures are same-dir
+  else none
+
+/-- Recursively load the sibling-import closure of `path`, collecting each
+    module's exported surface into `loaded`. `inProgress` is the chain of files
+    currently being resolved; re-entering one signals an import cycle (Lean's
+    module graph must be acyclic), returned as the offending `a → b → a` chain. -/
+private partial def loadModule (path : String) (inProgress : List String)
+    (loaded : Std.HashMap String ModuleExports) :
+    IO (Std.HashMap String ModuleExports × Option String) := do
+  if inProgress.contains path then
+    return (loaded, some (String.intercalate " → " (inProgress ++ [path])))
+  if loaded.contains path then
+    return (loaded, none)
+  match (← Thales.Parser.parseTSFileNative path) with
+  | .error _ => return (loaded, none)   -- parse/not-found surfaces at the import site
+  | .ok prog =>
+    let mut ld := loaded
+    let mut cyc : Option String := none
+    for stmt in prog.body do
+      match stmt with
+      | .importDecl _ source _ .named _ =>
+        match resolveSiblingPath path source with
+        | some sib =>
+          if (← System.FilePath.pathExists sib) then
+            let (ld', c) ← loadModule sib (inProgress ++ [path]) ld
+            ld := ld'
+            cyc := cyc <|> c
+        | none => pure ()
+      | _ => pure ()
+    return (ld.insert path (collectModuleExports prog), cyc)
+
+/-- Resolve the entry module's relative sibling imports: recursively harvest each
+    imported module's exported signatures (detecting cycles → TH0090), seed an
+    augmented `TypeContext` (from `builtinContext`) with the harvested exports, and
+    emit TS2305/TS2307 for missing members/modules. Returns the seeded context and
+    the resolver diagnostics; the entry's own type check runs against the former. -/
+private def resolveEntryImports (filename : String) (prog : TSProgram) :
+    IO (TypeContext × Array Diagnostic) := do
+  let mut ctx := builtinContext
+  let mut diags : Array Diagnostic := #[]
+  let mut loaded : Std.HashMap String ModuleExports := {}
+  for stmt in prog.body do
+    match stmt with
+    | .importDecl base source specs .named _ =>
+      match resolveSiblingPath filename source with
+      | none => pure ()
+      | some sibPath =>
+        if (← System.FilePath.pathExists sibPath) then
+          let (ld, cyc) ← loadModule sibPath [filename] loaded
+          loaded := ld
+          match cyc with
+          | some chain =>
+            diags := diags.push { kind := .thales (.importCycle chain), location := base.loc }
+          | none => pure ()
+          -- Seed even when a cycle was found: the sibling was still parsed,
+          -- so binding its exports avoids a spurious TS2304 for the import.
+          match ld[sibPath]? with
+          | some exp =>
+            -- TS2305: a named import of a member the module does not export.
+            for sp in specs do
+              unless exp.member? sp.imported do
+                diags := diags.push
+                  { kind := .noExportedMember source sp.imported, location := base.loc }
+                -- Error recovery: bind the missing name as `any` (as tsc does)
+                -- so its use sites don't cascade into a spurious TS2304.
+                ctx := { ctx with bindings := ctx.bindings.insert sp.localName .any }
+            ctx := exp.seedContext ctx specs
+          | none => pure ()
+        else
+          -- TS2307: a relative specifier that resolves to no sibling file.
+          diags := diags.push { kind := .moduleNotFound source, location := base.loc }
+          for sp in specs do
+            ctx := { ctx with bindings := ctx.bindings.insert sp.localName .any }
+    | _ => pure ()
+  return (ctx, diags)
 
 /-- Collect names and locations of `@total`-annotated functions from a program body. -/
 private def totalFuncEntries (prog : TSProgram)
@@ -178,7 +264,10 @@ def main (args : List String) : IO UInt32 := do
       IO.eprintln s!"Parse error: {e}"
       return 1
     | .ok tsProg =>
-      let tsDiags := typeCheck tsProg
+      -- Resolve relative sibling imports into an augmented type context (and
+      -- TS2305/TS2307/TH0090 diagnostics) for the entry's type check.
+      let (ctx, resolverDiags) ← resolveEntryImports filename tsProg
+      let tsDiags := resolverDiags ++ typeCheck tsProg ctx
       let propDiags := throwsAnnotationCheck tsProg
       let throwsListDiags := throwsTypeListCheck tsProg
       let totalDiags := totalAnnotationCheck tsProg

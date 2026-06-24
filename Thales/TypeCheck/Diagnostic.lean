@@ -115,6 +115,10 @@ inductive ThalesKind where
   | definednessTestNonIdentifierSubject
   -- Unsupported String.prototype method (TH0087)
   | stringMethodNotSupported (methodName : String)
+  -- Unsupported ESM import/export forms and import cycles (TH0088–TH0090)
+  | unsupportedImportForm (form : String)
+  | unsupportedExportForm (form : String)
+  | importCycle (cyclePath : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -163,6 +167,9 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .arrayMethodReceiverNotLowerable _ => 85
   | .definednessTestNonIdentifierSubject => 86
   | .stringMethodNotSupported _ => 87
+  | .unsupportedImportForm _ => 88
+  | .unsupportedExportForm _ => 89
+  | .importCycle _ => 90
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -244,6 +251,12 @@ def ThalesKind.message : ThalesKind → String
     "A definedness test against 'undefined'/'null' is only supported when its subject is a variable; bind this expression to a variable first"
   | .stringMethodNotSupported methodName =>
     s!"String method '{methodName}' is not supported; the available string operations are 'startsWith', 'endsWith', and 'split'"
+  | .unsupportedImportForm form =>
+    s!"This import form ({form}) is not supported; use named imports like " ++ "`import { a, b } from './m'`"
+  | .unsupportedExportForm form =>
+    s!"This export form ({form}) is not supported; use inline `export` on a declaration or " ++ "`export { a, b };`"
+  | .importCycle cyclePath =>
+    s!"Circular imports are not supported because the emitted Lean modules cannot form an import cycle ({cyclePath})"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
@@ -271,6 +284,9 @@ inductive DiagnosticKind where
   | cannotAssignToConstant (name : String)
   | cannotAssignToReadOnlyProperty (name : String)
   | invalidAssignmentTarget
+  -- Module resolution diagnostics mirroring tsc (ESM imports)
+  | moduleNotFound (spec : String)                 -- TS2307
+  | noExportedMember (modName : String) (name : String)  -- TS2305
   | thales (t : ThalesKind)
 
 /-- Map diagnostic kind to tsc error code -/
@@ -288,6 +304,8 @@ def DiagnosticKind.tscCode : DiagnosticKind → Nat
   | .cannotAssignToConstant _ => 2588
   | .cannotAssignToReadOnlyProperty _ => 2540
   | .invalidAssignmentTarget => 2364
+  | .moduleNotFound _ => 2307
+  | .noExportedMember .. => 2305
   | .thales _ => 0
 
 /-- Format a human-readable message for the diagnostic -/
@@ -318,6 +336,10 @@ def DiagnosticKind.message : DiagnosticKind → String
     s!"Cannot assign to '{name}' because it is a read-only property"
   | .invalidAssignmentTarget =>
     "The left-hand side of an assignment expression must be a variable or a property access"
+  | .moduleNotFound spec =>
+    s!"Cannot find module '{spec}' or its corresponding type declarations."
+  | .noExportedMember modName name =>
+    s!"Module '\"{modName}\"' has no exported member '{name}'."
   | .thales t => t.message
 
 /-- A diagnostic with source location -/

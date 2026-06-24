@@ -344,7 +344,7 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
       let ty := match typeAnn with | some ann => ann.type | none => .any
       withScope [(vname, ty)] (checkStatements rest)
     | _ => checkStatements rest
-  | .importDecl _ source _ =>
+  | .importDecl _ source _ _ _ =>
     -- Special-case @thales/prelude: inject the in-memory shim bindings.
     -- For all other imports, just continue (no filesystem resolution).
     if source == "@thales/prelude" then
@@ -374,6 +374,15 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
               (withScope preludeValues (checkStatements rest)))))
     else
       checkStatements rest
+  | .exportDecl _ inner =>
+    -- Type-check the inner declaration exactly as if it were unexported.
+    checkStatement inner rest
+  | .exportNamedDecl _ _ =>
+    -- Trailing `export { … }` only re-exports already-declared top-level names.
+    checkStatements rest
+  | .exportUnsupported _ _ =>
+    -- Unsupported export form; rejected by the subset checker (TH0089).
+    checkStatements rest
 
 /-- Check a JS statement without processing continuation -/
 partial def checkJSStatementRaw (stmt : Statement) : TypeCheckM Unit := do
