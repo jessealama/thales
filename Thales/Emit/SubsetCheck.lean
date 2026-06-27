@@ -6,6 +6,7 @@
 -/
 import Thales.TypeCheck.TSAST
 import Thales.TypeCheck.Diagnostic
+import Thales.TypeCheck.Narrowing
 import Thales.Emit.DirectiveApply
 import Thales.Emit.EscapeAnalysis
 import Thales.Emit.LoopShape
@@ -258,8 +259,14 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
           checkExpr ctx callee
       | _ => checkExpr ctx callee
     calleeDiags ++ (arguments.foldl (fun acc arg => acc ++ checkExpr ctx arg) #[])
-  | .unaryExpr _ _ _ argument =>
-    checkExpr ctx argument
+  | .unaryExpr base op _ argument =>
+    let opDiag : Array Diagnostic :=
+      match op with
+      | .typeof => #[mkThalesDiag (.unsupportedUnaryOperator "typeof") base.loc]
+      | .void   => #[mkThalesDiag (.unsupportedUnaryOperator "void") base.loc]
+      | .delete => #[mkThalesDiag (.unsupportedUnaryOperator "delete") base.loc]
+      | _       => #[]
+    opDiag ++ checkExpr ctx argument
   | .binaryExpr b _ left right =>
     -- TH0084: a definedness test on a body-local whose type the emitter
     -- cannot record (not a param, not in `typedDecls`) can be neither
@@ -286,7 +293,22 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
       if EscapeAnalysis.definednessTestHasNonIdentifierSubject expr then
         #[mkThalesDiag .definednessTestNonIdentifierSubject b.loc]
       else #[]
-    th84 ++ th86 ++ checkExpr ctx left ++ checkExpr ctx right
+    -- TH0092 carve-out: in a recognized `typeof` guard the `typeof` operand is
+    -- consumed by narrowing (Narrowing.extractGuard), not value-position, so do
+    -- not let it collect a spurious TH0092. Delegating to extractGuard keeps the
+    -- accepted set definitionally equal to what narrowing consumes (incl. the
+    -- template-literal / seq-vs-sneq asymmetry) so the two cannot drift.
+    let isTypeofGuard : Bool :=
+      match Narrowing.extractGuard expr with
+      | some (.typeofEquals _ _)        => true
+      | some (.not (.typeofEquals _ _)) => true
+      | _                               => false
+    let isTypeofNode : Expression → Bool
+      | .unaryExpr _ .typeof _ (.identifier _ _) => true
+      | _                                        => false
+    let leftDiags  := if isTypeofGuard && isTypeofNode left  then #[] else checkExpr ctx left
+    let rightDiags := if isTypeofGuard && isTypeofNode right then #[] else checkExpr ctx right
+    th84 ++ th86 ++ leftDiags ++ rightDiags
   | .logicalExpr _ _ left right =>
     checkExpr ctx left ++ checkExpr ctx right
   | .memberExpr _ obj prop _ _ =>
@@ -478,7 +500,14 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
       | none => #[]
     blockDiags ++ handlerDiags
   | .switchStmt _ discriminant cases =>
-    checkExpr ctx discriminant
+    -- TH0092 carve-out: `switch (typeof x)` is a recognized discriminant
+    -- (Narrowing.analyzeSwitchDiscriminant), so its `typeof` operand is not
+    -- value-position. Skip checking the discriminant in that case only.
+    let discDiags : Array Diagnostic :=
+      match Narrowing.analyzeSwitchDiscriminant discriminant with
+      | .typeofVar _ => #[]
+      | _            => checkExpr ctx discriminant
+    discDiags
       ++ cases.foldl (fun acc (SwitchCase.mk _ _ stmts) =>
            stmts.foldl (fun acc2 s => acc2 ++ checkStmt ctx s) acc) #[]
   | .labeledStmt _ _ body =>
