@@ -350,6 +350,7 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
     | none => baseDiag
   -- Leaf nodes with no sub-expressions
   | .identifier _ _ => #[]
+  | .literal base (.regex _ _) _ => #[mkThalesDiag .regexLiteral base.loc]
   | .literal _ _ _ => #[]
   | .thisExpr _ => #[]
   | .super_ _ => #[]

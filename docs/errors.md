@@ -85,6 +85,7 @@ soundness check).
 | TH0088 | Subset       | Unsupported `import` form (default/namespace/side-effect) |
 | TH0089 | Subset       | Unsupported `export` form (default/re-export)             |
 | TH0090 | Subset       | Circular imports                                          |
+| TH0091 | Subset       | Regex literals are not supported                          |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                   |
 | TH9001 | Directive    | Directive code mismatch                                   |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed                 |
@@ -1065,3 +1066,13 @@ console.log(a());
 
 Fix: break the cycle by moving the shared declarations into a third module that
 both import, so the dependency graph is acyclic.
+
+### TH0091 — Regex literals are not supported
+
+Thales has no Lean lowering for `RegExp` values, so a regex literal such as
+`/abc/g` cannot be emitted. The emitter previously wrote an `(unsupported: …)`
+placeholder for it; it is now rejected up front.
+
+```ts
+const re = /abc/g; // TH0091
+```

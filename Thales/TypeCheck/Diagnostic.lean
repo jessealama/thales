@@ -119,6 +119,10 @@ inductive ThalesKind where
   | unsupportedImportForm (form : String)
   | unsupportedExportForm (form : String)
   | importCycle (cyclePath : String)
+  -- Regex literal in value position (TH0091)
+  | regexLiteral
+  -- Unsupported unary operator in value position (TH0092): typeof/void/delete
+  | unsupportedUnaryOperator (op : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -170,6 +174,8 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .unsupportedImportForm _ => 88
   | .unsupportedExportForm _ => 89
   | .importCycle _ => 90
+  | .regexLiteral => 91
+  | .unsupportedUnaryOperator _ => 92
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -257,6 +263,10 @@ def ThalesKind.message : ThalesKind → String
     s!"This export form ({form}) is not supported; use inline `export` on a declaration or " ++ "`export { a, b };`"
   | .importCycle cyclePath =>
     s!"Circular imports are not supported because the emitted Lean modules cannot form an import cycle ({cyclePath})"
+  | .regexLiteral =>
+    "Regex literals are not supported"
+  | .unsupportedUnaryOperator op =>
+    s!"The '{op}' operator is not supported in value position"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
