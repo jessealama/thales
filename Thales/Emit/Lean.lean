@@ -589,7 +589,7 @@ private def refinementKindPredicate : RefinementKind → String
     dropped. `SubsetCheck`'s `doModeLowerable` gate should make this
     unreachable; reaching it means the two have drifted. -/
 private def unloweredDoStmt : List LDoStmt :=
-  [.ret (.var "(unsupported: statement not lowerable in do-mode)")]
+  [.ret (.unsupported "statement not lowerable in do-mode")]
 
 /-- Unwrap a block into its statement list; a single statement becomes a
     singleton list. -/
@@ -671,7 +671,7 @@ private def recordDeclBinding (env : EmitEnv) (name : String)
 mutual
 
 /-- Translate a JS `Expression` to a Lean `LExpr`. Unsupported constructs
-    emit `.var "(unsupported expr)"`; SubsetCheck rejects them upstream.
+    emit `.unsupported "expression"`; SubsetCheck rejects them upstream.
     `env` carries the binding-type table so refinement-typed identifiers
     can be `.val`-projected when used in arithmetic. -/
 partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
@@ -681,7 +681,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .literal _ (.string s) _ => .str s
   | .literal _ (.boolean b) _ => .bool b
   | .literal _ .null _       => .ctor "none" []
-  | .literal _ (.regex _ _) _ => .var "(unsupported: regex literal)"
+  | .literal _ (.regex _ _) _ => .unsupported "regex literal"
   -- Identifier. The JS numeric globals `NaN`/`Infinity` are `number`-typed but
   -- have no bare Lean counterpart, so lower them to the runtime `Float`
   -- constants (`-Infinity` lowers as the negation of `Infinity`).
@@ -747,9 +747,9 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .unaryExpr _ .pos _ arg => emitExprEnv env arg
   | .unaryExpr _ .not _ arg => .app (.var "not") [emitExprEnv env arg]
   | .unaryExpr _ .bitnot _ arg => .app (.var "Complement.complement") [emitExprEnv env arg]
-  | .unaryExpr _ _ _ _ => .var "(unsupported: unary op)"
+  | .unaryExpr _ _ _ _ => .unsupported "unary op"
   -- Update (++/--): SubsetCheck rejects; placeholder
-  | .updateExpr _ _ _ _ => .var "(unsupported: update expr)"
+  | .updateExpr _ _ _ _ => .unsupported "update expr"
   -- Conditional (ternary)
   | .conditionalExpr _ cond thn els =>
       .ite (emitExprEnv env cond) (emitExprEnv env thn) (emitExprEnv env els)
@@ -926,7 +926,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
       .app (.var "List.toArray") [mkListLit exprs]
   -- Arrow function expression
   | .arrowFunctionExpr _ params body _ async _ =>
-      if async then .var "(unsupported: async arrow)"
+      if async then .unsupported "async arrow"
       else
         let leanParams := params.filterMap fun
           | .simple id => some (id.name, none)
@@ -938,7 +938,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
           | .inr stmt  => emitBodyEnv env [stmt]
         .lam leanParams bodyExpr
   -- Assignment: SubsetCheck rejects; placeholder
-  | .assignmentExpr _ _ _ _ => .var "(unsupported: assignment)"
+  | .assignmentExpr _ _ _ _ => .unsupported "assignment"
   -- Object literal with a `kind: "..."` discriminator: emit as an anonymous
   -- constructor `.kindVal <other-field-values>` and let Lean resolve which
   -- inductive via context. Field values are emitted in literal order, which
@@ -960,7 +960,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
       | some ctor =>
           let otherFields := regularProps.filter fun (k, _) => k != "kind"
           .ctor ctor (otherFields.map fun (_, v) => emitExprEnv env v)
-      | none => .var "(unsupported expr)"
+      | none => .unsupported "expression"
   -- Template literal: `q0${e0}q1${e1}...qn`
   -- Emitted as string concatenation: "q0" ++ JSShow.jsShow e0 ++ "q1" ++ ...
   -- Quasis has (n+1) elements for n expressions; gaps with empty strings are skipped.
@@ -984,7 +984,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
       | [single] => single
       | first :: rest => rest.foldl (fun acc p => .binOp "++" acc p) first
   -- Everything else
-  | _ => .var "(unsupported expr)"
+  | _ => .unsupported "expression"
 
 /-- Backwards-compatible wrapper used by the few sites that have no env
     available (e.g. the top-level `console.log` lowering). Calls
@@ -1105,7 +1105,7 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
       -- shape with all-return arms, so the code after the switch is dead
       -- and a fallback that DROPS the switch is never correct — the
       -- unresolved cases render the loud marker instead (#44).
-      let unlowered : LExpr := .var "(unsupported: switch not lowerable)"
+      let unlowered : LExpr := .unsupported "switch not lowerable"
       match discriminant with
       | .memberExpr _ (.identifier _ scrutName) (.identifier _ _fieldName) false _ =>
           match env.bindingEnv.get? scrutName with
@@ -1150,7 +1150,7 @@ partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
   | .throwStmt _ arg :: _ =>
       if env.throwTypes.isEmpty then
         -- SubsetCheck already flagged TH0060.
-        .var "(unsupported: throw without @throws)"
+        .unsupported "throw without @throws"
       else
         -- Heuristic: `new E(args)` thrown at index `idx` of `@throws`.
         let thrownTypeName : String := match arg with
@@ -1738,8 +1738,8 @@ private def ldeclName : LDecl → Option String
   | .abbrev_ n .. => some n
   | _ => none
 
-/-- Walk the program and produce a Lean module string. -/
-def emit (prog : TSProgram) (moduleName : String) : String :=
+/-- Walk the program and produce a Lean module (structural form). -/
+def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
   let resolvedAliases := resolveAliases prog.body
   let funcThrowsEnv := buildFuncThrowsEnv prog.body
   let funcParamTypes := buildFuncParamTypesEnv prog.body
@@ -1973,10 +1973,14 @@ def emit (prog : TSProgram) (moduleName : String) : String :=
   let body : LDecl :=
     if moduleName.isEmpty then .namespace_ "Input" decls
     else .namespace_ moduleName decls
-  renderModule {
+  {
     imports := "Thales.TS.Runtime" :: tsImports
     opens := "Thales.TS" :: collectOpens prog.body
     decls := [body]
   }
+
+/-- Walk the program and produce a Lean module string. -/
+def emit (prog : TSProgram) (moduleName : String) : String :=
+  renderModule (buildModule prog moduleName)
 
 end Thales.Emit
