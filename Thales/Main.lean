@@ -334,13 +334,25 @@ def main (args : List String) : IO UInt32 := do
 
       if cli.emit then
         let moduleName := inputToModuleName filename
+        -- TH9005: structural emit-soundness gate. Build the module once; if it
+        -- contains any LExpr.unsupported placeholder, refuse to write a file that
+        -- cannot elaborate. Non-suppressible — this is an internal integrity check.
+        let mod := Thales.Emit.buildModule tsProg moduleName
+        let unsupported := mod.unsupportedReasons
+        if !unsupported.isEmpty then
+          let diag : Diagnostic :=
+            { kind := .thales (.emittedCodeContainsUnsupported (String.intercalate "; " unsupported)),
+              location := some { start := { line := 1, column := 0 },
+                                 «end» := { line := 1, column := 0 } } }
+          IO.println (diag.format filename)
+          return 1
         let outDir := cli.outDir.getD (dirnameOf filename)
         IO.FS.createDirAll outDir
         let outPath := outDir ++ "/" ++ moduleName ++ ".lean"
         if (← System.FilePath.pathExists outPath) && !cli.overwrite then
           IO.eprintln s!"Error: {outPath} already exists. Pass --overwrite to replace it."
           return 1
-        let leanSrc := Thales.Emit.emit tsProg moduleName
+        let leanSrc := Thales.Emit.LeanSyntax.renderModule mod
         IO.FS.writeFile outPath leanSrc
         IO.eprintln s!"emitted: {outPath}"
       return 0

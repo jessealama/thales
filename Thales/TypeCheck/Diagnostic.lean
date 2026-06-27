@@ -130,6 +130,10 @@ inductive ThalesKind where
   | directiveMalformed
   -- Emit-soundness diagnostic (TH9004)
   | emittedCodeContainsSorry (filename : String)
+  -- Emit-soundness diagnostic (TH9005): emitter produced an unlowerable
+  -- placeholder. Untriggerable from valid TS by design (subset checks reject
+  -- first); a firing means a genuine, previously-unknown subset gap.
+  | emittedCodeContainsUnsupported (reasons : String)
   deriving Repr
 
 /-- Map a ThalesKind to its numeric TH code -/
@@ -181,6 +185,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .emissionBlockedBySuppressedViolation => 9002
   | .directiveMalformed => 9003
   | .emittedCodeContainsSorry _ => 9004
+  | .emittedCodeContainsUnsupported _ => 9005
 
 /-- Zero-pad a numeric code to 4 digits -/
 private def padCode (n : Nat) : String :=
@@ -278,6 +283,8 @@ def ThalesKind.message : ThalesKind → String
     "Malformed `@thales-expect-error` directive"
   | .emittedCodeContainsSorry filename =>
     s!"Emitted Lean code in '{filename}' contains 'sorry' or 'sorryAx'; emit must be sorry-free"
+  | .emittedCodeContainsUnsupported reasons =>
+    s!"Internal: the emitter produced unlowerable construct(s) ({reasons}); this is a subset gap — the program was accepted but cannot be emitted. Please report it."
 
 /-- Diagnostic error kinds with tsc error code mapping -/
 inductive DiagnosticKind where

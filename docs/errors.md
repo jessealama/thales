@@ -20,8 +20,8 @@ displayed in diagnostics for human readability.
 See `docs/superpowers/specs/2026-04-21-conformance-harness-design.md` for
 the full contract and harness details.
 
-This reference lists all subset `TH####` codes plus the 5 directive
-codes (TH9000–TH9004) with minimal detail. For full explanation,
+This reference lists all subset `TH####` codes plus the directive
+codes (TH9000–TH9005) with minimal detail. For full explanation,
 rationale, and idiomatic replacements, see [subset.md](./subset.md).
 
 The codes are divided into categories:
@@ -92,6 +92,7 @@ soundness check).
 | TH9002 | Directive    | Cannot emit: subset violations suppressed                 |
 | TH9003 | Directive    | Malformed `@thales-expect-error` directive                |
 | TH9004 | Directive    | Emitted Lean code contains `sorry`                        |
+| TH9005 | Internal     | Emitted Lean would contain an unlowerable placeholder     |
 
 ## Future of this table
 
@@ -751,6 +752,17 @@ soundness regression, not a user error. Do not work around by adding
 
 This check applies only to `.lean` files that `thales` emits (not to
 `Test/` WIP proofs or the runtime library).
+
+---
+
+### TH9005 — Emitted Lean would contain an unlowerable placeholder
+
+A structural emit-soundness gate. If the emitter produces an `LExpr.unsupported`
+placeholder for a construct it cannot lower, Thales refuses to write the `.lean`
+file rather than ship code that will not elaborate. This is **not** user-suppressible
+and has no `@thales-expect-error` form: the subset checks reject every known
+out-of-subset construct first, so a TH9005 firing indicates a genuine subset gap in
+the compiler and should be reported.
 
 ---
 
