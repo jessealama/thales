@@ -1390,9 +1390,20 @@ partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
       if LoopShape.hasLabeledBreakOrContinue body
           || LoopShape.hasOwnUnlabeledContinue body then unloweredDoStmt
       else
-        .repeatUntilDo (emitBodyDo env info (blockStmts body))
-            (.app (.var "not") [emitExprEnv env test])
-          :: emitBodyDo env info rest
+        match emitExprEnv env test with
+        -- `do { B } while (true)` is equivalent to `while (true) { B }` — the
+        -- guard is constant, so running the body before the first check makes
+        -- no difference. Lower to `while true do …` rather than `repeat …
+        -- until`, because a returns-on-every-path loop needs a trailing
+        -- `unreachable!` tail (issue #64) and `repeat … until` must be the last
+        -- element of a `do` sequence, so it cannot take that tail (issue #72).
+        | .bool true =>
+            .whileDo (.bool true) (emitBodyDo env info (blockStmts body))
+              :: emitBodyDo env info rest
+        | leanTest =>
+            .repeatUntilDo (emitBodyDo env info (blockStmts body))
+                (.app (.var "not") [leanTest])
+              :: emitBodyDo env info rest
   -- #25: unlabeled break/continue map 1:1; trailing statements are dead code
   -- and dropped (same convention as `return`). Labeled forms fall through to
   -- the loud marker (EscapeAnalysis poisons them upstream).
