@@ -54,3 +54,13 @@ def testAnnotatedLocalConstruct : IO Unit :=
     ["let p", "x := x", "y := y", ": Pair"]
 
 #eval testAnnotatedLocalConstruct
+
+-- Nested record: a field whose value is itself an object literal.
+def testNestedConstruct : IO Unit :=
+  expectEmit
+    "interface Inner { v: bigint }
+     interface Outer { inner: Inner; tag: bigint }
+     function mk(v: bigint): Outer { return { inner: { v: v }, tag: 0n }; }" "M"
+    ["v := v", ": Inner", "tag :=", ": Outer"]
+
+#eval testNestedConstruct
