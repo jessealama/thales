@@ -7,6 +7,10 @@ const t = typeof 1;
 // @thales-expect-error TH0092
 const u = void 0;
 
+const obj: { a?: number } = { a: 1 };
+// @thales-expect-error TH0092
+const removed = delete obj.a;
+
 function f(x: string): boolean {
   // @thales-expect-error TH0092
   if (typeof x === 'string') {
