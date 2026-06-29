@@ -82,3 +82,21 @@ def testArrayOfRecords : IO Unit :=
 
 #eval testCallArgConstruct
 #eval testArrayOfRecords
+
+-- Existing DU construction must still lower to a constructor application.
+def testDUStillCtor : IO Unit :=
+  expectEmit
+    "type Shape = { kind: 'circle'; r: bigint } | { kind: 'square'; s: bigint };
+     function mk(r: bigint): Shape { return { kind: 'circle', r }; }" "M"
+    [".circle"]
+
+-- A struct with a field literally named `kind` is built as a struct, not
+-- mis-lowered to a constructor, because the target is a known structure.
+def testStructWithKindField : IO Unit :=
+  expectEmit
+    "interface Tagged { kind: bigint; v: bigint }
+     function mk(k: bigint, v: bigint): Tagged { return { kind: k, v }; }" "M"
+    ["kind := k", "v := v", ": Tagged"]
+
+#eval testDUStillCtor
+#eval testStructWithKindField
