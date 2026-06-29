@@ -255,6 +255,28 @@ private def indent (s : String) : String :=
 private def escapeString (s : String) : String :=
   s.replace "\\" "\\\\" |>.replace "\"" "\\\""
 
+/-- Lean 4 reserved keywords that cannot appear as bare identifiers. A TS
+    program may legally use any of these as a variable, parameter, function,
+    record field, or loop binder name (none are JS reserved words); emitting
+    them verbatim produces uncompilable Lean. -/
+private def leanKeywords : List String :=
+  [ "abbrev", "at", "attribute", "axiom", "by", "calc", "catch", "class",
+    "continue", "break", "def", "deriving", "do", "else", "end", "example",
+    "exists", "extends", "finally", "for", "forall", "from", "fun", "generalizing",
+    "have", "if", "import", "in", "inductive", "infix", "infixl", "infixr",
+    "instance", "let", "local", "macro", "macro_rules", "match", "mut", "mutual",
+    "namespace", "noncomputable", "nomatch", "notation", "opaque", "open",
+    "partial", "postfix", "prefix", "private", "protected", "rec", "repeat",
+    "return", "scoped", "section", "set_option", "show", "sorry", "structure",
+    "syntax", "theorem", "then", "try", "unsafe", "until", "universe", "using",
+    "variable", "where", "while", "with" ]
+
+/-- Wrap an identifier in guillemets if it collides with a Lean keyword.
+    `«foo»` denotes the same `Name` as `foo`, so this is transparent for
+    non-keyword names (which pass through unchanged). -/
+private def escapeIdent (s : String) : String :=
+  if leanKeywords.contains s then "«" ++ s ++ "»" else s
+
 /-- Render a float so Lean parses it as a Float literal.
     Ensures a decimal point is present. -/
 private def renderFloat (f : Float) : String :=
@@ -291,14 +313,14 @@ mutual
 
   partial def renderPattern : LPattern → String
     | .wildcard      => "_"
-    | .var n         => n
+    | .var n         => escapeIdent n
     | .ctor n []     => s!".{n}"
     | .ctor n args   =>
         s!".{n} {String.intercalate " " (args.map renderPatternAtom)}"
 
   partial def renderPatternAtom : LPattern → String
     | .wildcard    => "_"
-    | .var n       => n
+    | .var n       => escapeIdent n
     | .ctor n []   => s!".{n}"
     | .ctor n args =>
         s!"(.{n} {String.intercalate " " (args.map renderPatternAtom)})"
@@ -308,7 +330,7 @@ end
 mutual
 
   partial def renderExpr : LExpr → String
-    | .var n    => n
+    | .var n    => escapeIdent n
     | .unsupported reason => s!"(unsupported: {reason})"
     | .int n    => if n < 0 then s!"({n})" else toString n
     | .float f  => renderFloat f
@@ -321,14 +343,14 @@ mutual
     | .lam params body =>
         let ps := params.map fun (n, tOpt) =>
           match tOpt with
-          | some t => s!"({n} : {renderType t})"
-          | none   => n
+          | some t => s!"({escapeIdent n} : {renderType t})"
+          | none   => escapeIdent n
         s!"(fun {String.intercalate " " ps} => {renderExpr body})"
     | .letE n tOpt v b =>
         let annot := match tOpt with
           | some t => s!" : {renderType t}"
           | none   => ""
-        s!"let {n}{annot} := {renderExpr v}\n{renderExpr b}"
+        s!"let {escapeIdent n}{annot} := {renderExpr v}\n{renderExpr b}"
     | .match_ scrut arms =>
         let armsS := arms.map fun (p, e) =>
           s!"| {renderPattern p} => {renderExpr e}"
@@ -341,9 +363,9 @@ mutual
     | .ctor n args =>
         s!"(.{n} {String.intercalate " " (args.map renderExprAtom)})"
     | .proj obj field =>
-        s!"{renderExprAtom obj}.{field}"
+        s!"{renderExprAtom obj}.{escapeIdent field}"
     | .structLit typeName fields =>
-        let fieldS := fields.map fun (n, e) => s!"{n} := {renderExpr e}"
+        let fieldS := fields.map fun (n, e) => s!"{escapeIdent n} := {renderExpr e}"
         s!"(\{ {String.intercalate ", " fieldS} : {typeName} })"
     | .anonCtor args proofTactic =>
         let argsS := args.map renderExpr
@@ -377,13 +399,13 @@ mutual
         let annot := match tyOpt with
           | some t => s!" : {renderType t}"
           | none   => ""
-        s!"let mut {n}{annot} := {renderExpr v}"
+        s!"let mut {escapeIdent n}{annot} := {renderExpr v}"
     | .letPure n tyOpt v =>
         let annot := match tyOpt with
           | some t => s!" : {renderType t}"
           | none   => ""
-        s!"let {n}{annot} := {renderExpr v}"
-    | .assign n v => s!"{n} := {renderExpr v}"
+        s!"let {escapeIdent n}{annot} := {renderExpr v}"
+    | .assign n v => s!"{escapeIdent n} := {renderExpr v}"
     | .ret v => s!"return {renderExpr v}"
     | .ifDo c thn [] =>
         s!"if {renderExpr c} then\n{indent (renderDoStmts thn)}"
@@ -394,7 +416,7 @@ mutual
           s!"| {renderPattern p} =>\n{indent (renderDoStmts stmts)}"
         s!"match {renderExpr scrut} with\n{lines armsS}"
     | .forDo var iter body =>
-        s!"for {var} in {renderExpr iter} do\n{indent (renderDoStmts body)}"
+        s!"for {escapeIdent var} in {renderExpr iter} do\n{indent (renderDoStmts body)}"
     | .whileDo cond body =>
         s!"while {renderExpr cond} do\n{indent (renderDoStmts body)}"
     | .repeatUntilDo body cond =>
@@ -403,14 +425,14 @@ mutual
     | .continueDo => "continue"
 
   partial def renderExprAtom : LExpr → String
-    | .var n      => n
+    | .var n      => escapeIdent n
     | .int n      => if n < 0 then s!"({n})" else toString n
     | .float f    => renderFloat f
     | .str s      => s!"\"{escapeString s}\""
     | .bool true  => "true"
     | .bool false => "false"
     | .ctor n []  => s!".{n}"
-    | .proj obj field => s!"{renderExprAtom obj}.{field}"
+    | .proj obj field => s!"{renderExprAtom obj}.{escapeIdent field}"
     -- rangeTo is bracket-delimited and therefore atomic; no extra parens
     | .rangeTo stop => s!"[0:{renderExpr stop}]"
     | other       => s!"({renderExpr other})"
@@ -420,24 +442,24 @@ end
 partial def renderDecl : LDecl → String
   | .def_ name tps params retTy body isPartial =>
       let tpsS    := renderTypeParams tps
-      let paramsS := params.map fun (n, t) => s!"({n} : {renderType t})"
+      let paramsS := params.map fun (n, t) => s!"({escapeIdent n} : {renderType t})"
       let paramsLine :=
         if paramsS.isEmpty then "" else " " ++ String.intercalate " " paramsS
       let keyword := if isPartial then "partial def" else "def"
       let retAnnot := match retTy with
         | .inferred => ""
         | other => s!" : {renderType other}"
-      s!"{keyword} {name}{tpsS}{paramsLine}{retAnnot} :=\n{indent (renderExpr body)}"
+      s!"{keyword} {escapeIdent name}{tpsS}{paramsLine}{retAnnot} :=\n{indent (renderExpr body)}"
   | .struct name tps fields =>
       let tpsS       := renderTypeParams tps
-      let fieldLines := fields.map fun (n, t) => s!"{n} : {renderType t}"
+      let fieldLines := fields.map fun (n, t) => s!"{escapeIdent n} : {renderType t}"
       s!"structure {name}{tpsS} where\n{indent (lines fieldLines)}\n  deriving Repr, BEq"
   | .inductive_ name tps ctors =>
       let tpsS     := renderTypeParams tps
       let ctorLines := ctors.map fun (ctorName, fields) =>
         if fields.isEmpty then s!"| {ctorName}"
         else
-          let fieldS := fields.map fun (fn, ft) => s!"({fn} : {renderType ft})"
+          let fieldS := fields.map fun (fn, ft) => s!"({escapeIdent fn} : {renderType ft})"
           s!"| {ctorName} {String.intercalate " " fieldS}"
       s!"inductive {name}{tpsS} where\n{indent (lines ctorLines)}\n  deriving Repr"
   | .abbrev_ name tps ty =>
