@@ -245,6 +245,11 @@ def emitTypeAlias (name : String) (typeParams : List String) (ty : TSType) : Lis
               [.inductive_ name typeParams leanCtors,
                .instance_ (.app "Coe" [.const name, prim]) "coe" coeBody]
           | _, _, _ => [.abbrev_ name typeParams (emitType ty)]
+  | .object members =>
+      let fields := members.filterMap fun
+        | .property fname fty _opt _ro => some (fname, emitType fty)
+        | _ => none
+      [.struct name typeParams fields]
   | _ => [.abbrev_ name typeParams (emitType ty)]
 
 /-- Emit an interface as a Lean structure. Only property members are
