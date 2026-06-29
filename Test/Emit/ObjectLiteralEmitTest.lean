@@ -100,3 +100,14 @@ def testStructWithKindField : IO Unit :=
 
 #eval testDUStillCtor
 #eval testStructWithKindField
+
+-- An anonymous-object return type has no named Lean structure to construct, so
+-- the object literal stays `.unsupported` and the non-suppressible TH9005
+-- emit-gate (Main) blocks emission. (Can't be a `reject/` fixture: TH9005 is an
+-- emit-phase gate that does not fire under `--no-emit`, which the harness uses.)
+def testAnonObjectReturnUnsupported : IO Unit :=
+  expectEmit
+    "function f(): { x: bigint } { return { x: 1n }; }" "M"
+    ["(unsupported:"]
+
+#eval testAnonObjectReturnUnsupported
