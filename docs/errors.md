@@ -86,7 +86,7 @@ soundness check).
 | TH0089 | Subset       | Unsupported `export` form (default/re-export)             |
 | TH0090 | Subset       | Circular imports                                          |
 | TH0091 | Subset       | Regex literals are not supported                          |
-| TH0092 | Subset       | Unsupported unary operator in value position              |
+| TH0092 | Subset       | Unsupported unary operator (`typeof`/`void`/`delete`)     |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                   |
 | TH9001 | Directive    | Directive code mismatch                                   |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed                 |
@@ -1090,14 +1090,23 @@ placeholder for it; it is now rejected up front.
 const re = /abc/g; // TH0091
 ```
 
-### TH0092 — Unsupported unary operator in value position
+### TH0092 — Unsupported unary operator
 
-`typeof`, `void`, and `delete` have no value-position Lean lowering. Guard-position
-`typeof` (e.g. `typeof x === "string"`, or a `switch (typeof x)` discriminant) is
-recognized by the narrowing layer and is not flagged here; every other occurrence is
-rejected.
+`typeof`, `void`, and `delete` have no Lean lowering, so they are rejected wherever
+they appear. This includes `typeof` used inside a guard such as
+`if (typeof x === "string")` or a `switch (typeof x)` discriminant: the emitter
+cannot lower the `typeof` test, so it is rejected rather than accepted and silently
+miscompiled.
 
 ```ts
 const t = typeof 1; // TH0092
 const u = void 0; // TH0092
+
+function f(x: string): boolean {
+  if (typeof x === 'string') {
+    // TH0092
+    return true;
+  }
+  return false;
+}
 ```

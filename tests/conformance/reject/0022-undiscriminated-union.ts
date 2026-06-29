@@ -1,7 +1,9 @@
-// Subset-rejected example: undiscriminated primitive union (TH0022).
+// Subset-rejected example: undiscriminated primitive union (TH0022). A
+// `string | number` parameter shares no discriminant, so thales has no Lean
+// representation for it. (Telling the two apart at runtime would need `typeof`,
+// which is itself outside the subset — see TH0092.)
 // @thales-expect-error TH0022
-function double(x: string | number): string | number {
-  if (typeof x === 'number') return x * 2;
-  return x + x;
+function describe(x: string | number): string {
+  return 'value';
 }
-console.log(double(21));
+console.log(describe(21));

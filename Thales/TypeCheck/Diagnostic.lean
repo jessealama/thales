@@ -121,7 +121,7 @@ inductive ThalesKind where
   | importCycle (cyclePath : String)
   -- Regex literal in value position (TH0091)
   | regexLiteral
-  -- Unsupported unary operator in value position (TH0092): typeof/void/delete
+  -- Unsupported unary operator (TH0092): typeof/void/delete, in any position
   | unsupportedUnaryOperator (op : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
@@ -271,7 +271,7 @@ def ThalesKind.message : ThalesKind → String
   | .regexLiteral =>
     "Regex literals are not supported"
   | .unsupportedUnaryOperator op =>
-    s!"The '{op}' operator is not supported in value position"
+    s!"The '{op}' operator is not supported"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
