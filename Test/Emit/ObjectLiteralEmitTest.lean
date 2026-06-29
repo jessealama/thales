@@ -64,3 +64,21 @@ def testNestedConstruct : IO Unit :=
     ["v := v", ": Inner", "tag :=", ": Outer"]
 
 #eval testNestedConstruct
+
+-- Call argument: `consume({ x, y })` where the param type is a known struct.
+def testCallArgConstruct : IO Unit :=
+  expectEmit
+    "interface Pair { x: bigint; y: bigint }
+     function consume(p: Pair): bigint { return p.x; }
+     function go(x: bigint, y: bigint): bigint { return consume({ x, y }); }" "M"
+    ["x := x", "y := y", ": Pair"]
+
+-- Array of records: `const xs: Pair[] = [{ x: 1n, y: 2n }];`
+def testArrayOfRecords : IO Unit :=
+  expectEmit
+    "interface Pair { x: bigint; y: bigint }
+     function f(): bigint { const xs: Pair[] = [{ x: 1n, y: 2n }]; return 0n; }" "M"
+    ["x :=", "y :=", ": Pair", "List.toArray"]
+
+#eval testCallArgConstruct
+#eval testArrayOfRecords

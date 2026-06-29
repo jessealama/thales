@@ -879,13 +879,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
             | none => List.replicate args.length none
         | none => List.replicate args.length none
       let coerceArg : Expression → Option TSType → LExpr := fun a tyOpt =>
-        let raw := emitExprEnv env a
-        match tyOpt with
-        | some ty =>
-            ((emitRefinementLiteral env.aliasEnv (some ty) a)
-              <|> (emitLiteralAsCtor env.aliasEnv (some ty) a))
-              |>.getD raw
-        | none => raw
+        emitExprWithExpectedTy env tyOpt a
       let coercedArgs : List LExpr := List.zipWith coerceArg args paramTys
       .app (emitExprEnv env callee) coercedArgs
   -- Member expression
