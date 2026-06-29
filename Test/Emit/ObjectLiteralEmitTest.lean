@@ -45,3 +45,12 @@ def testTypeAliasReturnConstruct : IO Unit :=
 
 #eval testInterfaceReturnConstruct
 #eval testTypeAliasReturnConstruct
+
+-- Annotated local: `const p: Pair = { x, y };`
+def testAnnotatedLocalConstruct : IO Unit :=
+  expectEmit
+    "interface Pair { x: bigint; y: bigint }
+     function f(x: bigint, y: bigint): bigint { const p: Pair = { x, y }; return p.x; }" "M"
+    ["let p", "x := x", "y := y", ": Pair"]
+
+#eval testAnnotatedLocalConstruct

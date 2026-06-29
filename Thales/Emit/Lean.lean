@@ -1071,10 +1071,7 @@ partial def emitVarDecl (env : EmitEnv)
           let ty := typeAnnotation.map emitType
           let targetTy : Option TSType := typeAnnotation
           let initExpr := match init with
-            | some e =>
-                ((emitRefinementLiteral env.aliasEnv targetTy e)
-                  <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
-                  |>.getD (emitExprEnv env e)
+            | some e => emitExprWithExpectedTy env targetTy e
             | none   => .var "()"
           let env' := recordDeclBinding env id.name typeAnnotation init
           .letE id.name ty initExpr (emitVarDecl env' rest body)
@@ -1295,10 +1292,7 @@ partial def emitBody : List Statement → LExpr :=
 partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
     : List Statement → List LDoStmt
   | .returnStmt _ (some e) :: _ =>
-      let emitted :=
-        ((emitRefinementLiteral env.aliasEnv env.retTy e)
-          <|> (emitLiteralAsCtor env.aliasEnv env.retTy e))
-          |>.getD (emitExprEnv env e)
+      let emitted := emitExprWithExpectedTy env env.retTy e
       [.ret (wrapReturn env.retTy emitted)]
   | .returnStmt _ none :: _ => [.ret (.var "()")]
   | .variableDecl (.mk _ decls _) :: rest =>
@@ -1492,10 +1486,7 @@ partial def emitVarDeclDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
           let ty := typeAnnotation.map emitType
           let targetTy : Option TSType := typeAnnotation
           let initExpr := match init with
-            | some e =>
-                ((emitRefinementLiteral env.aliasEnv targetTy e)
-                  <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
-                  |>.getD (emitExprEnv env e)
+            | some e => emitExprWithExpectedTy env targetTy e
             | none   => .var "()"
           let env' := recordDeclBinding env id.name typeAnnotation init
           let bind := if info.mutated.contains id.name
