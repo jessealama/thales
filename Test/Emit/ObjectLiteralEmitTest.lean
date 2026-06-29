@@ -28,3 +28,20 @@ def testTypeAliasRecordStruct : IO Unit :=
     ["structure PortRange where", "start : Int", "endPort : Int"]
 
 #eval testTypeAliasRecordStruct
+
+-- #15/#81: constructing an interface value via `{ x, y }` in return position.
+def testInterfaceReturnConstruct : IO Unit :=
+  expectEmit
+    "interface Pair { x: bigint; y: bigint }
+     function mk(x: bigint, y: bigint): Pair { return { x, y }; }" "M"
+    ["x := x", "y := y", ": Pair"]
+
+-- #15/#81: same for a single-record type alias, explicit-key form.
+def testTypeAliasReturnConstruct : IO Unit :=
+  expectEmit
+    "type Pair = { x: bigint; y: bigint };
+     function mk(x: bigint, y: bigint): Pair { return { x: x, y: y }; }" "M"
+    ["x := x", "y := y", ": Pair"]
+
+#eval testInterfaceReturnConstruct
+#eval testTypeAliasReturnConstruct
