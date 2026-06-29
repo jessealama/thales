@@ -31,6 +31,11 @@ mutual
 /-- Lean term. Only the subset the emitter uses. -/
 inductive LExpr where
   | var (name : String)
+  -- A typed placeholder for a construct the emitter cannot lower. It must never
+  -- reach a written file: Main's TH9005 gate (LModule.unsupportedReasons) refuses
+  -- to emit when any of these survive. Replaces the old `.var "(unsupported …)"`
+  -- string placeholders so the leak is detectable structurally, not by substring.
+  | unsupported (reason : String)
   | int (n : Int)
   | float (n : Float)
   | str (s : String)
@@ -185,6 +190,56 @@ structure LModule where
   decls : List LDecl
   deriving Inhabited
 
+/-! ### Unsupported-placeholder collector (#30)
+
+Gathers the `reason` of every `LExpr.unsupported` node in a module. Main uses this
+to refuse emission (TH9005) rather than write a `.lean` file that cannot elaborate. -/
+
+mutual
+  partial def LExpr.collectUnsupported : LExpr → List String
+    | .unsupported r        => [r]
+    | .app fn args          => fn.collectUnsupported ++ args.foldl (fun a e => a ++ e.collectUnsupported) []
+    | .lam _ body           => body.collectUnsupported
+    | .letE _ _ v b         => v.collectUnsupported ++ b.collectUnsupported
+    | .match_ s arms        => s.collectUnsupported ++ arms.foldl (fun a (_, e) => a ++ e.collectUnsupported) []
+    | .ite c t e            => c.collectUnsupported ++ t.collectUnsupported ++ e.collectUnsupported
+    | .binOp _ l r          => l.collectUnsupported ++ r.collectUnsupported
+    | .ctor _ args          => args.foldl (fun a e => a ++ e.collectUnsupported) []
+    | .proj o _             => o.collectUnsupported
+    | .structLit _ fields   => fields.foldl (fun a (_, e) => a ++ e.collectUnsupported) []
+    | .anonCtor args _      => args.foldl (fun a e => a ++ e.collectUnsupported) []
+    | .indexOpt arr idx     => arr.collectUnsupported ++ idx.collectUnsupported
+    | .dite_ _ c t e        => c.collectUnsupported ++ t.collectUnsupported ++ e.collectUnsupported
+    | .doSeq stmts          => stmts.foldl (fun a e => a ++ e.collectUnsupported) []
+    | .idRunDo stmts        => stmts.foldl (fun a s => a ++ s.collectUnsupported) []
+    | .rangeTo stop         => stop.collectUnsupported
+    | .var _ | .int _ | .float _ | .str _ | .bool _ => []
+  partial def LDoStmt.collectUnsupported : LDoStmt → List String
+    | .letMut _ _ v | .letPure _ _ v | .assign _ v | .ret v => v.collectUnsupported
+    | .ifDo c thn els       => c.collectUnsupported
+                                 ++ thn.foldl (fun a s => a ++ s.collectUnsupported) []
+                                 ++ els.foldl (fun a s => a ++ s.collectUnsupported) []
+    | .matchDo s arms       => s.collectUnsupported
+                                 ++ arms.foldl (fun a (_, ss) => a ++ ss.foldl (fun a2 s => a2 ++ s.collectUnsupported) []) []
+    | .forDo _ it body      => it.collectUnsupported ++ body.foldl (fun a s => a ++ s.collectUnsupported) []
+    | .whileDo c body       => c.collectUnsupported ++ body.foldl (fun a s => a ++ s.collectUnsupported) []
+    | .repeatUntilDo body c => body.foldl (fun a s => a ++ s.collectUnsupported) [] ++ c.collectUnsupported
+    | .breakDo | .continueDo => []
+end
+
+partial def LDecl.collectUnsupported : LDecl → List String
+  | .def_ _ _ _ _ body _   => body.collectUnsupported
+  | .struct ..             => []
+  | .inductive_ ..         => []
+  | .abbrev_ ..            => []
+  | .namespace_ _ body     => body.foldl (fun a d => a ++ d.collectUnsupported) []
+  | .eval_ e               => e.collectUnsupported
+  | .instance_ _ _ body    => body.collectUnsupported
+  | .private_ inner        => inner.collectUnsupported
+
+def LModule.unsupportedReasons (m : LModule) : List String :=
+  m.decls.foldl (fun a d => a ++ d.collectUnsupported) []
+
 /-! ### Pretty printer -/
 
 /-- Concatenate with newlines. -/
@@ -254,6 +309,7 @@ mutual
 
   partial def renderExpr : LExpr → String
     | .var n    => n
+    | .unsupported reason => s!"(unsupported: {reason})"
     | .int n    => if n < 0 then s!"({n})" else toString n
     | .float f  => renderFloat f
     | .str s    => s!"\"{escapeString s}\""

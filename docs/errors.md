@@ -20,8 +20,8 @@ displayed in diagnostics for human readability.
 See `docs/superpowers/specs/2026-04-21-conformance-harness-design.md` for
 the full contract and harness details.
 
-This reference lists all subset `TH####` codes plus the 5 directive
-codes (TH9000–TH9004) with minimal detail. For full explanation,
+This reference lists all subset `TH####` codes plus the directive
+codes (TH9000–TH9005) with minimal detail. For full explanation,
 rationale, and idiomatic replacements, see [subset.md](./subset.md).
 
 The codes are divided into categories:
@@ -85,11 +85,14 @@ soundness check).
 | TH0088 | Subset       | Unsupported `import` form (default/namespace/side-effect) |
 | TH0089 | Subset       | Unsupported `export` form (default/re-export)             |
 | TH0090 | Subset       | Circular imports                                          |
+| TH0091 | Subset       | Regex literals are not supported                          |
+| TH0092 | Subset       | Unsupported unary operator (`typeof`/`void`/`delete`)     |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                   |
 | TH9001 | Directive    | Directive code mismatch                                   |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed                 |
 | TH9003 | Directive    | Malformed `@thales-expect-error` directive                |
 | TH9004 | Directive    | Emitted Lean code contains `sorry`                        |
+| TH9005 | Internal     | Emitted Lean would contain an unlowerable placeholder     |
 
 ## Future of this table
 
@@ -752,6 +755,17 @@ This check applies only to `.lean` files that `thales` emits (not to
 
 ---
 
+### TH9005 — Emitted Lean would contain an unlowerable placeholder
+
+A structural emit-soundness gate. If the emitter produces an `LExpr.unsupported`
+placeholder for a construct it cannot lower, Thales refuses to write the `.lean`
+file rather than ship code that will not elaborate. This is **not** user-suppressible
+and has no `@thales-expect-error` form: the subset checks reject every known
+out-of-subset construct first, so a TH9005 firing indicates a genuine subset gap in
+the compiler and should be reported.
+
+---
+
 ## Refinement types
 
 The four prelude refinement types (`Integer`, `Natural`, `Byte`, `Bit`)
@@ -1065,3 +1079,34 @@ console.log(a());
 
 Fix: break the cycle by moving the shared declarations into a third module that
 both import, so the dependency graph is acyclic.
+
+### TH0091 — Regex literals are not supported
+
+Thales has no Lean lowering for `RegExp` values, so a regex literal such as
+`/abc/g` cannot be emitted. The emitter previously wrote an `(unsupported: …)`
+placeholder for it; it is now rejected up front.
+
+```ts
+const re = /abc/g; // TH0091
+```
+
+### TH0092 — Unsupported unary operator
+
+`typeof`, `void`, and `delete` have no Lean lowering, so they are rejected wherever
+they appear. This includes `typeof` used inside a guard such as
+`if (typeof x === "string")` or a `switch (typeof x)` discriminant: the emitter
+cannot lower the `typeof` test, so it is rejected rather than accepted and silently
+miscompiled.
+
+```ts
+const t = typeof 1; // TH0092
+const u = void 0; // TH0092
+
+function f(x: string): boolean {
+  if (typeof x === 'string') {
+    // TH0092
+    return true;
+  }
+  return false;
+}
+```

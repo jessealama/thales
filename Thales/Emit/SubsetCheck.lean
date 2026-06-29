@@ -258,8 +258,14 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
           checkExpr ctx callee
       | _ => checkExpr ctx callee
     calleeDiags ++ (arguments.foldl (fun acc arg => acc ++ checkExpr ctx arg) #[])
-  | .unaryExpr _ _ _ argument =>
-    checkExpr ctx argument
+  | .unaryExpr base op _ argument =>
+    let opDiag : Array Diagnostic :=
+      match op with
+      | .typeof => #[mkThalesDiag (.unsupportedUnaryOperator "typeof") base.loc]
+      | .void   => #[mkThalesDiag (.unsupportedUnaryOperator "void") base.loc]
+      | .delete => #[mkThalesDiag (.unsupportedUnaryOperator "delete") base.loc]
+      | _       => #[]
+    opDiag ++ checkExpr ctx argument
   | .binaryExpr b _ left right =>
     -- TH0084: a definedness test on a body-local whose type the emitter
     -- cannot record (not a param, not in `typedDecls`) can be neither
@@ -350,6 +356,7 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
     | none => baseDiag
   -- Leaf nodes with no sub-expressions
   | .identifier _ _ => #[]
+  | .literal base (.regex _ _) _ => #[mkThalesDiag .regexLiteral base.loc]
   | .literal _ _ _ => #[]
   | .thisExpr _ => #[]
   | .super_ _ => #[]

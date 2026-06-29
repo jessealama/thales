@@ -119,6 +119,10 @@ inductive ThalesKind where
   | unsupportedImportForm (form : String)
   | unsupportedExportForm (form : String)
   | importCycle (cyclePath : String)
+  -- Regex literal in value position (TH0091)
+  | regexLiteral
+  -- Unsupported unary operator (TH0092): typeof/void/delete, in any position
+  | unsupportedUnaryOperator (op : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -126,6 +130,10 @@ inductive ThalesKind where
   | directiveMalformed
   -- Emit-soundness diagnostic (TH9004)
   | emittedCodeContainsSorry (filename : String)
+  -- Emit-soundness diagnostic (TH9005): emitter produced an unlowerable
+  -- placeholder. Untriggerable from valid TS by design (subset checks reject
+  -- first); a firing means a genuine, previously-unknown subset gap.
+  | emittedCodeContainsUnsupported (reasons : String)
   deriving Repr
 
 /-- Map a ThalesKind to its numeric TH code -/
@@ -170,11 +178,14 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .unsupportedImportForm _ => 88
   | .unsupportedExportForm _ => 89
   | .importCycle _ => 90
+  | .regexLiteral => 91
+  | .unsupportedUnaryOperator _ => 92
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
   | .directiveMalformed => 9003
   | .emittedCodeContainsSorry _ => 9004
+  | .emittedCodeContainsUnsupported _ => 9005
 
 /-- Zero-pad a numeric code to 4 digits -/
 private def padCode (n : Nat) : String :=
@@ -257,6 +268,10 @@ def ThalesKind.message : ThalesKind → String
     s!"This export form ({form}) is not supported; use inline `export` on a declaration or " ++ "`export { a, b };`"
   | .importCycle cyclePath =>
     s!"Circular imports are not supported because the emitted Lean modules cannot form an import cycle ({cyclePath})"
+  | .regexLiteral =>
+    "Regex literals are not supported"
+  | .unsupportedUnaryOperator op =>
+    s!"The '{op}' operator is not supported"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
@@ -268,6 +283,8 @@ def ThalesKind.message : ThalesKind → String
     "Malformed `@thales-expect-error` directive"
   | .emittedCodeContainsSorry filename =>
     s!"Emitted Lean code in '{filename}' contains 'sorry' or 'sorryAx'; emit must be sorry-free"
+  | .emittedCodeContainsUnsupported reasons =>
+    s!"Internal: the emitter produced unlowerable construct(s) ({reasons}); this is a subset gap — the program was accepted but cannot be emitted. Please report it."
 
 /-- Diagnostic error kinds with tsc error code mapping -/
 inductive DiagnosticKind where
