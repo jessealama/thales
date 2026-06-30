@@ -994,6 +994,17 @@ def checkTSStmtSwitch (aliasEnv : Std.HashMap String TSType) (ts : TSStatement)
   | .js s => checkSwitchStmt { aliasEnv, bindingEnv := {} } s
   | _ => #[]
 
+/-- A hoisted top-level declaration's source location and the free identifiers
+    referenced by its body/initializer, or `none` if the item is not a hoisted
+    declaration. A hoisted decl (`function`, or a `const`/`let` emitted as a
+    top-level `def`) is elaborated OUTSIDE `main`, so any reference it makes to
+    a top-level mutable `let` (a `main`-local `let mut`) is out of scope (#49). -/
+private partial def hoistedRefs : TSStatement → Option (Option SourceLocation × List String)
+  | .annotatedFuncDecl b _ _ _ _ body _ _ _ _ => some (b.loc, EscapeAnalysis.identsStmt body)
+  | .annotatedVarDecl b _ _ _ (some init) => some (b.loc, EscapeAnalysis.identsExpr init)
+  | .exportDecl _ inner => hoistedRefs inner
+  | _ => none
+
 /-- Walk a TSProgram and return all Thales-subset violations (raw,
     without directive post-processing). -/
 def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
@@ -1002,8 +1013,20 @@ def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
   -- Module-level mutation/loop info over the reconstructed executable top-level
   -- block — the SAME block `buildModule` lowers into `main` (#49).
   let moduleInfo := EscapeAnalysis.analyze [] (.blockStmt {} (moduleExecutableStatements prog.body))
+  -- TH0093: a hoisted declaration that reads a top-level mutated `let` would
+  -- emit a `def` referencing a `main`-local binding — reject up front rather
+  -- than emit uncompilable Lean.
+  let th0093 : Array Diagnostic := prog.body.foldl (fun acc ts =>
+    match hoistedRefs ts with
+    | some (loc, refs) =>
+        let refSet : Std.HashSet String := refs.foldl (·.insert ·) {}
+        refSet.fold (fun a n =>
+          if moduleInfo.mutated.contains n
+          then a.push (mkThalesDiag (.topLevelMutableReferencedByHoisted n) loc)
+          else a) acc
+    | none => acc) #[]
   prog.body.foldl (fun acc ts =>
-    acc ++ checkTSStmt aliasEnv topRecvEnv moduleInfo ts ++ checkTSStmtSwitch aliasEnv ts) #[]
+    acc ++ checkTSStmt aliasEnv topRecvEnv moduleInfo ts ++ checkTSStmtSwitch aliasEnv ts) th0093
 
 /-- Subset check with `@thales-expect-error` directives applied.
     Suppresses TH diagnostics on lines covered by matching directives and

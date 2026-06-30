@@ -87,6 +87,7 @@ soundness check).
 | TH0090 | Subset       | Circular imports                                          |
 | TH0091 | Subset       | Regex literals are not supported                          |
 | TH0092 | Subset       | Unsupported unary operator (`typeof`/`void`/`delete`)     |
+| TH0093 | Subset       | Top-level mutable referenced by a hoisted declaration     |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                   |
 | TH9001 | Directive    | Directive code mismatch                                   |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed                 |
@@ -1109,4 +1110,23 @@ function f(x: string): boolean {
   }
   return false;
 }
+```
+
+### TH0093 — Top-level mutable variable referenced by a hoisted declaration
+
+A top-level `let` that is mutated at module level is lowered into the `main`
+`IO` do-block, where it is a local `let mut`. A hoisted declaration — a
+`function`, or a `const` emitted as a top-level `def` — is elaborated outside
+`main` and so cannot reference it. Move the value into a `const`, or compute it
+where it is used. (Widening this is a future task.)
+
+```ts
+let total = 0;
+for (const x of [1, 2, 3]) {
+  total += x;
+}
+function report(): number {
+  return total; // TH0093: `total` is a `main`-local `let mut`
+}
+console.log(report());
 ```
