@@ -1,3 +1,3 @@
-let x = 0;
+const o = { a: 0 };
 // @thales-expect-error
-x = 1;
+o.a = 1;
