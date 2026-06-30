@@ -287,24 +287,24 @@ private def renderFloat (f : Float) : String :=
 /-- Render type params as `{α : Type} {β : Type}` (implicit binders). -/
 private def renderTypeParams (ps : List String) : String :=
   if ps.isEmpty then ""
-  else " " ++ String.intercalate " " (ps.map fun p => "{" ++ p ++ " : Type}")
+  else " " ++ String.intercalate " " (ps.map fun p => "{" ++ escapeIdent p ++ " : Type}")
 
 mutual
 
   partial def renderType : LType → String
-    | .var n    => n
-    | .const n  => n
-    | .app head [] => head
+    | .var n    => escapeIdent n
+    | .const n  => escapeIdent n
+    | .app head [] => escapeIdent head
     | .app head args =>
-        s!"({head} {String.intercalate " " (args.map renderTypeAtom)})"
+        s!"({escapeIdent head} {String.intercalate " " (args.map renderTypeAtom)})"
     | .arrow f t => s!"({renderType f} → {renderType t})"
     | .prod l r  => s!"({renderType l} × {renderType r})"
     | .sum l r   => s!"{renderTypeAtom l} ⊕ {renderType r}"
     | .inferred  => "_"
 
   partial def renderTypeAtom : LType → String
-    | .var n   => n
-    | .const n => n
+    | .var n   => escapeIdent n
+    | .const n => escapeIdent n
     | other    => s!"({renderType other})"
 
 end
@@ -366,7 +366,7 @@ mutual
         s!"{renderExprAtom obj}.{escapeIdent field}"
     | .structLit typeName fields =>
         let fieldS := fields.map fun (n, e) => s!"{escapeIdent n} := {renderExpr e}"
-        s!"(\{ {String.intercalate ", " fieldS} : {typeName} })"
+        s!"(\{ {String.intercalate ", " fieldS} : {escapeIdent typeName} })"
     | .anonCtor args proofTactic =>
         let argsS := args.map renderExpr
         let parts := argsS ++ [proofTactic]
@@ -453,7 +453,7 @@ partial def renderDecl : LDecl → String
   | .struct name tps fields =>
       let tpsS       := renderTypeParams tps
       let fieldLines := fields.map fun (n, t) => s!"{escapeIdent n} : {renderType t}"
-      s!"structure {name}{tpsS} where\n{indent (lines fieldLines)}\n  deriving Repr, BEq"
+      s!"structure {escapeIdent name}{tpsS} where\n{indent (lines fieldLines)}\n  deriving Repr, BEq"
   | .inductive_ name tps ctors =>
       let tpsS     := renderTypeParams tps
       let ctorLines := ctors.map fun (ctorName, fields) =>
@@ -461,10 +461,10 @@ partial def renderDecl : LDecl → String
         else
           let fieldS := fields.map fun (fn, ft) => s!"({escapeIdent fn} : {renderType ft})"
           s!"| {ctorName} {String.intercalate " " fieldS}"
-      s!"inductive {name}{tpsS} where\n{indent (lines ctorLines)}\n  deriving Repr"
+      s!"inductive {escapeIdent name}{tpsS} where\n{indent (lines ctorLines)}\n  deriving Repr"
   | .abbrev_ name tps ty =>
       let tpsS := renderTypeParams tps
-      s!"abbrev {name}{tpsS} := {renderType ty}"
+      s!"abbrev {escapeIdent name}{tpsS} := {renderType ty}"
   | .namespace_ name body =>
       let inner := body.map renderDecl
       s!"namespace {name}\n\n{String.intercalate "\n\n" inner}\n\nend {name}"

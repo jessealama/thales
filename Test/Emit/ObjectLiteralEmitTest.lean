@@ -111,3 +111,14 @@ def testAnonObjectReturnUnsupported : IO Unit :=
     ["(unsupported:"]
 
 #eval testAnonObjectReturnUnsupported
+
+-- A record TYPE name that is a Lean keyword (legal TS identifier) must be
+-- escaped at emit — in the `structure` declaration, the return-type ascription,
+-- and the `{ … : T }` construction — or the emitted Lean fails to compile.
+def testKeywordTypeNameEscaped : IO Unit :=
+  expectEmit
+    "interface end { v: bigint }
+     function mk(v: bigint): end { return { v }; }" "M"
+    ["structure «end» where", ": «end» :=", "v := v : «end»"]
+
+#eval testKeywordTypeNameEscaped
