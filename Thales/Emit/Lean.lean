@@ -27,6 +27,10 @@ structure EmitEnv where
   -- un-annotated `const x = f(...)` record x's binding so Option-narrowing
   -- can fire on it.
   funcRetTypes : Std.HashMap String TSType := {}
+  -- Map from interface / single-record-alias name → declared fields in
+  -- declared order. Lets object-literal construction resolve the target
+  -- structure and field types (#15/#81).
+  structFields : Std.HashMap String (List (String × TSType)) := {}
   -- Counter used to generate unique dite-binder names. Bumped each time
   -- a fresh `h_i` is introduced (e.g. for `is<T>`-narrowing shadow-lets).
   diteBinderCounter : Nat := 0
@@ -214,6 +218,31 @@ private def literalCtorValueExpr : TSType → Option LExpr
   | .paren inner     => literalCtorValueExpr inner
   | _ => none
 
+/-- The `(name, type)` property fields of an object type, in declared order,
+    dropping methods and index signatures. Single source for structure-field
+    emission (#13) and the `structFields` construction env (#15/#81). -/
+private def objectTypeFields (members : List TSObjectMember) : List (String × TSType) :=
+  members.filterMap fun
+    | .property f t _ _ => some (f, t)
+    | _ => none
+
+/-- The `(name, type)` property fields of an interface, in declared order,
+    dropping methods. -/
+private def interfaceFields (members : List TSInterfaceMember) : List (String × TSType) :=
+  members.filterMap fun
+    | .property f t _ _ => some (f, t)
+    | _ => none
+
+/-- The `(key, valueExpr)` entries of an object literal, covering shorthand
+    (`{ x }`) and explicit (`{ x: e }`) properties; spreads and computed keys
+    are dropped. Shared by the discriminated-union ctor path and struct
+    construction (#15/#81). -/
+private def objectLiteralEntries (props : List ObjectProperty) : List (String × Expression) :=
+  props.filterMap fun
+    | .regular _ (.literal _ (.string k) _) v _ _ _ => some (k, v)
+    | .regular _ (.identifier _ k) v _ _ _          => some (k, v)
+    | _                                             => none
+
 /-- Emit a type alias.
     - Discriminated object unions become Lean `inductive` types.
     - Same-primitive literal unions (`-1 | 0 | 1`, `"a" | "b"`, `true | false`)
@@ -223,6 +252,7 @@ private def literalCtorValueExpr : TSType → Option LExpr
     - Everything else falls back to an `abbrev`.
 
     Returns a list because the literal-union case produces two decls. -/
+
 def emitTypeAlias (name : String) (typeParams : List String) (ty : TSType) : List LDecl :=
   match ty with
   | .union branches =>
@@ -245,15 +275,16 @@ def emitTypeAlias (name : String) (typeParams : List String) (ty : TSType) : Lis
               [.inductive_ name typeParams leanCtors,
                .instance_ (.app "Coe" [.const name, prim]) "coe" coeBody]
           | _, _, _ => [.abbrev_ name typeParams (emitType ty)]
+  | .object members =>
+      let fields := (objectTypeFields members).map fun (n, t) => (n, emitType t)
+      [.struct name typeParams fields]
   | _ => [.abbrev_ name typeParams (emitType ty)]
 
 /-- Emit an interface as a Lean structure. Only property members are
     kept for v1; method members are skipped (v2 adds classes/methods). -/
 def emitInterface (name : String) (typeParams : List String)
     (members : List TSInterfaceMember) : LDecl :=
-  let fields := members.filterMap fun
-    | .property fname fty _opt _ro => some (fname, emitType fty)
-    | .method _ _ _ _ => none
+  let fields := (interfaceFields members).map fun (n, t) => (n, emitType t)
   .struct name typeParams fields
 
 /-- Extract type-param names from a list of TSTypeParam. -/
@@ -409,6 +440,15 @@ private def emitLiteralAsCtor
 private partial def stripParen : TSType → TSType
   | .paren inner => stripParen inner
   | other => other
+
+/-- If `targetTy` is (modulo parens) a bare reference to a name registered
+    in `structFields`, return that name; otherwise `none`. Anonymous object
+    types and union/alias references that are not registered structures yield
+    `none`, which routes the literal to the TH9005 rejection. -/
+private def structNameOfTarget (env : EmitEnv) : TSType → Option String
+  | .paren inner => structNameOfTarget env inner
+  | .ref n []    => if env.structFields.contains n then some n else none
+  | _            => none
 
 /-- Refinement names introduced by `@thales/prelude`. These are recognized
     bare so an imported `const b: Byte = …` resolves to `.refinement .byte`
@@ -861,13 +901,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
             | none => List.replicate args.length none
         | none => List.replicate args.length none
       let coerceArg : Expression → Option TSType → LExpr := fun a tyOpt =>
-        let raw := emitExprEnv env a
-        match tyOpt with
-        | some ty =>
-            ((emitRefinementLiteral env.aliasEnv (some ty) a)
-              <|> (emitLiteralAsCtor env.aliasEnv (some ty) a))
-              |>.getD raw
-        | none => raw
+        emitExprWithExpectedTy env tyOpt a
       let coercedArgs : List LExpr := List.zipWith coerceArg args paramTys
       .app (emitExprEnv env callee) coercedArgs
   -- Member expression
@@ -946,10 +980,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   -- object literals there is no clean shallow embedding in v1 — fall through
   -- to the placeholder and rely on the type checker to have rejected earlier.
   | .objectExpr _ props =>
-      let regularProps : List (String × Expression) := props.filterMap fun
-        | .regular _ (.literal _ (.string k) _) v _ _ _ => some (k, v)
-        | .regular _ (.identifier _ k) v _ _ _          => some (k, v)
-        | _                                             => none
+      let regularProps := objectLiteralEntries props
       let discVal : Option String := regularProps.findSome? fun (k, v) =>
         if k == "kind" then
           match v with
@@ -992,6 +1023,48 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
     skipped — the caller must guarantee operands are `Float`-typed. -/
 partial def emitExpr : Expression → LExpr := emitExprEnv {}
 
+/-- Lower an object literal `{ … }` to a Lean structure instance when the
+    target type resolves to a known structure. Field values are emitted in the
+    structure's declared field order, each with its declared field type as the
+    expected type (so nested record fields recurse). Returns `none` (→ caller
+    falls through to `.unsupported`, then TH9005) when `expr` is not an object
+    literal or the target is not a known structure. -/
+partial def emitObjectLiteralAsStruct
+    (env : EmitEnv) (targetTy : Option TSType) (expr : Expression) : Option LExpr := do
+  let .objectExpr _ props := expr | none
+  let ty ← targetTy
+  let structName ← structNameOfTarget env ty
+  let fields ← env.structFields[structName]?
+  let provided := objectLiteralEntries props
+  let fieldExprs ← fields.mapM fun (fname, fty) => do
+    let v ← provided.lookup fname
+    some (fname, emitExprWithExpectedTy env (some fty) v)
+  some (.structLit structName fieldExprs)
+
+/-- Lower an array literal whose element target resolves to a known structure,
+    recursing element-wise with that element type. Only intercepts the
+    known-structure case; all other arrays fall through to the existing
+    `.arrayExpr` path in `emitExprEnv` for byte-identical output. -/
+partial def emitArrayLiteralWithElemTy
+    (env : EmitEnv) (targetTy : Option TSType) (expr : Expression) : Option LExpr := do
+  let .arrayExpr _ elements := expr | none
+  let ty ← targetTy
+  let elemTy ← match stripParen ty with | .array et => some et | _ => none
+  let _ ← structNameOfTarget env elemTy
+  let exprs := elements.filterMap id |>.map (emitExprWithExpectedTy env (some elemTy))
+  some (.app (.var "List.toArray") [mkListLit exprs])
+
+/-- Type-directed expression emission: the single entry point for positions
+    where the target type is known. Tries the literal-lowering helpers in
+    priority order, then falls back to the plain `emitExprEnv`. -/
+partial def emitExprWithExpectedTy
+    (env : EmitEnv) (targetTy : Option TSType) (expr : Expression) : LExpr :=
+  ((emitRefinementLiteral env.aliasEnv targetTy expr)
+    <|> (emitLiteralAsCtor env.aliasEnv targetTy expr)
+    <|> (emitObjectLiteralAsStruct env targetTy expr)
+    <|> (emitArrayLiteralWithElemTy env targetTy expr))
+    |>.getD (emitExprEnv env expr)
+
 /-- Emit a list of variable declarators as nested `let` bindings.
     `env` is consulted so that initializers whose target type resolves
     to a refinement (e.g. `Byte`, `Natural`) get wrapped in a Subtype
@@ -1008,10 +1081,7 @@ partial def emitVarDecl (env : EmitEnv)
           let ty := typeAnnotation.map emitType
           let targetTy : Option TSType := typeAnnotation
           let initExpr := match init with
-            | some e =>
-                ((emitRefinementLiteral env.aliasEnv targetTy e)
-                  <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
-                  |>.getD (emitExprEnv env e)
+            | some e => emitExprWithExpectedTy env targetTy e
             | none   => .var "()"
           let env' := recordDeclBinding env id.name typeAnnotation init
           .letE id.name ty initExpr (emitVarDecl env' rest body)
@@ -1021,10 +1091,7 @@ partial def emitVarDecl (env : EmitEnv)
     block, expression, `return`, and `switch` on discriminated unions. -/
 partial def emitBodyEnv (env : EmitEnv) : List Statement → LExpr
   | .returnStmt _ (some e) :: _ =>
-      let emitted :=
-        ((emitRefinementLiteral env.aliasEnv env.retTy e)
-          <|> (emitLiteralAsCtor env.aliasEnv env.retTy e))
-          |>.getD (emitExprEnv env e)
+      let emitted := emitExprWithExpectedTy env env.retTy e
       let inner := wrapReturn env.retTy emitted
       if env.throwTypes.isEmpty then inner else .ctor "ok" [inner]
   | .returnStmt _ none :: _     => .var "()"
@@ -1235,10 +1302,7 @@ partial def emitBody : List Statement → LExpr :=
 partial def emitBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
     : List Statement → List LDoStmt
   | .returnStmt _ (some e) :: _ =>
-      let emitted :=
-        ((emitRefinementLiteral env.aliasEnv env.retTy e)
-          <|> (emitLiteralAsCtor env.aliasEnv env.retTy e))
-          |>.getD (emitExprEnv env e)
+      let emitted := emitExprWithExpectedTy env env.retTy e
       [.ret (wrapReturn env.retTy emitted)]
   | .returnStmt _ none :: _ => [.ret (.var "()")]
   | .variableDecl (.mk _ decls _) :: rest =>
@@ -1432,10 +1496,7 @@ partial def emitVarDeclDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
           let ty := typeAnnotation.map emitType
           let targetTy : Option TSType := typeAnnotation
           let initExpr := match init with
-            | some e =>
-                ((emitRefinementLiteral env.aliasEnv targetTy e)
-                  <|> (emitLiteralAsCtor env.aliasEnv targetTy e))
-                  |>.getD (emitExprEnv env e)
+            | some e => emitExprWithExpectedTy env targetTy e
             | none   => .var "()"
           let env' := recordDeclBinding env id.name typeAnnotation init
           let bind := if info.mutated.contains id.name
@@ -1553,7 +1614,8 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     (funcParamTypes : Std.HashMap String (List TSType) := {})
     (total : Bool := false)
     (funcRetTypes : Std.HashMap String TSType := {})
-    (topBindings : Std.HashMap String TSType := {}) : Option LDecl :=
+    (topBindings : Std.HashMap String TSType := {})
+    (structFields : Std.HashMap String (List (String × TSType)) := {}) : Option LDecl :=
   let normalizedRetTy := normalizeForEmit retTy
   let normalizedParams := params.map fun (n, t) => (n, normalizeForEmit t)
   -- Seed with the top-level bindings, which `emit` passes pre-normalized
@@ -1563,7 +1625,7 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     normalizedParams.foldl (fun m (n, t) => m.insert n t) topBindings
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
                          throwTypes := throws, funcThrowsEnv, funcParamTypes,
-                         funcRetTypes }
+                         funcRetTypes, structFields }
   let stmts := match body with
     | .blockStmt _ ss => ss
     | other           => [other]
@@ -1775,8 +1837,25 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
         | some t => acc.insert name t
         | none => acc
     | _ => acc) {}
+  -- Map every interface and single-record `type` alias to its declared fields
+  -- (in order), so object-literal construction can resolve the target structure
+  -- and field types (#15/#81). Unwrap `export <decl>` so `export interface` /
+  -- `export type` are registered too.
+  let structFields : Std.HashMap String (List (String × TSType)) :=
+    (prog.body.map fun s => match s with
+      | .exportDecl _ inner => inner
+      | other => other).foldl (fun acc ts =>
+      match ts with
+      | .interfaceDecl _ name _ _ members =>
+          acc.insert name (interfaceFields members)
+      | .typeAliasDecl _ name _ _ =>
+          match resolvedAliases[name]? with
+          | some (.object members) =>
+              acc.insert name (objectTypeFields members)
+          | _ => acc
+      | _ => acc) {}
   let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
-                            funcThrowsEnv, funcParamTypes, funcRetTypes }
+                            funcThrowsEnv, funcParamTypes, funcRetTypes, structFields }
   -- Normalized once here; every `emitFuncDecl` call seeds its bindingEnv
   -- from this map.
   let topBindingsNorm : Std.HashMap String TSType :=
@@ -1822,7 +1901,7 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
         let throws : List String := match throwsAnn with
           | .declared ts => ts
           | .absent      => []
-        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total funcRetTypes topBindingsNorm)
+        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total funcRetTypes topBindingsNorm structFields)
     | .annotatedVarDecl _ _kind name typeAnn (some init) =>
         match init with
         | .arrowFunctionExpr _ arrowParams body _isExpr async arrowRetAnn =>
@@ -1833,7 +1912,7 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
               let (simpleParams, retTy) := arrowFuncParts arrowParams effectiveAnn
               optToList (emitFuncDecl resolvedAliases name [] simpleParams retTy (match body with
                 | .inl e  => .blockStmt {} [.returnStmt {} (some e)]
-                | .inr s  => s) [] funcThrowsEnv funcParamTypes false funcRetTypes topBindingsNorm)
+                | .inr s  => s) [] funcThrowsEnv funcParamTypes false funcRetTypes topBindingsNorm structFields)
         | other =>
             -- Non-arrow const: prefer the user's annotation when present.
             -- Otherwise, attempt to infer a Lean type from the initializer
