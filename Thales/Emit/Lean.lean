@@ -1544,6 +1544,107 @@ private partial def stmtsHaveIO : List Statement → Bool
         | _ => false
       hereIO || stmtsHaveIO rest
 
+/-- Top-level `console.log(arg)` as a do-element (#49). A faithful port of
+    `buildModule`'s `console.log` arm: a single argument that is a `@throws`
+    call matches on its `Except`; a single plain argument is `consoleLog arg`;
+    multiple arguments lower to `consoleLogN [JSShow.jsShow …]`. Returns `none`
+    if `e` is not a `console.log` call (or has no arguments). -/
+private def consoleLogDoStmt (env : EmitEnv) (e : Expression) : Option LDoStmt :=
+  match e with
+  | .callExpr _
+      (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
+      args _ =>
+      match args with
+      | [arg] =>
+          let calleeNameOpt : Option String := match arg with
+            | .callExpr _ (.identifier _ fname) _ _ => env.funcThrowsEnv.get? fname |>.map (fun _ => fname)
+            | _ => none
+          let argExpr := emitExprEnv env arg
+          match calleeNameOpt with
+          | some _ =>
+              let okArm : LPattern × List LDoStmt :=
+                (.ctor "ok" [.var "v__"], [.doExpr (.app (.var "consoleLog") [.var "v__"])])
+              let errArm : LPattern × List LDoStmt :=
+                (.ctor "error" [.wildcard], [.doExpr (.app (.var "pure") [.var "()"])])
+              some (.matchDo argExpr [okArm, errArm])
+          | none => some (.doExpr (.app (.var "consoleLog") [argExpr]))
+      | _ :: _ =>
+          let argExprs := args.map (emitExprEnv env)
+          let listLit := mkListLit (argExprs.map fun e => .app (.var "JSShow.jsShow") [e])
+          some (.doExpr (.app (.var "consoleLogN") [listLit]))
+      | [] => none
+  | _ => none
+
+/-- Bare top-level call as a do-element (#49). A faithful port of
+    `buildModule`'s bare-call arm: the throwing-prelude constructors run their
+    `*Effect`; `@throws` callees match on the `Except` (panicking on `.error`);
+    plain calls are evaluated for side effects. `none` if `e` is not an
+    identifier-headed call. -/
+private def bareCallDoStmt (env : EmitEnv) (e : Expression) : Option LDoStmt :=
+  match e with
+  | .callExpr _ (.identifier _ fname) callArgs _ =>
+      let asEffectName : Option String := match fname with
+        | "asInteger" => some "asIntegerEffect"
+        | "asNatural" => some "asNaturalEffect"
+        | "asByte" => some "asByteEffect"
+        | "asBit" => some "asBitEffect"
+        | _ => none
+      match asEffectName with
+      | some effFn => some (.doExpr (.app (.var effFn) (callArgs.map (emitExprEnv env))))
+      | none =>
+        match env.funcThrowsEnv.get? fname with
+        | some _ =>
+            let callLExpr := emitExprEnv env e
+            let okArm : LPattern × List LDoStmt :=
+              (.ctor "ok" [.wildcard], [.doExpr (.app (.var "pure") [.var "()"])])
+            let errArm : LPattern × List LDoStmt :=
+              (.ctor "error" [.wildcard], [.doExpr (.app (.var "panic!") [.str s!"throw from {fname}"])])
+            some (.matchDo callLExpr [okArm, errArm])
+        | none => some (.doExpr (emitExprEnv env e))
+  | _ => none
+
+/-- Top-level `try { console.log(f(args)) } catch (e) { console.log(g) }` where
+    `f` is `@throws`, as a do-element (#49). A faithful port of `buildModule`'s
+    try/catch arm: a `match` on the `Except`, with the catch body's
+    `console.log` as the `.error` action. `none` if no such shape. -/
+private def tryCatchDoStmt (env : EmitEnv) : Statement → Option LDoStmt
+  | .tryStmt _ tryBlock (some (CatchClause.mk _ paramOpt catchBody _catchType)) _finalizer =>
+      let tryStmts := match tryBlock with
+        | .blockStmt _ stmts => stmts
+        | other => [other]
+      let catchVar : String := match paramOpt with
+        | some (.identifier id) => id.name
+        | _ => "e__"
+      let catchStmts := match catchBody with
+        | .blockStmt _ stmts => stmts
+        | other => [other]
+      let catchEffect : Option LExpr := catchStmts.findSome? fun s =>
+        match s with
+        | .exprStmt _ (.callExpr _
+            (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
+            [catchArg] _) =>
+            some (.app (.var "consoleLog") [emitExprEnv env catchArg])
+        | _ => none
+      tryStmts.findSome? fun s =>
+        match s with
+        | .exprStmt _ (.callExpr _
+            (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
+            [(.callExpr _ (.identifier _ calleeName) _ _)] _) =>
+            match env.funcThrowsEnv.get? calleeName with
+            | some _ =>
+                let callLExpr := match s with
+                  | .exprStmt _ (.callExpr _ _ [cArg] _) => emitExprEnv env cArg
+                  | _ => .var "()"
+                let okArm : LPattern × List LDoStmt :=
+                  (.ctor "ok" [.var "v__"], [.doExpr (.app (.var "consoleLog") [.var "v__"])])
+                let errArm : LPattern × List LDoStmt :=
+                  (.ctor "error" [.var catchVar],
+                   [.doExpr (catchEffect.getD (.app (.var "pure") [.var "()"]))])
+                some (.matchDo callLExpr [okArm, errArm])
+            | none => none
+        | _ => none
+  | _ => none
+
 mutual
 
 /-- IO-aware sibling of `emitBodyEnv`: lower a top-level statement list into a
@@ -1602,6 +1703,131 @@ partial def emitIfIO (env : EmitEnv) (cond : Expression) (thn : Statement)
         .ite (emitExprEnv env cond) (emitIOBodyEnv env thnStmts) elseExpr
   if stmtsHaveIO rest then .doSeq [ifAct, emitIOBodyEnv env rest]
   else ifAct
+
+end
+
+mutual
+
+/-- Lower a top-level statement list into the statements of `def main : IO Unit
+    := do …` (#49). The single host for all executable module-level code.
+    Mirrors `emitBodyDo` (the `Id.run do` emitter for function bodies) but:
+    (a) targets a plain IO `do`, so it keeps `console.log` and bare calls
+    instead of dropping them; (b) has no `return` value; (c) handles top-level
+    `try`/`catch`. The mutation/loop arms are verbatim ports of `emitBodyDo`'s
+    with the recursion retargeted to `emitIOBodyDo`. -/
+partial def emitIOBodyDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
+    : List Statement → List LDoStmt
+  | [] => []
+  | .variableDecl (.mk _ decls _) :: rest =>
+      emitIOVarDeclDo env info decls rest
+  -- `x = e` / `x OP= e`
+  | .exprStmt _ (.assignmentExpr b op (.identifier _ name) rhs) :: rest =>
+      let value : LExpr :=
+        match op.compoundToBinary with
+        | some binOp => emitExprEnv env (.binaryExpr b binOp (.identifier b name) rhs)
+        | none => emitExprEnv env rhs
+      .assign name value :: emitIOBodyDo env info rest
+  -- `x++` / `x--`
+  | .exprStmt _ (.updateExpr b op (.identifier _ name) _) :: rest =>
+      let one : Expression := .literal b (.number 1) "1"
+      let binOp : BinaryOperator := match op with | .inc => .add | .dec => .sub
+      .assign name (emitExprEnv env (.binaryExpr b binOp (.identifier b name) one))
+        :: emitIOBodyDo env info rest
+  | .blockStmt _ inner :: rest => emitIOBodyDo env info (inner ++ rest)
+  -- top-level try/catch (port of buildModule's `#eval match` arm)
+  | (s@(.tryStmt _ _ _ _)) :: rest =>
+      match tryCatchDoStmt env s with
+      | some stmt => stmt :: emitIOBodyDo env info rest
+      | none => emitIOBodyDo env info rest
+  -- `if`: a plain boolean condition threads mutation via `ifDo`; a narrowing
+  -- condition (refinement predicate or null-test) reuses `emitIfIO` embedded
+  -- as a bare IO action (parity path — preserves the `dite` narrowing).
+  | .ifStmt _ cond thn elsOpt :: rest =>
+      match detectRefinementPredicate cond, nullCheckVar cond with
+      | none, none =>
+          let thnDo := emitIOBodyDo env info (blockStmts thn)
+          let elsDo := match elsOpt with
+            | some els => emitIOBodyDo env info (blockStmts els)
+            | none => []
+          .ifDo (emitExprEnv env cond) thnDo elsDo :: emitIOBodyDo env info rest
+      | _, _ =>
+          .doExpr (emitIfIO env cond thn elsOpt []) :: emitIOBodyDo env info rest
+  -- console.log / bare calls / other expr statements (KEPT, unlike emitBodyDo)
+  | .exprStmt _ e :: rest =>
+      match consoleLogDoStmt env e with
+      | some s => s :: emitIOBodyDo env info rest
+      | none =>
+        match bareCallDoStmt env e with
+        | some s => s :: emitIOBodyDo env info rest
+        | none => emitIOBodyDo env info rest   -- effect-free expr: drop
+  -- #25 loops — verbatim ports of emitBodyDo arms with emitIOBodyDo recursion
+  | s@(.forOfStmt _ _ _ _ _) :: rest | s@(.forStmt _ _ _ _ _) :: rest =>
+      match LoopShape.classifyLoop s with
+      | .forOf x rhs rhsExpr body =>
+          let bodyEnv? : Option EmitEnv :=
+            match rhs with
+            | .arrayLit _ => some env
+            | .ident arrName =>
+                (arrayElemTy? env arrName).map fun et =>
+                  { env with bindingEnv := env.bindingEnv.insert x et }
+          match bodyEnv? with
+          | none => unloweredDoStmt
+          | some env' =>
+              .forDo x (emitExprEnv env rhsExpr) (emitIOBodyDo env' info (blockStmts body))
+                :: emitIOBodyDo env info rest
+      | .canonicalFor i bound body =>
+          let iter? : Option LExpr :=
+            match bound with
+            | .inl n => some (.rangeTo (.int (Int.ofNat n)))
+            | .inr arrName =>
+                if (arrayElemTy? env arrName).isSome then
+                  some (.rangeTo (.proj (.var arrName) "size")) else none
+          match iter? with
+          | none => unloweredDoStmt
+          | some iterExpr =>
+              let shim : LDoStmt := .letPure i (some (.const "Float")) (.proj (.var i) "toFloat")
+              let env' : EmitEnv := { env with bindingEnv := env.bindingEnv.insert i .number }
+              .forDo i iterExpr (shim :: emitIOBodyDo env' info (blockStmts body))
+                :: emitIOBodyDo env info rest
+      | .notLowerable =>
+          match LoopShape.desugarGeneralFor s with
+          | some desugared => emitIOBodyDo env info (desugared ++ rest)
+          | none => unloweredDoStmt
+  | .whileStmt _ test body :: rest =>
+      if LoopShape.hasLabeledBreakOrContinue body then unloweredDoStmt
+      else .whileDo (emitExprEnv env test) (emitIOBodyDo env info (blockStmts body))
+        :: emitIOBodyDo env info rest
+  | .doWhileStmt _ body test :: rest =>
+      if LoopShape.hasLabeledBreakOrContinue body
+          || LoopShape.hasOwnUnlabeledContinue body then unloweredDoStmt
+      else
+        match emitExprEnv env test with
+        | .bool true => .whileDo (.bool true) (emitIOBodyDo env info (blockStmts body))
+            :: emitIOBodyDo env info rest
+        | leanTest => .repeatUntilDo (emitIOBodyDo env info (blockStmts body))
+            (.app (.var "not") [leanTest]) :: emitIOBodyDo env info rest
+  | .breakStmt _ none :: _ => [.breakDo]
+  | .continueStmt _ none :: _ => [.continueDo]
+  | .emptyStmt _ :: rest | .debuggerStmt _ :: rest => emitIOBodyDo env info rest
+  | _ :: _ => unloweredDoStmt
+
+/-- Top-level declarator lowering (#49): mutated names become `let mut`,
+    everything else an immutable `let`. Mirrors `emitVarDeclDo`. -/
+partial def emitIOVarDeclDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
+    (decls : List VariableDeclarator) (rest : List Statement) : List LDoStmt :=
+  match decls with
+  | [] => emitIOBodyDo env info rest
+  | .mk _ (.identifier id) init typeAnnotation :: moreDecls =>
+      let ty := typeAnnotation.map emitType
+      let initExpr := match init with
+        | some e => emitExprWithExpectedTy env typeAnnotation e
+        | none   => .var "()"
+      let env' := recordDeclBinding env id.name typeAnnotation init
+      let bind := if info.mutated.contains id.name
+        then LDoStmt.letMut id.name ty initExpr
+        else LDoStmt.letPure id.name ty initExpr
+      bind :: emitIOVarDeclDo env' info moreDecls rest
+  | _ :: moreDecls => emitIOVarDeclDo env info moreDecls rest
 
 end
 
