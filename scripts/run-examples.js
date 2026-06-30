@@ -511,7 +511,7 @@ function runDirectHarnessChecks() {
   const check = path.join(tmp, 'input.ts');
   fs.writeFileSync(
     check,
-    'let x = 0;\n// @thales-expect-error TH0001\nx = 1;\n',
+    'const o = { a: 0 };\n// @thales-expect-error TH0003\no.a = 1;\n',
   );
   try {
     // Emit mode should fail with TH9002 and write no .lean sidecar.

@@ -2131,14 +2131,14 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
   let bodyForEmit : List TSStatement := prog.body.map fun s => match s with
     | .exportDecl _ inner => inner
     | other => other
-  -- Module-level mutation/loop analysis over the executable top-level JS
-  -- statements, treated as one block (no params at module level). Drives the
-  -- `let mut` vs hoisted-`def` split for top-level `let`s (#49).
-  let topJsStmts : List Statement := bodyForEmit.filterMap fun
-    | .js s => some s
-    | _ => none
+  -- Module-level mutation/loop analysis over the executable top-level
+  -- statements (var decls reconstructed so their bindings are seen), treated
+  -- as one block (no params at module level). The SAME block the subset
+  -- checker analyzes (#49). Drives the `let mut` vs hoisted-`def` split for
+  -- top-level `let`s.
+  let moduleStmts : List Statement := moduleExecutableStatements prog.body
   let moduleInfo : EscapeAnalysis.MutationInfo :=
-    EscapeAnalysis.analyze [] (.blockStmt {} topJsStmts)
+    EscapeAnalysis.analyze [] (.blockStmt {} moduleStmts)
   let mutatedTop : Std.HashSet String := moduleInfo.mutated
   let decls : List LDecl := bodyForEmit.flatMap fun ts =>
     match ts with
