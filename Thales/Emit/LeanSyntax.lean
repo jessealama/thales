@@ -74,6 +74,9 @@ inductive LExpr where
   -- end in a `ret` (the emitter guarantees this; a fall-through path would
   -- render a do-block with no value).
   | idRunDo (stmts : List LDoStmt)
+  -- A plain `do …` block (IO, not `Id.run`). Hosts all executable top-level
+  -- statements lowered into `def main : IO Unit := do …` (#49).
+  | ioDo (stmts : List LDoStmt)
   -- Integer range `[0:n]` for `for` loops (#25). Renders as `[0:{n}]`.
   -- Bracket-delimited, so atomic — renderExprAtom must NOT wrap it in parens.
   | rangeTo (stop : LExpr)
@@ -86,6 +89,7 @@ inductive LDoStmt where
   | letMut (name : String) (ty : Option LType) (value : LExpr)   -- let mut n := e
   | letPure (name : String) (ty : Option LType) (value : LExpr)  -- let n := e
   | assign (name : String) (value : LExpr)                       -- n := e
+  | doExpr (value : LExpr)                                       -- bare IO action: e
   | ret (value : LExpr)                                          -- return e
   -- `if c then …` / `if c then … else …`; an empty branch renders `pure ()`
   | ifDo (cond : LExpr) (thn : List LDoStmt) (els : List LDoStmt)
@@ -212,10 +216,11 @@ mutual
     | .dite_ _ c t e        => c.collectUnsupported ++ t.collectUnsupported ++ e.collectUnsupported
     | .doSeq stmts          => stmts.foldl (fun a e => a ++ e.collectUnsupported) []
     | .idRunDo stmts        => stmts.foldl (fun a s => a ++ s.collectUnsupported) []
+    | .ioDo stmts           => stmts.foldl (fun a s => a ++ s.collectUnsupported) []
     | .rangeTo stop         => stop.collectUnsupported
     | .var _ | .int _ | .float _ | .str _ | .bool _ => []
   partial def LDoStmt.collectUnsupported : LDoStmt → List String
-    | .letMut _ _ v | .letPure _ _ v | .assign _ v | .ret v => v.collectUnsupported
+    | .letMut _ _ v | .letPure _ _ v | .assign _ v | .ret v | .doExpr v => v.collectUnsupported
     | .ifDo c thn els       => c.collectUnsupported
                                  ++ thn.foldl (fun a s => a ++ s.collectUnsupported) []
                                  ++ els.foldl (fun a s => a ++ s.collectUnsupported) []
@@ -386,6 +391,8 @@ mutual
         s!"(do\n{indent body})"
     | .idRunDo stmts =>
         s!"Id.run do\n{indent (renderDoStmts stmts)}"
+    | .ioDo stmts =>
+        s!"do\n{indent (renderDoStmts stmts)}"
     | .rangeTo stop =>
         s!"[0:{renderExpr stop}]"
 
@@ -406,6 +413,7 @@ mutual
           | none   => ""
         s!"let {escapeIdent n}{annot} := {renderExpr v}"
     | .assign n v => s!"{escapeIdent n} := {renderExpr v}"
+    | .doExpr v => renderExpr v
     | .ret v => s!"return {renderExpr v}"
     | .ifDo c thn [] =>
         s!"if {renderExpr c} then\n{indent (renderDoStmts thn)}"
