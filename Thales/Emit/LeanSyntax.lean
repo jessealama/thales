@@ -413,7 +413,14 @@ mutual
           | none   => ""
         s!"let {escapeIdent n}{annot} := {renderExpr v}"
     | .assign n v => s!"{escapeIdent n} := {renderExpr v}"
-    | .doExpr v => renderExpr v
+    -- A bare IO action must render as a SINGLE do-element. A multi-line action
+    -- (a `dite`/`match`/`let` chain from an embedded `emitIfIO`) is wrapped in
+    -- parens so its layout cannot leak into the whitespace-sensitive do-block
+    -- and orphan a trailing `else`; single-line actions (already-parenthesized
+    -- `app`s like `consoleLog x`) render as-is.
+    | .doExpr v =>
+        let s := renderExpr v
+        if s.any (· == '\n') then s!"({s})" else s
     | .ret v => s!"return {renderExpr v}"
     | .ifDo c thn [] =>
         s!"if {renderExpr c} then\n{indent (renderDoStmts thn)}"

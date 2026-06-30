@@ -2037,6 +2037,26 @@ private def ldeclName : LDecl → Option String
   | .abbrev_ n .. => some n
   | _ => none
 
+/-- The JS statement a top-level item contributes to `def main`, or `none` if
+    it is a hoisted declaration (function / type / interface / enum, a `const`,
+    or a non-mutated `let` — all emitted as top-level `def`s). A `let` mutated
+    somewhere at module level (`mutatedTop`) is reconstructed as a
+    `.variableDecl` so `emitIOVarDeclDo` lowers it to a `let mut` inside `main`
+    (#49). -/
+private def mainStreamStmt (mutatedTop : Std.HashSet String) : TSStatement → Option Statement
+  | .js (.variableDecl _) => none  -- top-level var decls arrive as annotatedVarDecl
+  | .js s =>
+      match s with
+      | .exprStmt _ _ | .ifStmt _ _ _ _ | .tryStmt _ _ _ _
+      | .forOfStmt _ _ _ _ _ | .forStmt _ _ _ _ _
+      | .whileStmt _ _ _ | .doWhileStmt _ _ _ | .blockStmt _ _ => some s
+      | _ => none
+  | .annotatedVarDecl b _kind name typeAnn (some init) =>
+      if mutatedTop.contains name then
+        some (.variableDecl (.mk b [.mk b (.identifier { name }) (some init) (typeAnn.map (·.type))] .let_))
+      else none
+  | _ => none
+
 /-- Walk the program and produce a Lean module (structural form). -/
 def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
   let resolvedAliases := resolveAliases prog.body
@@ -2111,7 +2131,16 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
   let bodyForEmit : List TSStatement := prog.body.map fun s => match s with
     | .exportDecl _ inner => inner
     | other => other
-  let decls : List LDecl := bodyForEmit.zipIdx.flatMap fun (ts, idx) =>
+  -- Module-level mutation/loop analysis over the executable top-level JS
+  -- statements, treated as one block (no params at module level). Drives the
+  -- `let mut` vs hoisted-`def` split for top-level `let`s (#49).
+  let topJsStmts : List Statement := bodyForEmit.filterMap fun
+    | .js s => some s
+    | _ => none
+  let moduleInfo : EscapeAnalysis.MutationInfo :=
+    EscapeAnalysis.analyze [] (.blockStmt {} topJsStmts)
+  let mutatedTop : Std.HashSet String := moduleInfo.mutated
+  let decls : List LDecl := bodyForEmit.flatMap fun ts =>
     match ts with
     | .typeAliasDecl _ name tps ty =>
         let bodyTy := resolvedAliases.getD name ty
@@ -2129,6 +2158,8 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
           | .absent      => []
         optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total funcRetTypes topBindingsNorm structFields)
     | .annotatedVarDecl _ _kind name typeAnn (some init) =>
+        if mutatedTop.contains name then []   -- mutated let → lowered inside `main`
+        else
         match init with
         | .arrowFunctionExpr _ arrowParams body _isExpr async arrowRetAnn =>
             if async then []
@@ -2159,114 +2190,9 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
                 -- `(unsupported expr)` would not elaborate).
                 let initExpr := emitExprEnv topEnv other
                 [.def_ name [] [] .inferred initExpr]
-    -- Bare top-level call expression like `asBit(2);`. The TS surface
-    -- semantics is "evaluate for its side effect (throw)". Lean has no
-    -- direct top-level statements, so we emit `#eval (...)` so any panic
-    -- surfaces at module elaboration. Skip when the callee is `console.log`
-    -- (handled below) or an identifier we haven't seen.
-    | .js (.exprStmt _ (call@(.callExpr _ (.identifier _ fname) callArgs _))) =>
-        -- Bare `f(args);` at top level is a side-effect statement. For the
-        -- throwing prelude constructors `asInteger`/`asNatural`/`asByte`/
-        -- `asBit`, emit the IO-effect form which `IO.Process.exit 1`s on
-        -- failure (so the harness sees a nonzero exit, matching tsx's
-        -- RangeError). For `@throws` callees, match on the Except. Otherwise
-        -- evaluate the call for any panic side-effect from `as<T>`.
-        let asEffectName : Option String := match fname with
-          | "asInteger" => some "asIntegerEffect"
-          | "asNatural" => some "asNaturalEffect"
-          | "asByte" => some "asByteEffect"
-          | "asBit" => some "asBitEffect"
-          | _ => none
-        match asEffectName with
-        | some effFn =>
-            let leanArgs := callArgs.map (emitExprEnv topEnv)
-            [.eval_ (.app (.var effFn) leanArgs)]
-        | none =>
-        match funcThrowsEnv.get? fname with
-        | some _ =>
-            let callLExpr := emitExprEnv topEnv call
-            let okArm : LPattern × LExpr := (.ctor "ok" [.wildcard], .app (.var "pure") [.var "()"])
-            let errArm : LPattern × LExpr := (.ctor "error" [.wildcard],
-              .app (.var "panic!") [.str s!"throw from {fname}"])
-            [.eval_ (.match_ callLExpr [okArm, errArm])]
-        | none =>
-            [.eval_ (emitExprEnv topEnv call)]
-    -- Top-level `console.log(arg)` → `#eval consoleLog arg`. When `arg` is a
-    -- call to a `@throws` function, match on the Except to extract the value.
-    -- Multi-arg `console.log(a, b, c)` lowers to `consoleLogN [show a, …]`
-    -- which prints space-separated values, matching JS behavior.
-    | .js (.exprStmt _ (.callExpr _
-        (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
-        args _)) =>
-        match args with
-        | [arg] =>
-            let calleeNameOpt : Option String := match arg with
-              | .callExpr _ (.identifier _ fname) _ _ => funcThrowsEnv.get? fname |>.map (fun _ => fname)
-              | _ => none
-            let argExpr := emitExprEnv topEnv arg
-            match calleeNameOpt with
-            | some _fname =>
-                let okArm : LPattern × LExpr := (.ctor "ok" [.var "v__"], .app (.var "consoleLog") [.var "v__"])
-                let errArm : LPattern × LExpr := (.ctor "error" [.wildcard], .app (.var "pure") [.var "()"])
-                [.eval_ (.match_ argExpr [okArm, errArm])]
-            | none =>
-                [.eval_ (.app (.var "consoleLog") [argExpr])]
-        | _ :: _ =>
-            -- Multi-arg console.log: lower each arg to `JSShow.jsShow` and
-            -- intercalate with spaces, then `IO.println`. We construct this
-            -- via Thales.TS.consoleLogN, defined alongside `consoleLog` in
-            -- Runtime.lean.
-            let argExprs := args.map (emitExprEnv topEnv)
-            let listLit := mkListLit (argExprs.map fun e => .app (.var "JSShow.jsShow") [e])
-            [.eval_ (.app (.var "consoleLogN") [listLit])]
-        | _     => []
-    -- Top-level `try { console.log(f(args)) } catch (e) { console.log(g) }`,
-    -- where `f` is `@throws`, lowers to a `#eval match` over the Except result.
-    | .js (.tryStmt _
-        (tryBlock)
-        (some (CatchClause.mk _ paramOpt catchBody _catchType))
-        _finalizer) =>
-        let tryStmts := match tryBlock with
-          | .blockStmt _ stmts => stmts
-          | other => [other]
-        let catchVar : String := match paramOpt with
-          | some (.identifier id) => id.name
-          | _ => "e__"
-        let catchStmts := match catchBody with
-          | .blockStmt _ stmts => stmts
-          | other => [other]
-        let catchEffect : Option LExpr := catchStmts.findSome? fun s =>
-          match s with
-          | .exprStmt _ (.callExpr _
-              (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
-              [catchArg] _) =>
-              some (.app (.var "consoleLog") [emitExprEnv topEnv catchArg])
-          | _ => none
-        optToList <| tryStmts.findSome? fun s =>
-          match s with
-          | .exprStmt _ (.callExpr _
-              (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
-              [(.callExpr _ (.identifier _ calleeName) _ _)] _) =>
-              match funcThrowsEnv.get? calleeName with
-              | some _ =>
-                  let callLExpr := match s with
-                    | .exprStmt _ (.callExpr _ _ [cArg] _) => emitExprEnv topEnv cArg
-                    | _ => .var "()"
-                  let okArm : LPattern × LExpr :=
-                    (.ctor "ok" [.var "v__"], .app (.var "consoleLog") [.var "v__"])
-                  let errArm : LPattern × LExpr :=
-                    (.ctor "error" [.var catchVar],
-                     catchEffect.getD (.app (.var "pure") [.var "()"]))
-                  some (.eval_ (.match_ callLExpr [okArm, errArm]))
-              | none => none
-          | _ => none
-    -- Top-level `if (cond) { … }` lowers to `#eval <IO action>`, preserving
-    -- `console.log`s inside the branch and any refinement-narrowing. Seed the
-    -- dite-binder counter per item so distinct top-level `if`s get distinct
-    -- binder names (`h0`, `h16`, …) and never collide.
-    | .js (.ifStmt _ cond thn elsOpt) =>
-        let ifEnv : EmitEnv := { topEnv with diteBinderCounter := idx * 16 }
-        [.eval_ (emitIfIO ifEnv cond thn elsOpt [])]
+    -- Executable top-level statements (bare calls, `console.log`, `try`/`catch`,
+    -- `if`, loops, mutation) are no longer emitted here as scattered `#eval`s;
+    -- they flow into the single `def main` do-block below (#49).
     | _ => []
   -- For each trailing `export { local as public }` (local ≠ public), emit a
   -- public alias `def public := local`, appended after the originals so the
@@ -2286,6 +2212,26 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
         | some n => if exportedNames.contains n then d else .private_ d
         | none => d
     else decls
+  -- Collect executable top-level statements (source order) into `def main`,
+  -- appended after the hoisted decls (so `main` can reference them) and after
+  -- the `private`-marking pass (so `main` and its `#eval` stay public). A
+  -- module with no executable statements is a pure library: no `main`, no
+  -- `#eval` (#49).
+  let mainStmts : List Statement := bodyForEmit.filterMap (mainStreamStmt mutatedTop)
+  let mainDo : List LDoStmt := emitIOBodyDo topEnv moduleInfo mainStmts
+  -- The entry point's name must not collide with a user `const main`/`function
+  -- main` (a common idiom: `const main = () => …; console.log(main())`), so
+  -- pick the first candidate that is not a top-level declared name.
+  let topNames : Std.HashSet String := bodyForEmit.foldl (fun acc s =>
+    match declName s with | some n => acc.insert n | none => acc) {}
+  let entryName : String :=
+    (["main", "_thalesMain", "_thalesEntry", "_thalesMain'"].find?
+      (fun n => !topNames.contains n)).getD "_thalesMain"
+  let decls : List LDecl :=
+    if mainDo.isEmpty then decls
+    else decls
+      ++ [ .def_ entryName [] [] (.const "IO Unit") (.ioDo mainDo),
+           .eval_ (.var entryName) ]
   let body : LDecl :=
     if moduleName.isEmpty then .namespace_ "Input" decls
     else .namespace_ moduleName decls
