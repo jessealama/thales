@@ -916,9 +916,19 @@ private def buildParamEnv
     `aliasEnv` is threaded in for for-of array-type resolution; `topRecvEnv`
     carries module-level annotation types for the TH0085 receiver check. -/
 def checkTSStmt (aliasEnv : Std.HashMap String TSType)
-    (topRecvEnv : Std.HashMap String TSType) (ts : TSStatement) : Array Diagnostic :=
+    (topRecvEnv : Std.HashMap String TSType)
+    (moduleInfo : EscapeAnalysis.MutationInfo) (ts : TSStatement) : Array Diagnostic :=
   match ts with
-  | .js s => checkStmt { aliasEnv := aliasEnv, recvEnv := topRecvEnv } s ++ shadowStmts {} [s]
+  | .js s =>
+    -- Module-level executable statement: admit the same mutation (#24) and
+    -- loop (#25) subset as a function body, using the whole-module mutation
+    -- info. `bindingEnv` is empty (no params at module level), so for-of over
+    -- a named array stays out of v1 — array literals still lower (#49).
+    let ctx : MutCtx :=
+      { aliasEnv := aliasEnv, recvEnv := topRecvEnv,
+        info := some moduleInfo, allowEligible := true,
+        noMutZone := false, inTotalFn := false, bindingEnv := {} }
+    checkStmt ctx s ++ shadowStmts {} [s]
   | .annotatedVarDecl b _ _ typeAnn initOpt =>
     checkAnn b.loc typeAnn
       ++ (match initOpt with
@@ -954,14 +964,14 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
           acc ++ pd ++ checkType b.loc ret) #[]
   | .typeAliasDecl b _ _ ty => checkType b.loc ty
   | .enumDecl _ _ _ _ => #[]
-  | .declareStmt _ inner => checkTSStmt aliasEnv topRecvEnv inner
+  | .declareStmt _ inner => checkTSStmt aliasEnv topRecvEnv moduleInfo inner
   | .importDecl b _ _ form _ =>
     match form with
     | .named => #[]
     | .defaultImport => #[mkThalesDiag (.unsupportedImportForm "default import") b.loc]
     | .namespaceImport => #[mkThalesDiag (.unsupportedImportForm "import * as ns") b.loc]
     | .sideEffect => #[mkThalesDiag (.unsupportedImportForm "side-effect import") b.loc]
-  | .exportDecl _ inner => checkTSStmt aliasEnv topRecvEnv inner
+  | .exportDecl _ inner => checkTSStmt aliasEnv topRecvEnv moduleInfo inner
   | .exportNamedDecl _ _ => #[]
   | .exportUnsupported b form =>
     match form with
@@ -984,13 +994,39 @@ def checkTSStmtSwitch (aliasEnv : Std.HashMap String TSType) (ts : TSStatement)
   | .js s => checkSwitchStmt { aliasEnv, bindingEnv := {} } s
   | _ => #[]
 
+/-- A hoisted top-level declaration's source location and the free identifiers
+    referenced by its body/initializer, or `none` if the item is not a hoisted
+    declaration. A hoisted decl (`function`, or a `const`/`let` emitted as a
+    top-level `def`) is elaborated OUTSIDE `main`, so any reference it makes to
+    a top-level mutable `let` (a `main`-local `let mut`) is out of scope (#49). -/
+private partial def hoistedRefs : TSStatement → Option (Option SourceLocation × List String)
+  | .annotatedFuncDecl b _ _ _ _ body _ _ _ _ => some (b.loc, EscapeAnalysis.identsStmt body)
+  | .annotatedVarDecl b _ _ _ (some init) => some (b.loc, EscapeAnalysis.identsExpr init)
+  | .exportDecl _ inner => hoistedRefs inner
+  | _ => none
+
 /-- Walk a TSProgram and return all Thales-subset violations (raw,
     without directive post-processing). -/
 def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
   let aliasEnv := buildAliasEnv prog.body
   let topRecvEnv := buildTopRecvEnv prog.body
+  -- Module-level mutation/loop info over the reconstructed executable top-level
+  -- block — the SAME block `buildModule` lowers into `main` (#49).
+  let moduleInfo := EscapeAnalysis.analyze [] (.blockStmt {} (moduleExecutableStatements prog.body))
+  -- TH0093: a hoisted declaration that reads a top-level mutated `let` would
+  -- emit a `def` referencing a `main`-local binding — reject up front rather
+  -- than emit uncompilable Lean.
+  let th0093 : Array Diagnostic := prog.body.foldl (fun acc ts =>
+    match hoistedRefs ts with
+    | some (loc, refs) =>
+        let refSet : Std.HashSet String := refs.foldl (·.insert ·) {}
+        refSet.fold (fun a n =>
+          if moduleInfo.mutated.contains n
+          then a.push (mkThalesDiag (.topLevelMutableReferencedByHoisted n) loc)
+          else a) acc
+    | none => acc) #[]
   prog.body.foldl (fun acc ts =>
-    acc ++ checkTSStmt aliasEnv topRecvEnv ts ++ checkTSStmtSwitch aliasEnv ts) #[]
+    acc ++ checkTSStmt aliasEnv topRecvEnv moduleInfo ts ++ checkTSStmtSwitch aliasEnv ts) th0093
 
 /-- Subset check with `@thales-expect-error` directives applied.
     Suppresses TH diagnostics on lines covered by matching directives and

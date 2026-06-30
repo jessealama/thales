@@ -110,4 +110,21 @@ structure TSProgram where
   expectErrorDirectives : Array Thales.Parser.ExpectErrorDirective := #[]
   deriving Inhabited
 
+/-- The executable top-level statements of a module, reconstructed as plain JS
+    `Statement`s in source order: an `annotatedVarDecl` becomes a `let`/`const`
+    `variableDecl` (so escape analysis sees the binding, not just later
+    mutations of it), a `.js` statement is unwrapped, `export <decl>` is
+    unwrapped first, and pure declarations (functions, types, interfaces, enums,
+    imports) are dropped. Feeds module-level mutation/escape analysis the SAME
+    block the emitter lowers into `def main`, so the subset checker and the
+    emitter never disagree on what is lowerable (#49). -/
+def moduleExecutableStatements (body : List TSStatement) : List Statement :=
+  (body.map fun s => match s with | .exportDecl _ inner => inner | other => other).filterMap
+    fun ts => match ts with
+    | .js (.variableDecl _) => none  -- top-level var decls arrive as annotatedVarDecl
+    | .js s => some s
+    | .annotatedVarDecl b kind name typeAnn init =>
+        some (.variableDecl (.mk b [.mk b (.identifier { name }) init (typeAnn.map (·.type))] kind))
+    | _ => none
+
 end Thales.TypeCheck

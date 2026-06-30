@@ -31,11 +31,12 @@ def expectNoCode (src : String) (code : Nat) : IO Unit := do
       let formatted := (diags.map (·.format "test.ts")).toList
       throw (IO.userError s!"expected no TH{code}, got: {formatted}")
 
--- Module-level mutation: always TH0001
-def testReassignment : IO Unit := expectCode "let x = 0; x = 1;" 1
-def testCompoundAssignment : IO Unit := expectCode "let x = 0; x += 1;" 1
-def testIncrement : IO Unit := expectCode "let x = 0; x++;" 1
-def testDecrement : IO Unit := expectCode "let x = 0; --x;" 1
+-- Module-level mutation: now in-subset, lowered into the `main` IO do-block
+-- on the same terms as a function body (#49) — no TH0001.
+def testReassignment : IO Unit := expectNoCode "let x = 0; x = 1;" 1
+def testCompoundAssignment : IO Unit := expectNoCode "let x = 0; x += 1;" 1
+def testIncrement : IO Unit := expectNoCode "let x = 0; x++;" 1
+def testDecrement : IO Unit := expectNoCode "let x = 0; --x;" 1
 
 -- Member/method mutation: unchanged
 def testArrayIndexWrite : IO Unit := expectCode "const arr = [1]; arr[0] = 2;" 2

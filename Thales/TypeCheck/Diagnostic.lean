@@ -123,6 +123,9 @@ inductive ThalesKind where
   | regexLiteral
   -- Unsupported unary operator (TH0092): typeof/void/delete, in any position
   | unsupportedUnaryOperator (op : String)
+  -- TH0093: a hoisted top-level declaration references a top-level mutable
+  -- `let` (which lowers to a `main`-local binding the declaration cannot see)
+  | topLevelMutableReferencedByHoisted (name : String)
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -180,6 +183,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .importCycle _ => 90
   | .regexLiteral => 91
   | .unsupportedUnaryOperator _ => 92
+  | .topLevelMutableReferencedByHoisted _ => 93
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -272,6 +276,8 @@ def ThalesKind.message : ThalesKind → String
     "Regex literals are not supported"
   | .unsupportedUnaryOperator op =>
     s!"The '{op}' operator is not supported"
+  | .topLevelMutableReferencedByHoisted name =>
+    s!"Top-level mutable variable '{name}' cannot be referenced by a hoisted declaration (function or const)"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
