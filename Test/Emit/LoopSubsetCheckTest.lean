@@ -204,10 +204,11 @@ def testGeneralForContinueTH0010 : IO Unit := expectTH
   "function f(n: number): number { let t = 0; for (let i = n; i > 0; i -= 2) { if (i > 4) { continue; } t += i; } return t; }"
   ["TH0010"]
 
--- ── Case 26: module-level while → TH0010 (no function context) ──
-def testTopLevelWhileTH0010 : IO Unit := expectTH
+-- ── Case 26: module-level while is now admitted — lowered into the `main`
+-- IO do-block on the same terms as a function body (#49). No TH0010. ──
+def testTopLevelWhileAdmitted : IO Unit := expectTH
   "while (false) { }"
-  ["TH0010"]
+  []
 
 #eval testForOfAdmitted
 #eval testCanonicalForAdmitted
@@ -234,4 +235,4 @@ def testTopLevelWhileTH0010 : IO Unit := expectTH
 #eval testGeneralForAdmitted
 #eval testTotalGeneralForTH0068
 #eval testGeneralForContinueTH0010
-#eval testTopLevelWhileTH0010
+#eval testTopLevelWhileAdmitted
