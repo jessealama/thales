@@ -218,6 +218,31 @@ private def literalCtorValueExpr : TSType → Option LExpr
   | .paren inner     => literalCtorValueExpr inner
   | _ => none
 
+/-- The `(name, type)` property fields of an object type, in declared order,
+    dropping methods and index signatures. Single source for structure-field
+    emission (#13) and the `structFields` construction env (#15/#81). -/
+private def objectTypeFields (members : List TSObjectMember) : List (String × TSType) :=
+  members.filterMap fun
+    | .property f t _ _ => some (f, t)
+    | _ => none
+
+/-- The `(name, type)` property fields of an interface, in declared order,
+    dropping methods. -/
+private def interfaceFields (members : List TSInterfaceMember) : List (String × TSType) :=
+  members.filterMap fun
+    | .property f t _ _ => some (f, t)
+    | _ => none
+
+/-- The `(key, valueExpr)` entries of an object literal, covering shorthand
+    (`{ x }`) and explicit (`{ x: e }`) properties; spreads and computed keys
+    are dropped. Shared by the discriminated-union ctor path and struct
+    construction (#15/#81). -/
+private def objectLiteralEntries (props : List ObjectProperty) : List (String × Expression) :=
+  props.filterMap fun
+    | .regular _ (.literal _ (.string k) _) v _ _ _ => some (k, v)
+    | .regular _ (.identifier _ k) v _ _ _          => some (k, v)
+    | _                                             => none
+
 /-- Emit a type alias.
     - Discriminated object unions become Lean `inductive` types.
     - Same-primitive literal unions (`-1 | 0 | 1`, `"a" | "b"`, `true | false`)
@@ -227,6 +252,7 @@ private def literalCtorValueExpr : TSType → Option LExpr
     - Everything else falls back to an `abbrev`.
 
     Returns a list because the literal-union case produces two decls. -/
+
 def emitTypeAlias (name : String) (typeParams : List String) (ty : TSType) : List LDecl :=
   match ty with
   | .union branches =>
@@ -250,9 +276,7 @@ def emitTypeAlias (name : String) (typeParams : List String) (ty : TSType) : Lis
                .instance_ (.app "Coe" [.const name, prim]) "coe" coeBody]
           | _, _, _ => [.abbrev_ name typeParams (emitType ty)]
   | .object members =>
-      let fields := members.filterMap fun
-        | .property fname fty _opt _ro => some (fname, emitType fty)
-        | _ => none
+      let fields := (objectTypeFields members).map fun (n, t) => (n, emitType t)
       [.struct name typeParams fields]
   | _ => [.abbrev_ name typeParams (emitType ty)]
 
@@ -260,9 +284,7 @@ def emitTypeAlias (name : String) (typeParams : List String) (ty : TSType) : Lis
     kept for v1; method members are skipped (v2 adds classes/methods). -/
 def emitInterface (name : String) (typeParams : List String)
     (members : List TSInterfaceMember) : LDecl :=
-  let fields := members.filterMap fun
-    | .property fname fty _opt _ro => some (fname, emitType fty)
-    | .method _ _ _ _ => none
+  let fields := (interfaceFields members).map fun (n, t) => (n, emitType t)
   .struct name typeParams fields
 
 /-- Extract type-param names from a list of TSTypeParam. -/
@@ -958,10 +980,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   -- object literals there is no clean shallow embedding in v1 — fall through
   -- to the placeholder and rely on the type checker to have rejected earlier.
   | .objectExpr _ props =>
-      let regularProps : List (String × Expression) := props.filterMap fun
-        | .regular _ (.literal _ (.string k) _) v _ _ _ => some (k, v)
-        | .regular _ (.identifier _ k) v _ _ _          => some (k, v)
-        | _                                             => none
+      let regularProps := objectLiteralEntries props
       let discVal : Option String := regularProps.findSome? fun (k, v) =>
         if k == "kind" then
           match v with
@@ -1016,10 +1035,7 @@ partial def emitObjectLiteralAsStruct
   let ty ← targetTy
   let structName ← structNameOfTarget env ty
   let fields ← env.structFields[structName]?
-  let provided : List (String × Expression) := props.filterMap fun
-    | .regular _ (.literal _ (.string k) _) v _ _ _ => some (k, v)
-    | .regular _ (.identifier _ k) v _ _ _          => some (k, v)
-    | _                                             => none
+  let provided := objectLiteralEntries props
   let fieldExprs ← fields.mapM fun (fname, fty) => do
     let v ← provided.lookup fname
     some (fname, emitExprWithExpectedTy env (some fty) v)
@@ -1831,15 +1847,11 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
       | other => other).foldl (fun acc ts =>
       match ts with
       | .interfaceDecl _ name _ _ members =>
-          acc.insert name (members.filterMap fun
-            | .property f t _ _ => some (f, t)
-            | _ => none)
+          acc.insert name (interfaceFields members)
       | .typeAliasDecl _ name _ _ =>
           match resolvedAliases[name]? with
           | some (.object members) =>
-              acc.insert name (members.filterMap fun
-                | .property f t _ _ => some (f, t)
-                | _ => none)
+              acc.insert name (objectTypeFields members)
           | _ => acc
       | _ => acc) {}
   let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
