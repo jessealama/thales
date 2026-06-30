@@ -994,14 +994,152 @@ def checkTSStmtSwitch (aliasEnv : Std.HashMap String TSType) (ts : TSStatement)
   | .js s => checkSwitchStmt { aliasEnv, bindingEnv := {} } s
   | _ => #[]
 
+private def fvInsert (s : Std.HashSet String) (xs : List String) : Std.HashSet String :=
+  xs.foldl (·.insert ·) s
+
+/-- Identifiers a `Pattern` binds — descending through object/array
+    destructuring, defaults, and rest. Object-pattern keys and member-pattern
+    targets bind nothing here. -/
+private partial def patternBoundNames : Pattern → List String
+  | .identifier id => [id.name]
+  | .objectPattern _ props => props.flatMap fun
+      | .mk _ _ value _ _ => patternBoundNames value
+      | .rest _ argument => patternBoundNames argument
+  | .arrayPattern _ els => els.flatMap fun | some p => patternBoundNames p | none => []
+  | .assignmentPattern _ left _ => patternBoundNames left
+  | .restElement _ argument => patternBoundNames argument
+  | .memberPattern _ _ _ _ => []
+
+/-- Names a function parameter binds. -/
+private def paramBoundNames : FunctionParam → List String
+  | .simple id | .withDefault id _ | .rest id => [id.name]
+  | .pattern pat => patternBoundNames pat
+
+/-- Names a statement declares *directly* (not in nested blocks/functions):
+    `let`/`const`/`var` declarators, a `function`/`class` declaration's own name.
+    Used to pre-bind block-scoped names so references to them are not mistaken
+    for free references. -/
+private def declaredNamesStmt : Statement → List String
+  | .variableDecl (.mk _ decls _) => decls.flatMap fun (.mk _ pat _ _) => patternBoundNames pat
+  | .functionDecl _ id _ _ _ _ => [id.name]
+  | .classDecl _ id _ _ => [id.name]
+  | _ => []
+
+/- Free variables of an expression/statement relative to `bound` — the
+   identifiers genuinely *referenced* and not bound by an enclosing scope.
+   Unlike `EscapeAnalysis.identsExpr`/`identsStmt` (which over-collect for a
+   conservative escape analysis), this is scope-aware: it subtracts names bound
+   by parameters, locals, loop/`catch` binders, excludes object-literal keys
+   and non-computed member-property names, and never descends a name into a
+   sibling scope. Used by TH0093 so a hoisted decl is flagged only when it
+   makes a real free reference to a top-level mutated `let` (#91). -/
+mutual
+private partial def freeVarsExpr (bound : Std.HashSet String) : Expression → List String
+  | .identifier _ n => if bound.contains n then [] else [n]
+  | .literal _ _ _ | .thisExpr _ | .super_ _ | .metaProperty _ _ _
+  | .patternExpr _ _ => []
+  | .arrayExpr _ els => els.flatMap fun | some e => freeVarsExpr bound e | none => []
+  | .objectExpr _ props => props.flatMap fun
+      | .regular _ k v _ computed _ =>
+          (if computed then freeVarsExpr bound k else []) ++ freeVarsExpr bound v
+      | .spread _ a => freeVarsExpr bound a
+  | .functionExpr _ id params body _ _ =>
+      let bound := fvInsert bound ((id.map (·.name)).toList ++ params.flatMap paramBoundNames)
+      freeVarsStmt bound body
+  | .arrowFunctionExpr _ params body _ _ _ =>
+      let bound := fvInsert bound (params.flatMap paramBoundNames)
+      match body with | .inl e => freeVarsExpr bound e | .inr s => freeVarsStmt bound s
+  | .unaryExpr _ _ _ a | .updateExpr _ _ a _ | .spreadElement _ a
+  | .awaitExpr _ a | .chainExpr _ a => freeVarsExpr bound a
+  | .binaryExpr _ _ l r | .assignmentExpr _ _ l r | .logicalExpr _ _ l r =>
+      freeVarsExpr bound l ++ freeVarsExpr bound r
+  | .memberExpr _ o p computed _ =>
+      freeVarsExpr bound o ++ (if computed then freeVarsExpr bound p else [])
+  | .privateMemberExpr _ o _ => freeVarsExpr bound o
+  | .conditionalExpr _ t c a =>
+      freeVarsExpr bound t ++ freeVarsExpr bound c ++ freeVarsExpr bound a
+  | .callExpr _ f args _ | .newExpr _ f args =>
+      freeVarsExpr bound f ++ args.flatMap (freeVarsExpr bound)
+  | .sequenceExpr _ es => es.flatMap (freeVarsExpr bound)
+  | .templateLiteral _ _ es => es.flatMap (freeVarsExpr bound)
+  | .taggedTemplate _ t q => freeVarsExpr bound t ++ freeVarsExpr bound q
+  | .classExpr _ _ _ _ => []
+  | .yieldExpr _ a _ => match a with | some e => freeVarsExpr bound e | none => []
+
+/-- Free variables of a statement list under block scoping: names declared
+    directly in the list are bound for the whole list (matching lexical
+    block/hoisting scope), then each statement is scanned. -/
+private partial def freeVarsStmts (bound : Std.HashSet String)
+    (stmts : List Statement) : List String :=
+  let bound := fvInsert bound (stmts.flatMap declaredNamesStmt)
+  stmts.flatMap (freeVarsStmt bound)
+
+private partial def freeVarsStmt (bound : Std.HashSet String) : Statement → List String
+  | .exprStmt _ e | .throwStmt _ e => freeVarsExpr bound e
+  | .blockStmt _ b => freeVarsStmts bound b
+  | .ifStmt _ t c a =>
+      freeVarsExpr bound t ++ freeVarsStmt bound c
+        ++ (match a with | some s => freeVarsStmt bound s | none => [])
+  | .returnStmt _ a => match a with | some e => freeVarsExpr bound e | none => []
+  | .variableDecl (.mk _ decls _) =>
+      decls.flatMap fun (.mk _ _ init _) =>
+        match init with | some e => freeVarsExpr bound e | none => []
+  | .whileStmt _ t b => freeVarsExpr bound t ++ freeVarsStmt bound b
+  | .doWhileStmt _ b t => freeVarsStmt bound b ++ freeVarsExpr bound t
+  | .forStmt _ init t u b =>
+      -- initializers are evaluated before the binders are in scope
+      let initFv := match init with
+        | some (.inl e) => freeVarsExpr bound e
+        | some (.inr (.mk _ decls _)) =>
+            decls.flatMap fun (.mk _ _ i _) =>
+              match i with | some e => freeVarsExpr bound e | none => []
+        | _ => []
+      let bound := match init with
+        | some (.inr (.mk _ decls _)) =>
+            fvInsert bound (decls.flatMap fun (.mk _ pat _ _) => patternBoundNames pat)
+        | _ => bound
+      initFv ++ (match t with | some e => freeVarsExpr bound e | none => [])
+        ++ (match u with | some e => freeVarsExpr bound e | none => []) ++ freeVarsStmt bound b
+  | .forInStmt _ left r b | .forOfStmt _ left r b _ =>
+      -- the iterable `r` is in the outer scope; only the body sees the binder
+      let leftFv := match left with | .inl e => freeVarsExpr bound e | .inr _ => []
+      let bodyBound := match left with
+        | .inl _ => bound
+        | .inr (.mk _ decls _) =>
+            fvInsert bound (decls.flatMap fun (.mk _ pat _ _) => patternBoundNames pat)
+      leftFv ++ freeVarsExpr bound r ++ freeVarsStmt bodyBound b
+  | .switchStmt _ d cases =>
+      freeVarsExpr bound d ++ cases.flatMap (fun (.mk _ t ss) =>
+        (match t with | some e => freeVarsExpr bound e | none => [])
+          ++ freeVarsStmts bound ss)
+  | .tryStmt _ b h f =>
+      freeVarsStmt bound b
+        ++ (match h with
+            | some (.mk _ param hb _) =>
+                let bound := match param with
+                  | some p => fvInsert bound (patternBoundNames p) | none => bound
+                freeVarsStmt bound hb
+            | none => [])
+        ++ (match f with | some s => freeVarsStmt bound s | none => [])
+  | .labeledStmt _ _ b | .withStmt _ _ b => freeVarsStmt bound b
+  | .functionDecl _ id params body _ _ =>
+      let bound := fvInsert bound (id.name :: params.flatMap paramBoundNames)
+      freeVarsStmt bound body
+  | _ => []
+end
+
 /-- A hoisted top-level declaration's source location and the free identifiers
     referenced by its body/initializer, or `none` if the item is not a hoisted
     declaration. A hoisted decl (`function`, or a `const`/`let` emitted as a
     top-level `def`) is elaborated OUTSIDE `main`, so any reference it makes to
-    a top-level mutable `let` (a `main`-local `let mut`) is out of scope (#49). -/
+    a top-level mutable `let` (a `main`-local `let mut`) is out of scope (#49).
+    Free variables — not raw identifiers — so that parameters, locals,
+    object-literal keys, and member-property names that merely share a name with
+    a top-level mutable are not mistaken for references (#91). -/
 private partial def hoistedRefs : TSStatement → Option (Option SourceLocation × List String)
-  | .annotatedFuncDecl b _ _ _ _ body _ _ _ _ => some (b.loc, EscapeAnalysis.identsStmt body)
-  | .annotatedVarDecl b _ _ _ (some init) => some (b.loc, EscapeAnalysis.identsExpr init)
+  | .annotatedFuncDecl b _ _ params _ body _ _ _ _ =>
+      some (b.loc, freeVarsStmt (fvInsert {} (params.map (·.1))) body)
+  | .annotatedVarDecl b _ _ _ (some init) => some (b.loc, freeVarsExpr {} init)
   | .exportDecl _ inner => hoistedRefs inner
   | _ => none
 
