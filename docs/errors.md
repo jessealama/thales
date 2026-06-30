@@ -1120,6 +1120,11 @@ A top-level `let` that is mutated at module level is lowered into the `main`
 `main` and so cannot reference it. Move the value into a `const`, or compute it
 where it is used. (Widening this is a future task.)
 
+Only a genuine _free_ reference trips this. A name inside the declaration that
+merely shares the mutable's spelling — a shadowing parameter or local, an
+object-literal key, or a non-computed member-property name (`obj.total`) — is
+not a reference and does not fire.
+
 ```ts
 let total = 0;
 for (const x of [1, 2, 3]) {
