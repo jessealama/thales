@@ -57,7 +57,23 @@ def samples : List (String × String) := [
    "type Mode = \"a\" | \"b\" | \"c\";\n" ++
    "function cmpZero(): Signed { return 0; }\n" ++
    "function pick(): Mode { return \"a\"; }\n" ++
-   "function quadratic(x: Signed): number { return x * x + 1; }")
+   "function quadratic(x: Signed): number { return x * x + 1; }"),
+  -- TS field names that are Lean reserved keywords (`end`), exercised
+  -- as both a struct field and a projection (`range.end`).
+  -- https://github.com/jessealama/thales/issues/11
+  ("LeanReservedKeyword",
+   "interface PortRange { start: bigint; end: bigint; }\n" ++
+   "function portInRange(port: bigint, range: PortRange): boolean {\n" ++
+   "  return range.start <= port && port <= range.end;\n" ++
+   "}"),
+  -- Sweep every Lean reserved keyword the parser accepts as a TS
+  -- identifier; one interface declaration is enough to trip elaboration.
+  ("AllLeanReservedKeywords",
+   "interface AllLeanReservedKeywords {\n" ++
+   "  match: bigint; where: bigint; mut: bigint; fun: bigint;\n" ++
+   "  structure: bigint; inductive: bigint; theorem: bigint;\n" ++
+   "  section: bigint; namespace: bigint; then: bigint; end: bigint;\n" ++
+   "}")
 ]
 
 def runSmoke : IO Unit := do
