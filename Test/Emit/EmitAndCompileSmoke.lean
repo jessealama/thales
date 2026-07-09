@@ -57,7 +57,20 @@ def samples : List (String × String) := [
    "type Mode = \"a\" | \"b\" | \"c\";\n" ++
    "function cmpZero(): Signed { return 0; }\n" ++
    "function pick(): Mode { return \"a\"; }\n" ++
-   "function quadratic(x: Signed): number { return x * x + 1; }")
+   "function quadratic(x: Signed): number { return x * x + 1; }"),
+  -- Constructing an interface-typed value via an object literal
+  -- (`return { x, y }`) currently emits `(unsupported expr)` rather
+  -- than a struct constructor, so elaboration fails on
+  -- `unknown identifier 'unsupported'`.
+  -- https://github.com/jessealama/thales/issues/15
+  ("InterfaceObjectLiteral",
+   "interface Pair { x: bigint; y: bigint }\n" ++
+   "function makePairLong(x: bigint, y: bigint): Pair {\n" ++
+   "  return { x: x, y: y };\n" ++
+   "}\n" ++
+   "function makePairShort(x: bigint, y: bigint): Pair {\n" ++
+   "  return { x, y };\n" ++
+   "}")
 ]
 
 def runSmoke : IO Unit := do
