@@ -57,7 +57,16 @@ def samples : List (String × String) := [
    "type Mode = \"a\" | \"b\" | \"c\";\n" ++
    "function cmpZero(): Signed { return 0; }\n" ++
    "function pick(): Mode { return \"a\"; }\n" ++
-   "function quadratic(x: Signed): number { return x * x + 1; }")
+   "function quadratic(x: Signed): number { return x * x + 1; }"),
+  -- Single-record `type` aliases must lower to a Lean `structure` so
+  -- field projections elaborate. Today they collapse to `abbrev T :=
+  -- Unit`, breaking `range.start` / `range.endPort`.
+  -- https://github.com/jessealama/thales/issues/13
+  ("SingleRecordTypeAlias",
+   "type PortRange = { start: bigint; endPort: bigint };\n" ++
+   "function portInRange(port: bigint, range: PortRange): boolean {\n" ++
+   "  return range.start <= port && port <= range.endPort;\n" ++
+   "}")
 ]
 
 def runSmoke : IO Unit := do
