@@ -99,7 +99,7 @@ def getExprStart : Expression → Position
   | .sequenceExpr base _ => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
   | .templateLiteral base _ _ => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
   | .taggedTemplate base _ _ => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
-  | .classExpr base _ _ _ => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
+  | .classExpr base .. => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
   | .super_ base => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
   | .spreadElement base _ => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
   | .yieldExpr base _ _ => base.loc.map (·.start) |>.getD { line := 1, column := 0 }
@@ -1418,6 +1418,68 @@ where
       let base := makeBase startPos p'.peek.pos
       return (p', .arrowFunctionExpr base params (.inl expr) true true)
 
+/-- Parse TS function parameters: (name: Type, name?: Type, ...name: Type) -/
+partial def parseTSFunctionParams (p : ParserState) :
+    ParseResult (ParserState × List (String × Option TypeAnnotation × Bool × Bool)) := do
+  let p1 ← p.expect .lparen "Expected '(' before function parameters"
+  let mut ps := p1
+  let mut params : List (String × Option TypeAnnotation × Bool × Bool) := []
+  while !ps.check .rparen do
+    if !params.isEmpty then
+      ps ← ps.expect .comma "Expected ',' between parameters"
+      if ps.check .rparen then break  -- allow trailing comma
+    -- Check for rest parameter: ...name
+    let isRest := ps.check .ellipsis
+    if isRest then
+      ps ← ps.advance
+    -- Parse parameter name or destructuring pattern
+    let name ← match ps.current.kind with
+      | .identifier n =>
+        ps ← ps.advance
+        pure n
+      | .lbracket =>
+        -- Skip balanced [ ... ] for array destructuring pattern
+        ps ← ps.advance
+        let mut depth : Nat := 1
+        while depth > 0 do
+          if ps.check .lbracket then depth := depth + 1
+          else if ps.check .rbracket then depth := depth - 1
+          ps ← ps.advance
+        pure "_destructured"
+      | .lbrace =>
+        -- Skip balanced { ... } for object destructuring pattern
+        ps ← ps.advance
+        let mut depth : Nat := 1
+        while depth > 0 do
+          if ps.check .lbrace then depth := depth + 1
+          else if ps.check .rbrace then depth := depth - 1
+          ps ← ps.advance
+        pure "_destructured"
+      | _ => throw s!"Expected parameter name at line {ps.current.pos.line}"
+    -- Check for optional parameter: name?
+    let mut isOptional := false
+    if !isRest && ps.check .question then
+      ps := match ps.advance with | .ok pp => pp | .error _ => ps
+      isOptional := true
+    -- Check for type annotation: : Type
+    let (ps', typeAnn) ← if ps.check .colon then
+      let pa ← ps.advance
+      let (pb, ty) ← parseTypeExpression pa
+      pure (pb, some (TypeAnnotation.mk ty))
+    else
+      pure (ps, none)
+    ps := ps'
+    -- Check for default value: = expr (parameters with defaults are optional)
+    if ps.check .assign then
+      ps ← ps.advance  -- skip '='
+      let (ps'', _) ← parseAssignmentExpr ps
+      ps := ps''
+      isOptional := true
+    -- Tuple: (name, typeAnnotation, isOptional, isRest)
+    params := params ++ [(name, typeAnn, isOptional, isRest)]
+  ps ← ps.expect .rparen "Expected ')' after function parameters"
+  return (ps, params)
+
 /-- Parse class expression -/
 partial def parseClassExpr (p : ParserState) : ParseResult (ParserState × Expression) := do
   let startPos := p.peek.pos
@@ -1432,10 +1494,10 @@ partial def parseClassExpr (p : ParserState) : ParseResult (ParserState × Expre
   else (p', none)
 
   -- Skip optional generic type parameters: class Foo<T, U> { ... }
-  let p'' :=
+  let (p'', hasTypeParams) :=
     match trySkipGenericArgs p'' with
-    | some p''' => p'''
-    | none => p''
+    | some p''' => (p''', true)
+    | none => (p'', false)
 
   -- Optional extends clause
   let (p''', superClass) := if p''.check .extends then
@@ -1447,11 +1509,29 @@ partial def parseClassExpr (p : ParserState) : ParseResult (ParserState × Expre
     | .error _ => (p'', none)
   else (p'', none)
 
+  -- Optional implements clause: implements I, J (type refs skipped, flag retained)
+  let (p3i, hasImplements) ← skipImplementsClause p'''
+
   -- Parse class body
-  let (p'''', methods) ← parseClassBody p'''
+  let (p'''', methods) ← parseClassBody p3i
 
   let base := makeBase startPos p''''.peek.pos
-  return (p'''', .classExpr base idOpt superClass methods)
+  return (p'''', .classExpr base idOpt superClass methods false hasTypeParams hasImplements)
+
+/-- Skip an optional `implements I, J` clause, returning whether one was present.
+    The type references are parsed and discarded; the flag drives TH0030. -/
+partial def skipImplementsClause (p : ParserState) : ParseResult (ParserState × Bool) := do
+  if p.check .implements_ then
+    let mut ps ← p.advance
+    let (ps1, _) ← parseTypeExpression ps
+    ps := ps1
+    while ps.check .comma do
+      ps ← ps.advance
+      let (ps2, _) ← parseTypeExpression ps
+      ps := ps2
+    return (ps, true)
+  else
+    return (p, false)
 
 /-- Parse class body { ... } -/
 partial def parseClassBody (p : ParserState) : ParseResult (ParserState × List ClassElement) := do
@@ -1483,9 +1563,9 @@ where
     else
       let startPos := p.peek.pos
 
-      -- Skip TS member modifiers (public/private/protected/abstract/override/readonly/declare).
-      -- We accept-and-discard so the rest of the body parses; enforcement of
-      -- visibility/abstractness is a future type-checker concern.
+      -- Consume TS member modifiers (public/private/protected/abstract/override/readonly/declare),
+      -- retaining readonly/accessibility/override on the member node. Enforcement
+      -- of the retained modifiers is the subset check's concern.
       let isTSMemberModifier (kind : TokenKind) : Bool :=
         match kind with
         | .identifier n =>
@@ -1495,6 +1575,9 @@ where
         | .declare => true
         | _ => false
       let mut pMod := p
+      let mut memReadonly := false
+      let mut memAccessibility : Option Accessibility := none
+      let mut memOverride := false
       while isTSMemberModifier pMod.current.kind do
         -- Stop if the modifier is being used as a member name
         -- (e.g. `readonly()` would be a method called "readonly").
@@ -1503,6 +1586,13 @@ where
           | .ok pNext => pNext.check .lparen
           | .error _ => false
         if isMemberName then break
+        match pMod.current.kind with
+        | .identifier "public" => memAccessibility := memAccessibility.orElse fun _ => some .public_
+        | .identifier "private" => memAccessibility := memAccessibility.orElse fun _ => some .private_
+        | .identifier "protected" => memAccessibility := memAccessibility.orElse fun _ => some .protected_
+        | .identifier "override" => memOverride := true
+        | .readonly => memReadonly := true
+        | _ => pure ()
         pMod := match pMod.advance with | .ok pp => pp | .error _ => pMod
       let p := pMod
 
@@ -1558,21 +1648,20 @@ where
       let (p5, key, computed, privateName) ← parseClassPropertyKey p4
 
       -- A `?` after the member name marks the member optional. Consume it for
-      -- both method (`foo?()`) and field (`foo?: T`) paths; we don't track
-      -- optionality in the AST yet.
-      let p5 := if p5.check .question then
-        match p5.advance with | .ok pp => pp | .error _ => p5
-      else p5
+      -- both method (`foo?()`) and field (`foo?: T`) paths, retaining the flag.
+      let (p5, memOptional) := if p5.check .question then
+        match p5.advance with | .ok pp => (pp, true) | .error _ => (p5, false)
+      else (p5, false)
 
       -- A method starts with `(` or, generically, with `<`.
       let isMethod := p5.check .lparen || p5.check .lt
 
       -- Skip optional generic type parameters on the method: foo<T>()
-      let p5 := if isMethod && p5.check .lt then
+      let (p5, memHasTypeParams) := if isMethod && p5.check .lt then
         match trySkipGenericArgs p5 with
-        | some pp => pp
-        | none => p5
-      else p5
+        | some pp => (pp, true)
+        | none => (p5, false)
+      else (p5, false)
 
       if isMethod then
         -- This is a method
@@ -1581,21 +1670,53 @@ where
           | .identifier _ "constructor" => if !isStatic && privateName.isNone then MethodKind.constructor else methodKind
           | _ => methodKind
 
-        -- Parse method body (parseFunctionBody handles TS param/return type annotations)
-        let (p6, func) ← parseFunctionBody p5 none isGenerator isAsync
+        -- Parse the signature retaining param/return annotations (same helper
+        -- and shape as `annotatedFuncDecl`); fall back to the annotation-skipping
+        -- path when the signature doesn't fit the TS param grammar.
+        let sigToFuncParams (sig : List (String × Option TypeAnnotation × Bool × Bool)) : List FunctionParam :=
+          sig.map fun (n, _, _, isRest) =>
+            if isRest then FunctionParam.rest { name := n } else FunctionParam.simple { name := n }
+        let annotated : ParseResult
+            (ParserState × Expression × List (String × Option TypeAnnotation × Bool × Bool) × Option TypeAnnotation) := do
+          let (pa, sigParams) ← parseTSFunctionParams p5
+          let (pb, returnType) ← if pa.check .colon then do
+            let pa' ← pa.advance
+            let (pb', ty) ← parseTypeExpression pa'
+            pure (pb', some (TypeAnnotation.mk ty))
+          else pure (pa, none)
+          -- A bodyless method (`;`) is valid for abstract methods, overload
+          -- signatures, and ambient declarations. Emit an empty block body.
+          if pb.check .semicolon then
+            let pc ← pb.advance
+            pure (pc, .functionExpr {} none (sigToFuncParams sigParams) (.blockStmt {} []) isGenerator isAsync, sigParams, returnType)
+          else
+            let (pc, body) ← parseBlockStmt pb
+            pure (pc, .functionExpr {} none (sigToFuncParams sigParams) body isGenerator isAsync, sigParams, returnType)
+        let (p6, func, sigParams, returnType) ← match annotated with
+          | .ok r => pure r
+          | .error _ => do
+            let (p6, func) ← parseFunctionBody p5 none isGenerator isAsync
+            pure (p6, func, [], none)
         let base := makeBase startPos p6.peek.pos
         let methodDef := MethodDefinition.mk base key func finalKind computed isStatic privateName
+          memAccessibility memOverride memOptional memHasTypeParams sigParams returnType
 
         parseClassElements p6 (.method methodDef :: acc)
       else
-        -- Field definition: skip optional `?` and `: Type` annotation before initializer.
+        -- Field definition: consume optional `?` and parse the `: Type`
+        -- annotation (retained on the node) before the initializer. Fall back
+        -- to bracket-skipping (annotation dropped) if the type doesn't parse.
         let p5a := if p5.check .question then
           match p5.advance with | .ok pp => pp | .error _ => p5
         else p5
-        let p5b ← if p5a.check .colon then do
+        let (p5b, fieldTypeAnn) ← if p5a.check .colon then do
           let pa ← p5a.advance
-          skipTSType pa
-        else pure p5a
+          match parseTypeExpression pa with
+          | .ok (pb, ty) => pure (pb, some ty)
+          | .error _ => do
+            let pb ← skipTSType pa
+            pure (pb, (none : Option TSType))
+        else pure (p5a, none)
         let (p6, initExpr) ← if p5b.check .assign then do
           -- Field with initializer: x = expr
           let p5' ← p5b.advance
@@ -1614,6 +1735,7 @@ where
 
         let base := makeBase startPos p7.peek.pos
         let fieldDef := FieldDefinition.mk base key initExpr computed isStatic privateName
+          memReadonly memOptional fieldTypeAnn memAccessibility
 
         parseClassElements p7 (.field fieldDef :: acc)
 
@@ -2891,7 +3013,7 @@ partial def parseAsyncFunctionDecl (p : ParserState) : ParseResult (ParserState 
   | _ => throw "Expected function name after 'async function'"
 
 /-- Parse class declaration -/
-partial def parseClassDecl (p : ParserState) : ParseResult (ParserState × Statement) := do
+partial def parseClassDecl (p : ParserState) (isAbstract : Bool := false) : ParseResult (ParserState × Statement) := do
   let startPos := p.peek.pos
   let p' ← p.expect .class "Expected 'class'"
 
@@ -2903,10 +3025,10 @@ partial def parseClassDecl (p : ParserState) : ParseResult (ParserState × State
     let id : Identifier := { base := makeBase token.pos token.endPos, name }
 
     -- Skip optional generic type parameters: class Foo<T, U> { ... }
-    let p'' :=
+    let (p'', hasTypeParams) :=
       match trySkipGenericArgs p'' with
-      | some p3 => p3
-      | none => p''
+      | some p3 => (p3, true)
+      | none => (p'', false)
 
     -- Optional extends clause
     let (p''', superClass) := if p''.check .extends then
@@ -2918,11 +3040,14 @@ partial def parseClassDecl (p : ParserState) : ParseResult (ParserState × State
       | .error _ => (p'', none)
     else (p'', none)
 
+    -- Optional implements clause: implements I, J
+    let (p3i, hasImplements) ← skipImplementsClause p'''
+
     -- Parse class body
-    let (p'''', methods) ← parseClassBody p'''
+    let (p'''', methods) ← parseClassBody p3i
 
     let base := makeBase startPos p''''.peek.pos
-    return (p'''', .classDecl base id superClass methods)
+    return (p'''', .classDecl base id superClass methods isAbstract hasTypeParams hasImplements)
   | _ => throw "Expected class name"
 
 /-- Parse catch clause parameter (identifier or destructuring pattern). Returns
@@ -3155,67 +3280,6 @@ partial def parseTSVariableDecl (p : ParserState) (kind : VariableKind) :
   else p4
   return (p5, .annotatedVarDecl (makeBase startPos startPos) kind name typeAnn init)
 
-/-- Parse TS function parameters: (name: Type, name?: Type, ...name: Type) -/
-partial def parseTSFunctionParams (p : ParserState) :
-    ParseResult (ParserState × List (String × Option TypeAnnotation × Bool × Bool)) := do
-  let p1 ← p.expect .lparen "Expected '(' before function parameters"
-  let mut ps := p1
-  let mut params : List (String × Option TypeAnnotation × Bool × Bool) := []
-  while !ps.check .rparen do
-    if !params.isEmpty then
-      ps ← ps.expect .comma "Expected ',' between parameters"
-      if ps.check .rparen then break  -- allow trailing comma
-    -- Check for rest parameter: ...name
-    let isRest := ps.check .ellipsis
-    if isRest then
-      ps ← ps.advance
-    -- Parse parameter name or destructuring pattern
-    let name ← match ps.current.kind with
-      | .identifier n =>
-        ps ← ps.advance
-        pure n
-      | .lbracket =>
-        -- Skip balanced [ ... ] for array destructuring pattern
-        ps ← ps.advance
-        let mut depth : Nat := 1
-        while depth > 0 do
-          if ps.check .lbracket then depth := depth + 1
-          else if ps.check .rbracket then depth := depth - 1
-          ps ← ps.advance
-        pure "_destructured"
-      | .lbrace =>
-        -- Skip balanced { ... } for object destructuring pattern
-        ps ← ps.advance
-        let mut depth : Nat := 1
-        while depth > 0 do
-          if ps.check .lbrace then depth := depth + 1
-          else if ps.check .rbrace then depth := depth - 1
-          ps ← ps.advance
-        pure "_destructured"
-      | _ => throw s!"Expected parameter name at line {ps.current.pos.line}"
-    -- Check for optional parameter: name?
-    let mut isOptional := false
-    if !isRest && ps.check .question then
-      ps := match ps.advance with | .ok pp => pp | .error _ => ps
-      isOptional := true
-    -- Check for type annotation: : Type
-    let (ps', typeAnn) ← if ps.check .colon then
-      let pa ← ps.advance
-      let (pb, ty) ← parseTypeExpression pa
-      pure (pb, some (TypeAnnotation.mk ty))
-    else
-      pure (ps, none)
-    ps := ps'
-    -- Check for default value: = expr (parameters with defaults are optional)
-    if ps.check .assign then
-      ps ← ps.advance  -- skip '='
-      let (ps'', _) ← parseAssignmentExpr ps
-      ps := ps''
-      isOptional := true
-    -- Tuple: (name, typeAnnotation, isOptional, isRest)
-    params := params ++ [(name, typeAnn, isOptional, isRest)]
-  ps ← ps.expect .rparen "Expected ')' after function parameters"
-  return (ps, params)
 
 /-- Parse a TS function declaration -/
 partial def parseTSFunctionDecl (p : ParserState) :
@@ -3611,12 +3675,13 @@ partial def parseTSStatement (p : ParserState) : ParseResult (ParserState × TSS
       parseTSExportDecl p
     else if n == "import" then
       parseTSImportDecl p
-    -- `abstract class Foo ...` — skip the `abstract` modifier and parse the class
+    -- `abstract class Foo ...` — consume the `abstract` modifier and parse the
+    -- class with its abstract flag set (drives TH0030)
     else if n == "abstract" then
       match p.advance with
       | .ok p1 =>
         if p1.check .class then
-          let (p2, stmt) ← parseClassDecl p1
+          let (p2, stmt) ← parseClassDecl p1 (isAbstract := true)
           return (p2, .js stmt)
         else
           let (p1', stmt) ← parseStatement p

@@ -145,7 +145,7 @@ partial def identsExpr : Expression → List String
   | .sequenceExpr _ es => es.flatMap identsExpr
   | .templateLiteral _ _ es => es.flatMap identsExpr
   | .taggedTemplate _ t q => identsExpr t ++ identsExpr q
-  | .classExpr _ _ _ _ => []   -- classes are TH0030-rejected; don't dig
+  | .classExpr .. => []   -- classes are TH0030-rejected; don't dig
   | .yieldExpr _ a _ => match a with | some e => identsExpr e | none => []
 
 partial def identsStmt : Statement → List String

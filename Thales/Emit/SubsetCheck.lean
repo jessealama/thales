@@ -349,7 +349,7 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
   | .awaitExpr b arg =>
     #[mkThalesDiag .asyncNotSupported b.loc] ++ checkExpr ctx arg
   -- TH0030: class expressions — emit diagnostic, optionally TH0031 for extends, do NOT recurse
-  | .classExpr b _ superClass _ =>
+  | .classExpr b _ superClass .. =>
     let baseDiag := #[mkThalesDiag .classNotSupported b.loc]
     match superClass with
     | some _ => baseDiag ++ #[mkThalesDiag .inheritanceNotSupported b.loc]
@@ -502,7 +502,7 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
       ++ checkStmt ctx' body
   -- TH0030: class declarations — emit diagnostic, optionally TH0031 for extends, do NOT recurse
-  | .classDecl b _ superClass _ =>
+  | .classDecl b _ superClass .. =>
     let baseDiag := #[mkThalesDiag .classNotSupported b.loc]
     match superClass with
     | some _ => baseDiag ++ #[mkThalesDiag .inheritanceNotSupported b.loc]
@@ -1022,7 +1022,7 @@ private def paramBoundNames : FunctionParam → List String
 private def declaredNamesStmt : Statement → List String
   | .variableDecl (.mk _ decls _) => decls.flatMap fun (.mk _ pat _ _) => patternBoundNames pat
   | .functionDecl _ id _ _ _ _ => [id.name]
-  | .classDecl _ id _ _ => [id.name]
+  | .classDecl _ id .. => [id.name]
   | _ => []
 
 /- Free variables of an expression/statement relative to `bound` — the
@@ -1063,7 +1063,7 @@ private partial def freeVarsExpr (bound : Std.HashSet String) : Expression → L
   | .sequenceExpr _ es => es.flatMap (freeVarsExpr bound)
   | .templateLiteral _ _ es => es.flatMap (freeVarsExpr bound)
   | .taggedTemplate _ t q => freeVarsExpr bound t ++ freeVarsExpr bound q
-  | .classExpr _ _ _ _ => []
+  | .classExpr .. => []
   | .yieldExpr _ a _ => match a with | some e => freeVarsExpr bound e | none => []
 
 /-- Free variables of a statement list under block scoping: names declared

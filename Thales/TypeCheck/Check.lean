@@ -200,7 +200,7 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
   | .js s =>
     -- Special handling for class declarations (need scope threading)
     match s with
-    | .classDecl _base id superClass body =>
+    | .classDecl _base id superClass body .. =>
       let baseInstanceTy ← buildClassInstanceType superClass body
       -- Check if there's a companion interface with the same name (for generic class support).
       -- If so, build the instance type from the interface members (with typeVars) instead.
