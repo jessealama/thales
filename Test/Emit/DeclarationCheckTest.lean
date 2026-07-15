@@ -16,8 +16,10 @@ def expectDeclCode (src : String) (code : Nat) : IO Unit := do
       let fmt := (diags.map (·.format "")).toList
       throw (IO.userError s!"expected TH{code}, got: {fmt}")
 
+-- Class declarations are validated per member since #106: an initializer on
+-- a class field draws TH0097 (TH0030 is reserved for unsupported class forms)
 def testClassDecl : IO Unit :=
-  expectDeclCode "class C { x: number = 1; }" 30
+  expectDeclCode "class C { x: number = 1; }" 97
 
 def testClassExpr : IO Unit :=
   expectDeclCode "const C = class { y: number = 2; };" 30
@@ -28,9 +30,7 @@ def testExtends : IO Unit := do
   | .error e => throw (IO.userError s!"parse: {e}")
   | .ok prog =>
     let diags := subsetCheck prog
-    -- Both TH0030 (for each class) and TH0031 (for extends) should fire.
-    unless diags.any (·.thalesCode? = some 30) do
-      throw (IO.userError "expected TH0030 (class not supported)")
+    -- TH0031 fires for the extends clause (and short-circuits member checks on B).
     unless diags.any (·.thalesCode? = some 31) do
       throw (IO.userError "expected TH0031 (extends not supported)")
 

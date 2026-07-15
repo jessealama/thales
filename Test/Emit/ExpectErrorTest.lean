@@ -50,7 +50,7 @@ private def dirAt (dLine aLine : Nat) (code : Option Nat) (mal : Bool := false)
 
 -- Multi-code line: declared code is among the codes ⇒ all suppressed.
 #guard
-  let raw := #[thDiag .classNotSupported 3, thDiag .inheritanceNotSupported 3]
+  let raw := #[thDiag (.classNotSupported "class expressions") 3, thDiag .inheritanceNotSupported 3]
   let dirs := #[dirAt 2 3 (some 31)]
   (apply raw dirs).size = 0
 
