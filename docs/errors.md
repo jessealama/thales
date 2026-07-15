@@ -97,6 +97,8 @@ soundness check).
 | TH0100 | Declarations | Unsupported class method form                                   |
 | TH0101 | Declarations | Class method referenced before its declaration                  |
 | TH0102 | Declarations | Class method used as a value                                    |
+| TH0103 | Declarations | `undefined` used as a binding name                              |
+| TH0104 | Subset       | Bare `null`/`undefined` initializer without a type annotation   |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                         |
 | TH9001 | Directive    | Directive code mismatch                                         |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed                       |
@@ -1301,3 +1303,34 @@ Rejected: `const f = p.norm1;`
 
 **Fix:** call the method (`p.norm1()`), or wrap it in an arrow function
 (`(q: Point) => q.norm1()`).
+
+### TH0103 — `undefined` used as a binding name
+
+**Message:** `The name 'undefined' cannot be bound; rename this binding`
+
+The emitter lowers the `undefined` global to `.none` wherever it appears in
+value position, exactly like the `null` literal. JavaScript permits shadowing
+`undefined` with a local binding (`const undefined = 5;`), but under that
+lowering every reference to the binding would be silently rewritten to
+`.none` — an accepted program with the wrong meaning. Any binder position
+that reaches the emitter is rejected: `let`/`const`/`var` declarators,
+function/class declaration names, function parameters (declarations,
+expressions, and arrows), `catch` parameters, and loop-head binders.
+
+Rejected: `const undefined = 5;`, `function g(undefined: number) { … }`
+
+**Fix:** rename the binding.
+
+### TH0104 — Bare `null`/`undefined` initializer without a type annotation
+
+**Message:** `A bare 'null' or 'undefined' initializer needs a type annotation on the binding`
+
+A bare `null` or `undefined` initializer lowers to `.none`, and only a type
+annotation on the binding tells Lean which `Option` type that `.none`
+inhabits. Without one the emitted declaration cannot elaborate (and the
+binding's TS type is the useless singleton `undefined`/`null` anyway).
+
+Rejected: `const u = undefined;`, `const n = null;`
+
+**Fix:** annotate the binding with the union it will hold:
+`const u: string | undefined = undefined;`

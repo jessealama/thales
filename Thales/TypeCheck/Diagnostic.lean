@@ -140,6 +140,12 @@ inductive ThalesKind where
   -- TH0093: a hoisted top-level declaration references a top-level mutable
   -- `let` (which lowers to a `main`-local binding the declaration cannot see)
   | topLevelMutableReferencedByHoisted (name : String)
+  -- TH0103: the emitter lowers the `undefined` global to `.none`, so a
+  -- user binding named `undefined` would be silently rewritten
+  | undefinedBindingName
+  -- TH0104: a bare null/undefined initializer with no annotation gives
+  -- the lowered `.none` no element type to elaborate at
+  | nullishInitializerNeedsAnnotation
   -- Directive diagnostics (TH9000–TH9003)
   | directiveUnused
   | directiveCodeMismatch (expected : Nat) (actual : List Nat)
@@ -207,6 +213,8 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .regexLiteral => 91
   | .unsupportedUnaryOperator _ => 92
   | .topLevelMutableReferencedByHoisted _ => 93
+  | .undefinedBindingName => 103
+  | .nullishInitializerNeedsAnnotation => 104
   | .directiveUnused => 9000
   | .directiveCodeMismatch .. => 9001
   | .emissionBlockedBySuppressedViolation => 9002
@@ -313,6 +321,10 @@ def ThalesKind.message : ThalesKind → String
     s!"The '{op}' operator is not supported"
   | .topLevelMutableReferencedByHoisted name =>
     s!"Top-level mutable variable '{name}' cannot be referenced by a hoisted declaration (function or const)"
+  | .undefinedBindingName =>
+    "The name 'undefined' cannot be bound; rename this binding"
+  | .nullishInitializerNeedsAnnotation =>
+    "A bare 'null' or 'undefined' initializer needs a type annotation on the binding"
   | .directiveUnused => "Unused `@thales-expect-error` directive"
   | .directiveCodeMismatch expected actual =>
     let fmtCode (n : Nat) : String := s!"TH{padCode n}"
