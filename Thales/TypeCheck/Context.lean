@@ -24,6 +24,13 @@ structure InterfaceDef where
   members : List TSInterfaceMember
   deriving Inhabited
 
+/-- A class's checkable surface: the instance object type plus the
+    constructor signature (used by `new` for arity/argument checking). -/
+structure ClassInfo where
+  instanceType : TSType
+  ctorParams : List (String × TSType)
+  deriving Inhabited
+
 /-- Mutable state accumulated during type checking -/
 structure TypeCheckState where
   diagnostics : Array Diagnostic := #[]
@@ -39,7 +46,7 @@ structure TypeContext where
   typeAliases : Std.HashMap String TypeAliasDef := {}
   interfaces : Std.HashMap String InterfaceDef := {}
   enums : Std.HashMap String TSType := {}
-  classes : Std.HashMap String TSType := {}  -- class name → instance object type
+  classes : Std.HashMap String ClassInfo := {}  -- class name → instance type + ctor signature
   consts : Std.HashSet String := {}  -- names declared with `const` (for TS2588)
   returnType : Option TSType := none  -- expected return type in current function
   deriving Inhabited
@@ -118,7 +125,7 @@ partial def resolveType (ty : TSType) : TypeCheckM TSType := do
       | none =>
         -- Check if it's a class
         match ctx.classes[name]? with
-        | some classTy => return classTy
+        | some info => return info.instanceType
         | none => return ty  -- unresolved ref, leave as-is
   | .paren inner => resolveType inner
   | .typeVar .. => return ty  -- don't resolve type variables
@@ -197,15 +204,42 @@ def withEnum {α : Type} (name : String) (ty : TSType) (m : TypeCheckM α) : Typ
       }
       (m.run s).run newCtx
 
-/-- Run a computation with a registered class (instance type + class-name binding) -/
-def withClass {α : Type} (name : String) (instanceTy : TSType) (m : TypeCheckM α) : TypeCheckM α :=
+/-- Run a computation with a registered class (instance type + ctor signature + class-name binding) -/
+def withClass {α : Type} (name : String) (info : ClassInfo) (m : TypeCheckM α) : TypeCheckM α :=
   StateT.mk fun s =>
     ReaderT.mk fun ctx =>
       let newCtx := { ctx with
-        classes := ctx.classes.insert name instanceTy
+        classes := ctx.classes.insert name info
         bindings := ctx.bindings.insert name (.ref name [])
       }
       (m.run s).run newCtx
+
+/-- Pure builder of a class's importable surface from a `classDecl`'s retained
+    annotations (no body checking): fields become properties with their real
+    readonly/optional flags, methods carry their annotated signatures, and
+    ctor params come from the `.constructor` member. `.any` stands in for any
+    missing annotation — the subset check owns rejection of those shapes. -/
+def classInfoOfDecl : Statement → Option ClassInfo
+  | .classDecl _ _ _ body .. => Id.run do
+    let mut members : List TSObjectMember := []
+    let mut ctorParams : List (String × TSType) := []
+    for el in body do
+      match el with
+      | .field (.mk _ (.identifier _ fname) _ false false _ readonly optional typeAnnotation _) =>
+        members := members ++ [.property fname (typeAnnotation.getD .any) optional readonly]
+      | .method (.mk _ (.identifier _ mname) _ kind false static_ _ _ _ _ _ sigParams returnType) =>
+        match kind with
+        | .constructor =>
+          ctorParams := sigParams.map fun (pname, ann, _, _) => (pname, ann.elim .any (·.type))
+        | .method =>
+          if !static_ then
+            let ps := sigParams.map fun (pname, ann, opt, rest_) =>
+              TSParamType.mk pname (ann.elim .any (·.type)) opt rest_
+            members := members ++ [.method mname ps (returnType.elim .any (·.type)) false]
+        | _ => pure ()  -- getters/setters: out of the v1 surface
+      | _ => pure ()
+    return some { instanceType := .object members, ctorParams }
+  | _ => none
 
 /-- Allocate a fresh type variable with a unique ID.
     Pass the constraint from the type parameter if any. -/

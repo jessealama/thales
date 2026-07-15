@@ -152,32 +152,55 @@ private def widenAssignedVars (assignedNames : List String) : TypeCheckM (List (
     | none => pure ()
   return widened
 
-/-- Build an instance TSType from a class body, inheriting members from an optional superclass -/
+/-- Build an instance TSType from a class body, inheriting members from an optional superclass.
+    Fields and methods carry their retained annotations (`.any` when absent). -/
 private def buildClassInstanceType (superClass : Option Expression) (body : List ClassElement) : TypeCheckM TSType := do
   -- Inherit members from superclass if known
   let mut instanceMembers : List TSObjectMember := []
   match superClass with
   | some (.identifier _ superName) =>
     let ctx ← read
-    if let some (.object parentMembers) := ctx.classes[superName]? then
-      instanceMembers := parentMembers
+    if let some info := ctx.classes[superName]? then
+      if let .object parentMembers := info.instanceType then
+        instanceMembers := parentMembers
   | _ => pure ()
   -- Collect instance fields and methods from the class body
   for element in body do
     match element with
-    | .field (.mk _ key _value _computed static_ _) =>
+    | .field (.mk _ key _value _computed static_ _ readonly optional typeAnnotation _) =>
       if !static_ then
         if let .identifier _ fieldName := key then
-          instanceMembers := instanceMembers ++ [.property fieldName .any false false]
-    | .method (.mk _ key _value kind _computed static_ _) =>
+          instanceMembers := instanceMembers ++
+            [.property fieldName (typeAnnotation.getD .any) optional readonly]
+    | .method (.mk _ key _value kind _computed static_ _ _ _ _ _ sigParams returnType) =>
       if !static_ then
         if let .identifier _ methodName := key then
           match kind with
           | .method =>
-            instanceMembers := instanceMembers ++ [.method methodName [] .any false]
+            let ps := sigParams.map fun (pname, ann, opt, rest_) =>
+              TSParamType.mk pname (ann.elim .any (·.type)) opt rest_
+            instanceMembers := instanceMembers ++
+              [.method methodName ps (returnType.elim .any (·.type)) false]
           | _ => pure ()  -- constructor/getter/setter: skip for now
     | _ => pure ()
   return .object instanceMembers
+
+/-- Extract the ctor param bindings from a class body's `.constructor` member. -/
+private def classCtorParams (body : List ClassElement) : List (String × TSType) :=
+  body.findSome? (fun el => match el with
+    | .method (.mk _ _ _ .constructor _ _ _ _ _ _ _ sigParams _) =>
+      some (sigParams.map fun (pname, ann, _, _) => (pname, ann.elim TSType.any (·.type)))
+    | _ => none) |>.getD []
+
+/-- A view of an instance type with readonly stripped from every property —
+    the type of `this` inside a constructor body, where tsc permits
+    assignment to readonly fields. -/
+private def mutableInstanceView (instanceTy : TSType) : TSType :=
+  match instanceTy with
+  | .object ms => .object (ms.map fun m => match m with
+      | .property n t o _ => .property n t o false
+      | other => other)
+  | t => t
 
 /-- Resolve type alias refs in bindings so narrowing sees concrete union/object types.
     Only resolves bindings for the variables mentioned in the guard. -/
@@ -225,21 +248,46 @@ partial def checkStatement (stmt : TSStatement) (rest : List TSStatement) : Type
             pure baseInstanceTy
         else
           pure baseInstanceTy
-      -- Check method bodies in their own scopes (with params bound as `any`)
-      for element in body do
-        match element with
-        | .method (.mk _ _ value _ _ _ _) =>
-          if let .functionExpr _ _ params methodBody _ _ := value then
-            let paramBindings := params.map fun
-              | .simple { name, .. } | .withDefault { name, .. } _ | .rest { name, .. } => (name, TSType.any)
-              | .pattern _ => ("_", TSType.any)
-            let hoisted := collectHoistedVars [.js methodBody]
-            let paramNames := paramBindings.map (·.1)
-            let hoistedBindings := hoisted.filter (!paramNames.contains ·)
-              |>.map fun n => (n, TSType.any)
-            withFunctionScope (paramBindings ++ hoistedBindings) none (checkJSStatementRaw methodBody)
-        | _ => pure ()
-      withClass id.name instanceTy (checkStatements rest)
+      let info : ClassInfo := { instanceType := instanceTy, ctorParams := classCtorParams body }
+      -- Check ctor and method bodies inside the class's own registration so
+      -- self-references (`new Point` in a method) resolve. Params bind at
+      -- their annotated types; `this` binds at the instance type (readonly
+      -- stripped inside the ctor, where tsc permits field assignment).
+      withClass id.name info do
+        for element in body do
+          match element with
+          | .method (.mk _ _ value kind _ static_ _ _ _ _ _ sigParams returnType) =>
+            if let .functionExpr _ _ params methodBody _ _ := value then
+              let paramBindings :=
+                if sigParams.isEmpty then
+                  params.map fun
+                    | .simple { name, .. } | .withDefault { name, .. } _ | .rest { name, .. } => (name, TSType.any)
+                    | .pattern _ => ("_", TSType.any)
+                else
+                  sigParams.map fun (pname, ann, _, _) => (pname, ann.elim TSType.any (·.type))
+              let thisTy : TSType :=
+                if static_ then .any
+                else if kind == .constructor then mutableInstanceView instanceTy
+                else .ref id.name []
+              let retTy := match kind with
+                | .constructor => none
+                | _ => returnType.map (·.type)
+              -- DA state handling mirrors the annotatedFuncDecl arm
+              let savedDA ← saveAssignmentState
+              let savedChecks := (← get).needsAssignmentCheck
+              modify fun s => { s with assignedVars := {}, needsAssignmentCheck := {} }
+              for (pname, _) in paramBindings do
+                markAssigned pname
+              let hoisted := collectHoistedVars [.js methodBody]
+              let paramNames := paramBindings.map (·.1)
+              let hoistedBindings := hoisted.filter (!paramNames.contains ·)
+                |>.map fun n => (n, TSType.any)
+              withFunctionScope (paramBindings ++ hoistedBindings ++ [("this", thisTy)]) retTy
+                (checkJSStatementRaw methodBody)
+              restoreAssignmentState savedDA
+              modify fun s => { s with needsAssignmentCheck := savedChecks }
+          | _ => pure ()
+        checkStatements rest
     | _ =>
       checkJSStatementRaw s
       checkStatements rest
