@@ -200,6 +200,14 @@ private def leanReservedMemberNames : List String :=
   ["mk", "rec", "recOn", "casesOn", "brecOn", "below", "ibelow",
    "noConfusion", "noConfusionType"]
 
+/-- Names reserved for v1 class METHODS beyond the structure-member set:
+    the name-keyed mutating-method check (TH0004) and the `reduce`→`foldl`
+    emitter special case match member calls by name alone, so a class method
+    with one of these names would be mis-routed. Reserving them keeps those
+    name-keyed checks sound. -/
+private def reservedMethodNames : List String :=
+  leanReservedMemberNames ++ mutatingMethodNames ++ ["reduce"]
+
 /-- The plain-identifier name of a class member key, if any. -/
 private def classKeyName? : Expression → Option String
   | .identifier _ n => some n
@@ -632,15 +640,16 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
       ++ checkStmt ctx' body
   -- Class declarations: per-member v1 validation (TH0030 narrows to
   -- unsupported class forms; members draw TH0094-TH0102)
-  | .classDecl b _ superClass body isAbstract hasTypeParams hasImplements =>
-    checkClassDecl ctx b superClass body isAbstract hasTypeParams hasImplements
+  | .classDecl b id superClass body isAbstract hasTypeParams hasImplements =>
+    checkClassDecl ctx b id.name superClass body isAbstract hasTypeParams hasImplements
 
 /-- Validate a class declaration against the v1 supported shape (#106):
     readonly annotated fields, an assign-each-field-once constructor, public
     non-static instance methods with return annotations. Class-level form
     violations (abstract/generic/implements/extends) short-circuit member
     validation. General subset checks recurse into ctor and method bodies. -/
-partial def checkClassDecl (ctx : MutCtx) (b : NodeBase) (superClass : Option Expression)
+partial def checkClassDecl (ctx : MutCtx) (b : NodeBase) (className : String)
+    (superClass : Option Expression)
     (body : List ClassElement) (isAbstract hasTypeParams hasImplements : Bool)
     : Array Diagnostic := Id.run do
   -- Class-level form: wrong form makes member-level precision meaningless
@@ -704,6 +713,9 @@ partial def checkClassDecl (ctx : MutCtx) (b : NodeBase) (superClass : Option Ex
         else if sigParams.any (fun (pname, ann, opt, rest_) =>
             pname == "_destructured" || opt || rest_ || ann.isNone) then
           diags := diags.push (mkThalesDiag (.classCtorFormNotSupported "parameters must be plain annotated identifiers") loc)
+        else if sigParams.any (fun (pname, _, _, _) => pname == className) then
+          -- `def ctor' (C : ...) : C` — the binder would shadow the return type
+          diags := diags.push (mkThalesDiag (.classCtorFormNotSupported s!"parameter '{className}' shadows the class name") loc)
         else if let .functionExpr _ _ params cbody _ _ := value then
           -- Straight-line body: each statement must be `this.<field> = <expr>;`,
           -- each declared field assigned exactly once, `this.<x>` reads in an
@@ -737,6 +749,17 @@ partial def checkClassDecl (ctx : MutCtx) (b : NodeBase) (superClass : Option Ex
           if ctorDiag.isNone then
             if let some missing := fieldNames.find? (fun f => !assigned.contains f) then
               ctorDiag := some (.classCtorFormNotSupported s!"field '{missing}' must be assigned exactly once")
+          -- `def ctor'` is emitted before every method, so ANY reference to a
+          -- same-class method from the ctor is a forward reference (TH0101) —
+          -- including via another instance (`o.bump()` with `o : C`).
+          for r in memberPropRefsStmt cbody do
+            if methodNames.contains r.prop then
+              diags := diags.push (mkThalesDiag (.classMethodForwardReference r.prop) r.loc)
+          -- A ctor that mentions the class's own name (`new C(...)` in an RHS)
+          -- would make the non-partial `ctor'` self-recursive; Lean cannot
+          -- show termination for it, so reject up front.
+          if ctorDiag.isNone && (EscapeAnalysis.identsStmt cbody).contains className then
+            ctorDiag := some (.classCtorFormNotSupported "the constructor may not reference the class being constructed")
           if let some k := ctorDiag then
             diags := diags.push (mkThalesDiag k loc)
       | .method =>
@@ -759,8 +782,16 @@ partial def checkClassDecl (ctx : MutCtx) (b : NodeBase) (superClass : Option Ex
           diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "'override' is not supported") loc)
         else if returnType.isNone then
           diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "missing return type annotation") loc)
+        else if sigParams.any (fun (pname, ann, opt, rest_) =>
+            pname == "_destructured" || opt || rest_ || ann.isNone) then
+          -- an optional/rest/pattern/unannotated param would emit a signature
+          -- the receiver-first lowering cannot honor (e.g. a partially-applied
+          -- call for a skipped optional argument)
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "parameters must be plain annotated identifiers") loc)
+        else if sigParams.any (fun (pname, _, _, _) => pname == className) then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported s!"parameter '{className}' shadows the class name") loc)
         else if let some n := classKeyName? key then
-          if leanReservedMemberNames.contains n then
+          if reservedMethodNames.contains n then
             diags := diags.push (mkThalesDiag (.classMethodFormNotSupported s!"'{n}' is a reserved name") loc)
         -- General subset checks recurse into the method body regardless of
         -- the signature verdict; forward references draw TH0101.
@@ -773,6 +804,26 @@ partial def checkClassDecl (ctx : MutCtx) (b : NodeBase) (superClass : Option Ex
             if laterMethods.contains r.prop then
               diags := diags.push (mkThalesDiag (.classMethodForwardReference r.prop) r.loc)
           diags := diags ++ checkStmt (bodyCtx params mbody) mbody
+  -- Duplicate (non-static) member names: mostly tsc-rejected (TS2300/TS2717),
+  -- but a legal overload signature + implementation pair parses as two
+  -- same-named methods and would emit two same-named defs.
+  let mut seenNames : List String := []
+  for el in body do
+    match el with
+    | .field (.mk fb key _ false false _ ..) =>
+      if let some n := classKeyName? key then
+        if seenNames.contains n then
+          diags := diags.push (mkThalesDiag (.classFieldFormNotSupported s!"'{n}' is declared more than once") fb.loc)
+        else
+          seenNames := seenNames ++ [n]
+    | .method (.mk mb key _ kind false false _ ..) =>
+      if kind != .constructor then
+        if let some n := classKeyName? key then
+          if seenNames.contains n then
+            diags := diags.push (mkThalesDiag (.classMethodFormNotSupported s!"'{n}' is declared more than once") mb.loc)
+          else
+            seenNames := seenNames ++ [n]
+    | _ => pure ()
   -- A class with fields must declare a constructor
   if ctorCount == 0 && !fieldNames.isEmpty then
     diags := diags.push (mkThalesDiag (.classCtorFormNotSupported "a class with fields must declare a constructor") b.loc)
@@ -1052,6 +1103,15 @@ partial def shadowFunc (paramNames : List String) (body : Statement)
 
 end
 
+/-- Build a binding environment from annotated function parameters. -/
+private def buildParamEnv
+    (params : List (String × Option TypeAnnotation × Bool × Bool))
+    : Std.HashMap String TSType :=
+  params.foldl (fun env (name, annOpt, _, _) =>
+    match annOpt with
+    | some ann => env.insert name ann.type
+    | none => env) {}
+
 /-- Walk a statement body checking for switch exhaustiveness violations.
     Uses the provided SwitchEnv for identifier lookups. -/
 partial def checkSwitchStmt (env : SwitchEnv) (stmt : Statement) : Array Diagnostic :=
@@ -1087,6 +1147,20 @@ partial def checkSwitchStmt (env : SwitchEnv) (stmt : Statement) : Array Diagnos
   | .functionDecl _ _ _ body _ _ =>
     -- Function declarations create a new scope; bindings don't leak in or out.
     checkSwitchStmt { aliasEnv := env.aliasEnv, bindingEnv := {} } body
+  | .classDecl _ _ _ body .. =>
+    -- Ctor/method bodies host switches like function bodies (#106): bind the
+    -- retained signature params and honor the return annotation for the
+    -- fall-through rule (a ctor has no value to return).
+    body.foldl (fun acc el =>
+      match el with
+      | .method (.mk _ _ (.functionExpr _ _ _ mbody _ _) kind _ _ _ _ _ _ _ sigParams returnType) =>
+          let voidReturn := match kind, returnType with
+            | .constructor, _ => true
+            | _, none => true
+            | _, some ann => ann.type == .void_
+          acc ++ checkSwitchStmt
+            { aliasEnv := env.aliasEnv, bindingEnv := buildParamEnv sigParams, voidReturn } mbody
+      | _ => acc) #[]
   | _ => #[]
 
 /-- Walk a TSType and collect TH0020-TH0025 diagnostics. `defaultLoc`
@@ -1161,15 +1235,6 @@ private def buildTopRecvEnv (body : List TSStatement) : Std.HashMap String TSTyp
     | .annotatedVarDecl _ _ name (some ann) _ => env.insert name ann.type
     | .declareStmt _ (.annotatedVarDecl _ _ name (some ann) _) => env.insert name ann.type
     | _ => env) {}
-
-/-- Build a binding environment from annotated function parameters. -/
-private def buildParamEnv
-    (params : List (String × Option TypeAnnotation × Bool × Bool))
-    : Std.HashMap String TSType :=
-  params.foldl (fun env (name, annOpt, _, _) =>
-    match annOpt with
-    | some ann => env.insert name ann.type
-    | none => env) {}
 
 /-- Check a TS-level statement for mutation violations.
     `aliasEnv` is threaded in for for-of array-type resolution; `topRecvEnv`

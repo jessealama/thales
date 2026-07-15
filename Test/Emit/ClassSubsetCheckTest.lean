@@ -181,6 +181,60 @@ def testLoopInCtorBody : IO Unit := expectCode
 def testClassReadsTopLevelMutable : IO Unit := expectCode
   "let counter = 0n;\ncounter = 1n;\nclass C { m(): bigint { return counter; } }" 93
 
+-- Switch exhaustiveness reaches into method bodies (TH0040): a
+-- non-exhaustive switch on a discriminated union in a method is rejected;
+-- an exhaustive one is admitted
+private def shapeAlias : String :=
+  "type Shape = { kind: 'c'; r: bigint } | { kind: 's'; s: bigint };\n"
+def testNonExhaustiveSwitchInMethod : IO Unit := expectCode
+  (shapeAlias ++
+   "class M { pick(sh: Shape): bigint { switch (sh.kind) { case 'c': return sh.r; } return 0n; } }") 40
+def testExhaustiveSwitchInMethodOk : IO Unit := do
+  let src := shapeAlias ++
+    "class M { pick(sh: Shape): bigint { switch (sh.kind) { case 'c': return sh.r; case 's': return sh.s; } } }"
+  expectNoCode src 40
+  expectNoCode src 41
+
+-- A ctor referencing a same-class method — via `this` or another instance —
+-- is a forward reference (ctor' is emitted before every method): TH0101
+def testCtorCallsMethodViaInstance : IO Unit := expectCode
+  ("class C { readonly x: bigint; constructor(o: C) { this.x = o.bump(); } " ++
+   "bump(): bigint { return 1n; } }") 101
+
+-- A ctor that constructs its own class would make `def ctor'` self-recursive
+def testSelfRecursiveCtor : IO Unit := expectCode
+  ("class R { readonly x: bigint; " ++
+   "constructor(n: bigint) { this.x = n <= 0n ? 0n : new R(n - 1n).x + 1n; } }") 99
+
+-- A ctor/method parameter named after the class shadows the return type
+def testCtorParamShadowsClassName : IO Unit := expectCode
+  "class Gate { readonly x: bigint; constructor(Gate: bigint) { this.x = Gate; } }" 99
+def testMethodParamShadowsClassName : IO Unit := expectCode
+  "class Gate { m(Gate: bigint): bigint { return Gate; } }" 100
+
+-- Method params must be plain annotated identifiers (an optional param
+-- would emit a partially-applied call): TH0100
+def testOptionalMethodParam : IO Unit := expectCode
+  "class C { m(y?: bigint): bigint { return 1n; } }" 100
+def testRestMethodParam : IO Unit := expectCode
+  "class C { m(...ys: bigint[]): bigint { return 0n; } }" 100
+
+-- Overload signature + implementation parse as two same-named methods
+def testOverloadSignatures : IO Unit := expectCode
+  "class C { m(a: bigint): bigint; m(a: bigint): bigint { return a; } }" 100
+
+-- Duplicate fields
+def testDuplicateFields : IO Unit := expectCode
+  ("class C { readonly x: bigint; readonly x: bigint; " ++
+   "constructor(x: bigint) { this.x = x; } }") 98
+
+-- Name-keyed checks (TH0004 mutating methods, the reduce→foldl emitter
+-- special case) stay sound: those names are reserved for class methods
+def testMutatorNameReserved : IO Unit := expectCode
+  "class S { add(n: bigint): bigint { return n; } }" 100
+def testReduceNameReserved : IO Unit := expectCode
+  "class S { reduce(a: bigint, b: bigint): bigint { return a; } }" 100
+
 #eval testSupportedShape
 #eval testSelfRecursionOk
 #eval testBackwardRefOk
@@ -226,4 +280,16 @@ def testClassReadsTopLevelMutable : IO Unit := expectCode
 #eval testLoopInMethodBody
 #eval testLoopInCtorBody
 #eval testClassReadsTopLevelMutable
+#eval testNonExhaustiveSwitchInMethod
+#eval testExhaustiveSwitchInMethodOk
+#eval testCtorCallsMethodViaInstance
+#eval testSelfRecursiveCtor
+#eval testCtorParamShadowsClassName
+#eval testMethodParamShadowsClassName
+#eval testOptionalMethodParam
+#eval testRestMethodParam
+#eval testOverloadSignatures
+#eval testDuplicateFields
+#eval testMutatorNameReserved
+#eval testReduceNameReserved
 #eval IO.println "ClassSubsetCheckTest: OK"

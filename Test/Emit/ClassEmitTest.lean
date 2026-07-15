@@ -110,11 +110,17 @@ def testExportPrivacyDistribution : IO Unit := do
 #eval testExportPrivacyDistribution
 
 -- Structural construction for free: class fields register in structFields,
--- so an annotated object literal against the class type emits a struct literal
+-- so an annotated object literal against the class type emits a struct
+-- literal (tsc-legal only for a method-less class)
 def testStructuralConstruction : IO Unit :=
   expectEmit
-    (pointSrc ++ "const q: Point = { x: 1n, y: 2n };\nconsole.log(q.x);\n") "M"
-    [ "x := 1, y := 2 : Point" ]
+    ("class Pair {\n" ++
+     "  readonly x: bigint;\n" ++
+     "  readonly y: bigint;\n" ++
+     "  constructor(x: bigint, y: bigint) { this.x = x; this.y = y; }\n" ++
+     "}\n" ++
+     "const q: Pair = { x: 1n, y: 2n };\nconsole.log(q.x);\n") "M"
+    [ "x := 1, y := 2 : Pair" ]
 
 #eval testStructuralConstruction
 

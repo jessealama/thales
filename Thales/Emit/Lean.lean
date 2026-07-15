@@ -706,6 +706,8 @@ private def recordDeclBinding (env : EmitEnv) (name : String)
     (typeAnnotation : Option TSType) (init : Option Expression) : EmitEnv :=
   let inferredTy : Option TSType := match init with
     | some (.callExpr _ (.identifier _ f) _ _) => env.funcRetTypes.get? f
+    | some (.newExpr _ (.identifier _ c) _) =>
+        if env.classCtorParams.contains c then some (.ref c []) else none
     | some (.memberExpr _ (.identifier _ arrName) _ true _) =>
         (arrayElemTy? env arrName).map (fun et => TSType.option et)
     -- Literal initializers carry a knowable non-Option primitive type
@@ -953,7 +955,16 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
           .app (.var "Array.toNaturalSize") [.var arrName]
       | some (.string) =>
           .app (.var "String.toNaturalLength") [.var arrName]
-      | _ =>
+      | some other =>
+          -- A receiver bound to a known structure (interface or class) with a
+          -- declared `length` field reads it as a plain projection; the
+          -- `.toFloat` fallback would mistype e.g. an Int-valued field (#106).
+          match resolveTypeAlias env other with
+          | .ref n [] =>
+              if env.structFields.contains n then .proj (.var arrName) "length"
+              else .proj (.proj (.var arrName) "length") "toFloat"
+          | _ => .proj (.proj (.var arrName) "length") "toFloat"
+      | none =>
           -- Unknown binding: best-effort `s.length.toFloat`.
           .proj (.proj (.var arrName) "length") "toFloat"
   -- `this.<f>`: in ctor mode the field-local `let f` binding; in a method
@@ -2185,6 +2196,10 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
         match funcRetTypes.get? f with
         | some t => acc.insert name t
         | none => acc
+    | .annotatedVarDecl _ _ name none (some (.newExpr _ (.identifier _ c) _)) =>
+        -- `const s = new C(...)`: record the class instance type so
+        -- name-keyed member reads (e.g. a `length` field) resolve (#106)
+        acc.insert name (.ref c [])
     | _ => acc) {}
   -- Map every interface and single-record `type` alias to its declared fields
   -- (in order), so object-literal construction can resolve the target structure

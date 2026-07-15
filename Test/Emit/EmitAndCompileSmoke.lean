@@ -68,10 +68,16 @@ def samples : List (String × String) := [
    "  norm1(): bigint { return this.x < 0n ? -this.x : this.x; }\n" ++
    "  translate(dx: bigint, dy: bigint): Point { return new Point(this.x + dx, this.y + dy); }\n" ++
    "}\n" ++
+   -- structural construction stays tsc-legal only for a method-less class
+   "class Pair {\n" ++
+   "  readonly a: bigint;\n" ++
+   "  readonly b: bigint;\n" ++
+   "  constructor(a: bigint, b: bigint) { this.a = a; this.b = b; }\n" ++
+   "}\n" ++
    "const p = new Point(3n, -4n);\n" ++
-   "const q: Point = { x: 1n, y: 2n };\n" ++
+   "const q: Pair = { a: 1n, b: 2n };\n" ++
    "console.log(p.norm1());\n" ++
-   "console.log(p.translate(1n, 1n).x, q.y);\n")
+   "console.log(p.translate(1n, 1n).x, q.b);\n")
 ]
 
 def runSmoke : IO Unit := do

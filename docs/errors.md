@@ -1217,12 +1217,12 @@ execution order in ways the straight-line `ctor'` lowering does not model.
 
 **Message:** `Unsupported class field: <detail>`
 
-A v1 field is exactly `readonly <name>: <Type>;`. Details: `must be declared
-readonly`, `optional fields are not supported`, `computed names are not
-supported`, `missing type annotation`, `'<name>' is a reserved name` (member
-names that collide with Lean's auto-generated structure members: `mk`, `rec`,
-`recOn`, `casesOn`, `brecOn`, `below`, `ibelow`, `noConfusion`,
-`noConfusionType`).
+A v1 field is exactly `readonly <name>: <Type>;`, declared once. Details:
+`must be declared readonly`, `optional fields are not supported`, `computed
+names are not supported`, `missing type annotation`, `'<name>' is declared
+more than once`, `'<name>' is a reserved name` (member names that collide
+with Lean's auto-generated structure members: `mk`, `rec`, `recOn`,
+`casesOn`, `brecOn`, `below`, `ibelow`, `noConfusion`, `noConfusionType`).
 
 Rejected: `class C { count: bigint; ... }` (not readonly)
 
@@ -1234,10 +1234,12 @@ Rejected: `class C { count: bigint; ... }` (not readonly)
 
 A v1 constructor body is a straight-line sequence of `this.<field> = <expr>;`
 statements assigning each declared field exactly once, in any order, where an
-RHS may read parameters, outer scope, and already-assigned fields. Parameters
+RHS may read parameters, outer scope, and already-assigned fields — but not
+the class's own name (`ctor'` is a non-recursive `def`) and not any of the
+class's methods (they are all declared after `ctor'`; see TH0101). Parameters
 must be plain annotated identifiers (no defaults, rest, destructuring, or
-parameter properties). A class with fields must declare a constructor; a
-class must declare at most one.
+parameter properties) and may not share the class's name. A class with fields
+must declare a constructor; a class must declare at most one.
 
 Rejected: `constructor(x: bigint) { if (x > 0n) { this.x = x; } }`
 
@@ -1248,10 +1250,21 @@ Rejected: `constructor(x: bigint) { if (x > 0n) { this.x = x; } }`
 **Message:** `Unsupported class method: <detail>`
 
 A v1 method is a public non-static instance method with a return type
-annotation and a plain name. Details: `generator and async methods are not
-supported`, `computed names are not supported`, `optional methods are not
-supported`, `generic methods are not supported`, `missing return type
-annotation`, `'override' is not supported`, `'<name>' is a reserved name`.
+annotation, plain annotated identifier parameters (no `?`, defaults, rest,
+or destructuring; no parameter sharing the class's name), and a plain
+non-duplicate name. Overload signatures parse as a second declaration of
+the same name and are rejected as duplicates. Details: `generator and async
+methods are not supported`, `computed names are not supported`, `optional
+methods are not supported`, `generic methods are not supported`, `missing
+return type annotation`, `'override' is not supported`, `parameters must be
+plain annotated identifiers`, `parameter '<name>' shadows the class name`,
+`'<name>' is declared more than once`, `'<name>' is a reserved name`.
+
+Reserved method names are the Lean structure members (see TH0098) plus the
+names matched by name-keyed checks elsewhere in the pipeline: the mutating
+method family (`push`, `pop`, `shift`, `unshift`, `splice`, `sort`,
+`reverse`, `fill`, `copyWithin`, `set`, `delete`, `clear`, `add`) and
+`reduce`.
 
 Rejected: `class C { zero() { return 0n; } }` (missing return annotation)
 
@@ -1264,7 +1277,9 @@ Rejected: `class C { zero() { return 0n; } }` (missing return annotation)
 A method body may reference only methods declared _earlier_ in the same
 class; self-recursion is allowed. This mirrors the compiler's declare-before-use
 stance for top-level declarations: methods lower to namespace-level `def`s in
-source order, so a forward reference would not elaborate.
+source order, so a forward reference would not elaborate. A constructor may
+reference no method of its class at all (via `this` or any other instance) —
+`ctor'` is emitted before every method.
 
 Rejected: `class C { a(): bigint { return this.b(); } b(): bigint { return 1n; } }`
 

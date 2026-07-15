@@ -724,11 +724,19 @@ supported (the "v1 class" shape) iff:
   parameters, outer scope, and _already-assigned_ `this.<field>`s.
 - Methods are public non-static instance methods: no getters/setters,
   statics, `#`/`private`/`protected`, generators/`async`, computed names,
-  `?`, type parameters, or `override`; a return type annotation is
-  required; the name is not Lean-reserved; a method body may reference only
-  methods declared _earlier_ in the class (self-recursion is allowed).
+  `?`, type parameters, `override`, or overload signatures; parameters are
+  plain annotated identifiers not named after the class; a return type
+  annotation is required; the name is not Lean-reserved (which for methods
+  additionally covers the mutating-method family `push`/`sort`/`set`/`add`/…
+  and `reduce`); a method body may reference only methods declared _earlier_
+  in the class (self-recursion is allowed), and a constructor may reference
+  no method of its class at all.
+- Member names are declared once (no field/method name collisions).
 - A method is always invoked, never read as a value (`const f = p.m` is
   out — TH0102).
+- Loops are not yet admitted inside constructor or method bodies (TH0010);
+  use recursion or array methods. Routing method bodies through the do-mode
+  eligibility path that free functions use is a follow-up.
 - `export class` is supported: classes participate in module export/import
   like interfaces and functions.
 
