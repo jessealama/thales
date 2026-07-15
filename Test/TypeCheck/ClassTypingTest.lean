@@ -63,6 +63,18 @@ def t4 : IO Unit := expectTS (pointClass ++ "const p = new Point(1n, 2n);\nconst
 -- 5. Readonly field assignment: TS2540
 def t5 : IO Unit := expectTS (pointClass ++ "const p = new Point(1n, 2n);\np.x = 5n;\n") 2540
 
+-- 5b. Forward reference: a hoisted function using a class declared later
+--     draws TS2304 (declare-before-use), never uncompilable emitted Lean;
+--     `new` on a JS global error constructor stays clean.
+def t5b : IO Unit := expectTS
+  ("function make(): Point { return new Point(1n); }\n" ++
+   "class Point { readonly x: bigint; constructor(x: bigint) { this.x = x; } }\n") 2304
+
+def t5c : IO Unit := do
+  let diags ← diagsOf "function f(x: bigint): bigint { if (x < 0n) { throw new RangeError(\"neg\"); } return x; }"
+  if diags.any (hasTS · 2304) then
+    throw (IO.userError "spurious TS2304 on a JS global error constructor")
+
 -- 6. `this` is instance-typed inside methods: `this.nope` is TS2339
 def t6 : IO Unit := expectTS
   ("class C {\n" ++
@@ -114,6 +126,8 @@ def t7d : IO Unit := do
 #eval t3
 #eval t4
 #eval t5
+#eval t5b
+#eval t5c
 #eval t6
 #eval t7a
 #eval t7b

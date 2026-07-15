@@ -623,8 +623,18 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
 
   -- new Expr(args): look up class instance type, checking the ctor signature
   | .newExpr base callee args =>
-    if let .identifier _ className := callee then
+    -- JS global error constructors: recognized by the throws story, typed
+    -- `any` here (they are not registered classes).
+    let jsGlobalConstructors : List String :=
+      ["Error", "RangeError", "TypeError", "SyntaxError", "ReferenceError",
+       "EvalError", "URIError", "AggregateError"]
+    if let .identifier calleeBase className := callee then
       let ctx ← read
+      if ctx.classes[className]?.isNone && !jsGlobalConstructors.contains className then
+        -- Not a known class: resolve the callee like any identifier so a
+        -- forward reference to a later-declared class draws TS2304 (the
+        -- declare-before-use stance) instead of emitting uncompilable Lean.
+        let _ ← synthJSExpr (.identifier calleeBase className)
       if let some info := ctx.classes[className]? then
         let instanceTy := info.instanceType
         if containsTypeVar instanceTy then
