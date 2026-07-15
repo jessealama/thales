@@ -6,7 +6,7 @@ Thales-TS 0.6 is a pure-functional subset of TypeScript with a mechanical shallo
 
 v0.6 adds four built-in bounded number types (`Integer`, `Natural`, `Byte`, `Bit`) shipped via `@thales/prelude`. See the dedicated section below for details.
 
-Thales-TS is **not** full TypeScript. It excludes escaping mutation (function-local non-escaping mutation is in subset, emitted as `Id.run do`), unannotated exceptions, async I/O, classes, and several advanced type constructs in order to keep every accepted program mechanically translatable to terminating Lean 4 code. If your program compiles under `thales`, it has a Lean 4 image — and the behavior of the two paths is verified by the example corpus.
+Thales-TS is **not** full TypeScript. It excludes escaping mutation (function-local non-escaping mutation is in subset, emitted as `Id.run do`), unannotated exceptions, async I/O, most class forms (immutable class declarations are in subset), and several advanced type constructs in order to keep every accepted program mechanically translatable to terminating Lean 4 code. If your program compiles under `thales`, it has a Lean 4 image — and the behavior of the two paths is verified by the example corpus.
 
 ## Conformance contract
 
@@ -702,39 +702,55 @@ non-null arm. `if (x === undefined)` behaves identically.
 
 ---
 
-### TH0030 — `class` not supported
+### TH0030 — Unsupported class form
 
 **Category:** Declarations
 
-Rejected:
+Immutable class **declarations** are in subset. A class declaration is
+supported (the "v1 class" shape) iff:
+
+- It is a _declaration_ (class expressions stay out), with no `extends`
+  (TH0031), not `abstract`, no type parameters, and no `implements` clause.
+- Every field is an instance field of form `readonly <name>: <Type>;` — no
+  initializer, no `?`, no computed name, no `#name`, no accessibility
+  modifier other than none (or the default `public`), and the name is not
+  Lean-reserved (`mk`, `rec`, `recOn`, `casesOn`, `brecOn`, `below`,
+  `ibelow`, `noConfusion`, `noConfusionType`).
+- There is exactly one constructor when fields exist (zero fields ⇒ the
+  constructor is optional); its parameters are plain annotated identifiers
+  (no defaults, rest, destructuring, or parameter properties); its body is
+  exactly a sequence of `this.<field> = <expr>;` statements, one per
+  declared field, each field exactly once, where `<expr>` may read
+  parameters, outer scope, and _already-assigned_ `this.<field>`s.
+- Methods are public non-static instance methods: no getters/setters,
+  statics, `#`/`private`/`protected`, generators/`async`, computed names,
+  `?`, type parameters, or `override`; a return type annotation is
+  required; the name is not Lean-reserved; a method body may reference only
+  methods declared _earlier_ in the class (self-recursion is allowed).
+- A method is always invoked, never read as a value (`const f = p.m` is
+  out — TH0102).
+- `export class` is supported: classes participate in module export/import
+  like interfaces and functions.
+
+A supported class lowers to a Lean `structure` plus a `namespace` of
+receiver-first functions (`new C(args)` → `C.ctor' args`; `p.m(x)` resolves
+via generalized field notation). Field mutation needs no TH code: all v1
+fields are readonly, so assignment is tsc's own TS2540.
+
+TH0030 covers the remaining unsupported class-level forms:
 
 ```typescript
-class Counter {
-  private count: number = 0;
-  increment(): void {
-    this.count++;
-  }
-  get(): number {
-    return this.count;
-  }
-}
+const Counter = class {}; // TH0030: class expressions
+abstract class Base {} // TH0030: abstract classes
+class Box<T> {} // TH0030: generic classes
+class C implements I {} // TH0030: 'implements' clauses
 ```
 
-Idiomatic replacement:
+Member forms outside the v1 shape draw the specific codes TH0094–TH0102
+(see [errors.md](./errors.md#classes)).
 
-```typescript
-interface Counter {
-  count: number;
-}
-function increment(c: Counter): Counter {
-  return { count: c.count + 1 };
-}
-function getCount(c: Counter): number {
-  return c.count;
-}
-```
-
-Classes combine mutable state, method dispatch, and prototype-chain semantics — none of which have a direct shallow embedding in pure Lean. Classes are a 2 candidate via a `structure` + `namespace` desugaring, once the mutation story is resolved.
+Follow-up slices widen the surface: getters/statics (#113), privacy (#114),
+`instanceof` (#115).
 
 ---
 
@@ -771,7 +787,7 @@ function speak(a: Animal): string {
 }
 ```
 
-Single-dispatch method inheritance maps to `structure extends` in Lean, but virtual dispatch and override semantics require typeclass resolution that goes beyond the 0.5 shallow embedding. Discriminated unions with pattern matching cover the common use case.
+TH0031 fires on the `extends` clause even when both classes are otherwise in the supported v1 shape. Single-dispatch method inheritance maps to `structure extends` in Lean, but virtual dispatch and override semantics require typeclass resolution that goes beyond the 0.5 shallow embedding. Discriminated unions with pattern matching cover the common use case.
 
 ---
 

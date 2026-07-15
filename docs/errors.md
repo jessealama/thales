@@ -42,58 +42,67 @@ soundness check).
 
 ## Summary
 
-| Code   | Category     | Short Message                                             |
-| ------ | ------------ | --------------------------------------------------------- |
-| TH0001 | Mutation     | Cannot reassign variable                                  |
-| TH0002 | Mutation     | Cannot assign to array element                            |
-| TH0003 | Mutation     | Cannot assign to object property                          |
-| TH0004 | Mutation     | Cannot call mutating method                               |
-| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope        |
-| TH0006 | Mutation     | Assignment only supported in statement position           |
-| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`           |
-| TH0010 | Control flow | Loop not supported                                        |
-| TH0012 | Control flow | async/await not supported                                 |
-| TH0020 | Types        | `any` not permitted                                       |
-| TH0021 | Types        | `unknown` not permitted in user code                      |
-| TH0022 | Types        | Union must be discriminated                               |
-| TH0023 | Types        | Intersection types not supported                          |
-| TH0024 | Types        | keyof/conditional/mapped types not supported              |
-| TH0025 | Types        | null/undefined types not supported                        |
-| TH0026 | Types        | Condition must be boolean                                 |
-| TH0030 | Declarations | `class` not supported                                     |
-| TH0031 | Declarations | Inheritance (`extends`) not supported                     |
-| TH0032 | Declarations | Shadowing declaration not supported                       |
-| TH0040 | Matching     | Non-exhaustive switch on discriminated union              |
-| TH0041 | Matching     | Switch shape not lowerable                                |
-| TH0050 | Recursion    | Cannot verify termination                                 |
-| TH0066 | Totality     | `@total` and `@throws` declared together                  |
-| TH0067 | Totality     | `@total` function has uncaught throw                      |
-| TH0068 | Totality     | `@total` function contains an unverifiable loop           |
-| TH0070 | Totality     | `@total` asserted but Lean rejects termination            |
-| TH0060 | Exceptions   | Unannotated `throw`                                       |
-| TH0061 | Exceptions   | Unused `@throws` annotation                               |
-| TH0063 | Exceptions   | Thrown value must be a record type                        |
-| TH0064 | Exceptions   | Undeclared propagation                                    |
-| TH0080 | Refinement   | Literal value out of range for refinement type            |
-| TH0081 | Refinement   | Value not assignable to refinement without evidence       |
-| TH0082 | Subset       | Possibly-undefined operand; narrow before use             |
-| TH0083 | Subset       | Computed index access only supported on arrays            |
-| TH0084 | Subset       | Definedness test on a binding of undeterminable type      |
-| TH0085 | Subset       | Array method on a receiver of unlowerable element type    |
-| TH0086 | Subset       | Definedness test on a non-identifier subject              |
-| TH0087 | Subset       | Unsupported `String.prototype` method                     |
-| TH0088 | Subset       | Unsupported `import` form (default/namespace/side-effect) |
-| TH0089 | Subset       | Unsupported `export` form (default/re-export)             |
-| TH0090 | Subset       | Circular imports                                          |
-| TH0091 | Subset       | Regex literals are not supported                          |
-| TH0092 | Subset       | Unsupported unary operator (`typeof`/`void`/`delete`)     |
-| TH0093 | Subset       | Top-level mutable referenced by a hoisted declaration     |
-| TH9000 | Directive    | Unused `@thales-expect-error` directive                   |
-| TH9001 | Directive    | Directive code mismatch                                   |
-| TH9002 | Directive    | Cannot emit: subset violations suppressed                 |
-| TH9003 | Directive    | Malformed `@thales-expect-error` directive                |
-| TH9004 | Directive    | Emitted Lean code contains `sorry`                        |
-| TH9005 | Internal     | Emitted Lean would contain an unlowerable placeholder     |
+| Code   | Category     | Short Message                                                   |
+| ------ | ------------ | --------------------------------------------------------------- |
+| TH0001 | Mutation     | Cannot reassign variable                                        |
+| TH0002 | Mutation     | Cannot assign to array element                                  |
+| TH0003 | Mutation     | Cannot assign to object property                                |
+| TH0004 | Mutation     | Cannot call mutating method                                     |
+| TH0005 | Mutation     | Cannot mutate variable captured by enclosing scope              |
+| TH0006 | Mutation     | Assignment only supported in statement position                 |
+| TH0007 | Mutation     | Cannot mutate inside `@throws` or `try`/`catch`                 |
+| TH0010 | Control flow | Loop not supported                                              |
+| TH0012 | Control flow | async/await not supported                                       |
+| TH0020 | Types        | `any` not permitted                                             |
+| TH0021 | Types        | `unknown` not permitted in user code                            |
+| TH0022 | Types        | Union must be discriminated                                     |
+| TH0023 | Types        | Intersection types not supported                                |
+| TH0024 | Types        | keyof/conditional/mapped types not supported                    |
+| TH0025 | Types        | null/undefined types not supported                              |
+| TH0026 | Types        | Condition must be boolean                                       |
+| TH0030 | Declarations | Unsupported class form (expression/abstract/generic/implements) |
+| TH0031 | Declarations | Inheritance (`extends`) not supported                           |
+| TH0032 | Declarations | Shadowing declaration not supported                             |
+| TH0040 | Matching     | Non-exhaustive switch on discriminated union                    |
+| TH0041 | Matching     | Switch shape not lowerable                                      |
+| TH0050 | Recursion    | Cannot verify termination                                       |
+| TH0066 | Totality     | `@total` and `@throws` declared together                        |
+| TH0067 | Totality     | `@total` function has uncaught throw                            |
+| TH0068 | Totality     | `@total` function contains an unverifiable loop                 |
+| TH0070 | Totality     | `@total` asserted but Lean rejects termination                  |
+| TH0060 | Exceptions   | Unannotated `throw`                                             |
+| TH0061 | Exceptions   | Unused `@throws` annotation                                     |
+| TH0063 | Exceptions   | Thrown value must be a record type                              |
+| TH0064 | Exceptions   | Undeclared propagation                                          |
+| TH0080 | Refinement   | Literal value out of range for refinement type                  |
+| TH0081 | Refinement   | Value not assignable to refinement without evidence             |
+| TH0082 | Subset       | Possibly-undefined operand; narrow before use                   |
+| TH0083 | Subset       | Computed index access only supported on arrays                  |
+| TH0084 | Subset       | Definedness test on a binding of undeterminable type            |
+| TH0085 | Subset       | Array method on a receiver of unlowerable element type          |
+| TH0086 | Subset       | Definedness test on a non-identifier subject                    |
+| TH0087 | Subset       | Unsupported `String.prototype` method                           |
+| TH0088 | Subset       | Unsupported `import` form (default/namespace/side-effect)       |
+| TH0089 | Subset       | Unsupported `export` form (default/re-export)                   |
+| TH0090 | Subset       | Circular imports                                                |
+| TH0091 | Subset       | Regex literals are not supported                                |
+| TH0092 | Subset       | Unsupported unary operator (`typeof`/`void`/`delete`)           |
+| TH0093 | Subset       | Top-level mutable referenced by a hoisted declaration           |
+| TH0094 | Declarations | Class accessors (get/set) not supported                         |
+| TH0095 | Declarations | Static class members not supported                              |
+| TH0096 | Declarations | Private class members not supported                             |
+| TH0097 | Declarations | Class field initializers not supported                          |
+| TH0098 | Declarations | Unsupported class field form                                    |
+| TH0099 | Declarations | Unsupported constructor form                                    |
+| TH0100 | Declarations | Unsupported class method form                                   |
+| TH0101 | Declarations | Class method referenced before its declaration                  |
+| TH0102 | Declarations | Class method used as a value                                    |
+| TH9000 | Directive    | Unused `@thales-expect-error` directive                         |
+| TH9001 | Directive    | Directive code mismatch                                         |
+| TH9002 | Directive    | Cannot emit: subset violations suppressed                       |
+| TH9003 | Directive    | Malformed `@thales-expect-error` directive                      |
+| TH9004 | Directive    | Emitted Lean code contains `sorry`                              |
+| TH9005 | Internal     | Emitted Lean would contain an unlowerable placeholder           |
 
 ## Future of this table
 
@@ -401,15 +410,26 @@ ternary: `s !== '' ? s : 'fallback'`.
 
 ## Declarations
 
-### TH0030 — class not supported
+### TH0030 — Unsupported class form
 
-**Message:** `\`class\` not supported`
+**Message:** `<form> are not supported` with forms `class expressions`,
+`abstract classes`, `generic classes`, `'implements' clauses`
 
-Rejected: `class Counter { count = 0; increment() { this.count++; } }`
+Immutable class _declarations_ are in subset (readonly fields, an
+assign-each-field-once constructor, public instance methods — the v1 shape),
+lowered to a Lean `structure` plus a `namespace` of receiver-first functions.
+TH0030 now covers only the unsupported class-level forms:
 
-[Details in subset.md#th0030--class-not-supported](./subset.md#th0030--class-not-supported)
+Rejected: `const C = class { ... };`, `abstract class A { ... }`,
+`class C<T> { ... }`, `class C implements I { ... }`
 
-2 adds classes via `structure` + `namespace` desugaring.
+Member-level violations inside a plain class declaration draw the specific
+codes TH0094–TH0102 below instead.
+
+[Details in subset.md#th0030--unsupported-class-form](./subset.md#th0030--unsupported-class-form)
+
+Follow-up slices widen the class surface (getters/statics #113, privacy
+#114, `instanceof` #115).
 
 ---
 
@@ -417,7 +437,8 @@ Rejected: `class Counter { count = 0; increment() { this.count++; } }`
 
 **Message:** `Inheritance (\`extends\`) not supported`
 
-Rejected: `class Dog extends Animal { ... }`
+Rejected: `class Dog extends Animal { ... }` — even when both classes are
+otherwise in the supported v1 shape.
 
 [Details in subset.md#th0031--inheritance-extends-not-supported](./subset.md#th0031--inheritance-extends-not-supported)
 
@@ -1135,3 +1156,133 @@ function report(): number {
 }
 console.log(report());
 ```
+
+---
+
+## Classes
+
+The v1 class shape (readonly annotated fields, an assign-each-field-once
+constructor, public instance methods with return annotations) is in subset;
+see [subset.md#th0030--unsupported-class-form](./subset.md#th0030--unsupported-class-form)
+for the full shape. The codes below reject the member forms outside it.
+
+### TH0094 — Class accessors not supported
+
+**Message:** `Class accessors (get/set) are not supported`
+
+Rejected: `class C { get x(): bigint { return 0n; } }`
+
+The follow-up getters/statics slice (#113) lowers `get` to a zero-argument
+namespace function.
+
+---
+
+### TH0095 — Static class members not supported
+
+**Message:** `Static class members are not supported`
+
+Rejected: `class C { static count(): bigint { return 0n; } }` — also static
+fields and `static { ... }` blocks.
+
+The follow-up getters/statics slice (#113) lowers statics to plain
+namespace-level declarations.
+
+---
+
+### TH0096 — Private class members not supported
+
+**Message:** `Private class members are not supported`
+
+Rejected: `class C { #x: bigint; }`, `private x: bigint;`,
+`protected m(): void {}`
+
+The follow-up privacy slice (#114) maps member privacy onto Lean `private`
+declarations. `public` is accepted (it is the default).
+
+---
+
+### TH0097 — Class field initializers not supported
+
+**Message:** `Class field initializers are not supported; assign the field in the constructor`
+
+Rejected: `class C { readonly x: bigint = 0n; ... }`
+
+**Fix:** move the initial value into the constructor:
+`constructor() { this.x = 0n; }`. Initializers interleave with constructor
+execution order in ways the straight-line `ctor'` lowering does not model.
+
+---
+
+### TH0098 — Unsupported class field form
+
+**Message:** `Unsupported class field: <detail>`
+
+A v1 field is exactly `readonly <name>: <Type>;`. Details: `must be declared
+readonly`, `optional fields are not supported`, `computed names are not
+supported`, `missing type annotation`, `'<name>' is a reserved name` (member
+names that collide with Lean's auto-generated structure members: `mk`, `rec`,
+`recOn`, `casesOn`, `brecOn`, `below`, `ibelow`, `noConfusion`,
+`noConfusionType`).
+
+Rejected: `class C { count: bigint; ... }` (not readonly)
+
+---
+
+### TH0099 — Unsupported constructor form
+
+**Message:** `Unsupported constructor: <detail>`
+
+A v1 constructor body is a straight-line sequence of `this.<field> = <expr>;`
+statements assigning each declared field exactly once, in any order, where an
+RHS may read parameters, outer scope, and already-assigned fields. Parameters
+must be plain annotated identifiers (no defaults, rest, destructuring, or
+parameter properties). A class with fields must declare a constructor; a
+class must declare at most one.
+
+Rejected: `constructor(x: bigint) { if (x > 0n) { this.x = x; } }`
+
+---
+
+### TH0100 — Unsupported class method form
+
+**Message:** `Unsupported class method: <detail>`
+
+A v1 method is a public non-static instance method with a return type
+annotation and a plain name. Details: `generator and async methods are not
+supported`, `computed names are not supported`, `optional methods are not
+supported`, `generic methods are not supported`, `missing return type
+annotation`, `'override' is not supported`, `'<name>' is a reserved name`.
+
+Rejected: `class C { zero() { return 0n; } }` (missing return annotation)
+
+---
+
+### TH0101 — Class method referenced before its declaration
+
+**Message:** `Class method '<name>' is referenced before its declaration`
+
+A method body may reference only methods declared _earlier_ in the same
+class; self-recursion is allowed. This mirrors the compiler's declare-before-use
+stance for top-level declarations: methods lower to namespace-level `def`s in
+source order, so a forward reference would not elaborate.
+
+Rejected: `class C { a(): bigint { return this.b(); } b(): bigint { return 1n; } }`
+
+**Fix:** reorder the methods.
+
+---
+
+### TH0102 — Class method used as a value
+
+**Message:** `Class method '<name>' may only be called, not used as a value`
+
+Methods lower to receiver-first functions, not closure-valued fields, so a
+method read outside call position has no Lean image. The check is name-based
+across the whole program (a documented conservative over-approximation): any
+non-call member access whose property name matches a declared class-method
+name is rejected.
+
+Rejected: `const f = p.norm1;`
+
+**Fix:** call the method (`p.norm1()`), or wrap it in an arrow function
+(`(q: Point) => q.norm1()`).
