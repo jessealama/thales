@@ -804,9 +804,22 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   | .unaryExpr _ _ _ _ => .unsupported "unary op"
   -- Update (++/--): SubsetCheck rejects; placeholder
   | .updateExpr _ _ _ _ => .unsupported "update expr"
-  -- Conditional (ternary)
+  -- Conditional (ternary). A null/undefined-guard on an Option-typed
+  -- binding lowers to the narrowing match (the expression twin of the
+  -- `ifStmt` lowering in `emitBodyEnv`/`emitBodyDo`): the non-nullish arm
+  -- rebinds the name at the unwrapped type, so narrowed reads like `o.v`
+  -- project the payload rather than the Option (#133). Known non-Option
+  -- bindings keep the plain ite — their test already folds to a constant.
   | .conditionalExpr _ cond thn els =>
-      .ite (emitExprEnv env cond) (emitExprEnv env thn) (emitExprEnv env els)
+      match nullCheckVar cond with
+      | some (varName, positive) =>
+          if knownNonOptionBinding env varName then
+            .ite (emitExprEnv env cond) (emitExprEnv env thn) (emitExprEnv env els)
+          else
+            .match_ (.var varName)
+              (nullTestArms varName positive (emitExprEnv env thn) (emitExprEnv env els))
+      | none =>
+          .ite (emitExprEnv env cond) (emitExprEnv env thn) (emitExprEnv env els)
   -- Call expression. When the callee is a known function whose parameters
   -- are refinement-typed, wrap matching numeric-literal args in Subtype
   -- constructors. Without this the parser-stripped `1 as Natural` would
