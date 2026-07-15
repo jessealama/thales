@@ -99,6 +99,7 @@ soundness check).
 | TH0102 | Declarations | Class method used as a value                                    |
 | TH0103 | Declarations | `undefined` used as a binding name                              |
 | TH0104 | Subset       | Bare `null`/`undefined` initializer without a type annotation   |
+| TH0105 | Declarations | Top-level declaration referenced before its declaration         |
 | TH9000 | Directive    | Unused `@thales-expect-error` directive                         |
 | TH9001 | Directive    | Directive code mismatch                                         |
 | TH9002 | Directive    | Cannot emit: subset violations suppressed                       |
@@ -1334,3 +1335,27 @@ Rejected: `const u = undefined;`, `const n = null;`
 
 **Fix:** annotate the binding with the union it will hold:
 `const u: string | undefined = undefined;`
+
+### TH0105 — Top-level declaration referenced before its declaration
+
+**Message:** `'<name>' is referenced before its declaration; move the declaration before this use`
+
+tsc accepts forward references to hoisted top-level declarations — functions
+and classes are visible throughout their scope, and only evaluation order
+matters. Emitted Lean declarations appear in source order, so such a
+reference would not elaborate. The reference is rejected where it occurs:
+inside an earlier function body, or as an earlier `new` target.
+
+Rejected:
+
+```ts
+function caller(): bigint {
+  return helper() + 1n; // TH0105: helper is declared below
+}
+function helper(): bigint {
+  return 41n;
+}
+```
+
+**Fix:** reorder the declarations so every name is declared before its
+first use.

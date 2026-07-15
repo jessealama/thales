@@ -231,7 +231,13 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       checkDefinitelyAssigned name base.loc
       return mk ty #[]
     | none =>
-      emitDiagnostic (.identifierNotFound name) base.loc
+      let ctx ← read
+      if ctx.hoistedTopLevelNames.contains name then
+        -- Declared later in the file: tsc accepts the forward reference,
+        -- but emitted Lean declarations appear in source order.
+        emitDiagnostic (.thales (.referencedBeforeDeclaration name)) base.loc
+      else
+        emitDiagnostic (.identifierNotFound name) base.loc
       return mk .any #[]
 
   -- Member access: obj.prop

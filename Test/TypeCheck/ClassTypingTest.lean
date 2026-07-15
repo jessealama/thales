@@ -64,11 +64,18 @@ def t4 : IO Unit := expectTS (pointClass ++ "const p = new Point(1n, 2n);\nconst
 def t5 : IO Unit := expectTS (pointClass ++ "const p = new Point(1n, 2n);\np.x = 5n;\n") 2540
 
 -- 5b. Forward reference: a hoisted function using a class declared later
---     draws TS2304 (declare-before-use), never uncompilable emitted Lean;
---     `new` on a JS global error constructor stays clean.
-def t5b : IO Unit := expectTS
-  ("function make(): Point { return new Point(1n); }\n" ++
-   "class Point { readonly x: bigint; constructor(x: bigint) { this.x = x; } }\n") 2304
+--     draws TH0105 (declare-before-use), never an invented TS2304 and
+--     never uncompilable emitted Lean; `new` on a JS global error
+--     constructor stays clean.
+def t5b : IO Unit := do
+  let diags ← diagsOf
+    ("function make(): Point { return new Point(1n); }\n" ++
+     "class Point { readonly x: bigint; constructor(x: bigint) { this.x = x; } }\n")
+  unless diags.any (fun d => ((d.format "t.ts").splitOn "error TH0105:").length > 1) do
+    let formatted := (diags.map (·.format "t.ts")).toList
+    throw (IO.userError s!"expected TH0105, got: {formatted}")
+  if diags.any (hasTS · 2304) then
+    throw (IO.userError "invented TS2304 on a forward class reference")
 
 def t5c : IO Unit := do
   let diags ← diagsOf "function f(x: bigint): bigint { if (x < 0n) { throw new RangeError(\"neg\"); } return x; }"
