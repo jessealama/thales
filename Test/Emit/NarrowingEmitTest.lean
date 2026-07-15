@@ -67,7 +67,7 @@ console.log(e(\"hi\"));"
     ["if x.isSome"]
     (forbidden := ["match x with"])
 
--- #133: a positive null-guard ternary lowers to the same Option match as
+-- a positive null-guard ternary lowers to the same Option match as
 -- the statement form — THEN in the none arm, else rebound via some
 def testTernaryPositiveNullMatch : IO Unit :=
   expectEmitN
@@ -76,7 +76,7 @@ console.log(f(\"hi\"));"
     ["match x with", "| .none =>", "| .some x =>", "x.length.toFloat"]
     (forbidden := ["if x.isNone"])
 
--- #133: negated ternary swaps the arms — THEN gets the some-rebinding
+-- negated ternary swaps the arms — THEN gets the some-rebinding
 def testTernaryNegatedNullMatch : IO Unit :=
   expectEmitN
     "function g(x: string | null): number { return x !== null ? x.length : 0; }
@@ -84,14 +84,14 @@ console.log(g(\"hi\"));"
     ["match x with", "| .some x =>", "x.length.toFloat", "| .none =>"]
     (forbidden := ["if x.isSome"])
 
--- #133: undefined-test ternary lowers the same way
+-- undefined-test ternary lowers the same way
 def testTernaryUndefinedMatch : IO Unit :=
   expectEmitN
     "function h(x: string | undefined): number { return x === undefined ? 0 : x.length; }
 console.log(h(\"hi\"));"
     ["match x with", "| .none =>", "| .some x =>"]
 
--- #133: a ternary null test on a known non-Option binding keeps the
+-- a ternary null test on a known non-Option binding keeps the
 -- vacuous-test fold; no match is introduced
 def testTernaryNonOptionKeepsFold : IO Unit :=
   expectEmitN
@@ -100,7 +100,7 @@ console.log(k(\"hi\"));"
     ["if false then"]
     (forbidden := ["match x with"])
 
--- #133: a guard ternary in argument position stays grouped (the match
+-- a guard ternary in argument position stays grouped (the match
 -- renders inside the call's parens rather than leaking into the do block)
 def testTernaryInArgPosition : IO Unit :=
   expectEmitN

@@ -808,7 +808,7 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   -- binding lowers to the narrowing match (the expression twin of the
   -- `ifStmt` lowering in `emitBodyEnv`/`emitBodyDo`): the non-nullish arm
   -- rebinds the name at the unwrapped type, so narrowed reads like `o.v`
-  -- project the payload rather than the Option (#133). Known non-Option
+  -- project the payload rather than the Option. Known non-Option
   -- bindings keep the plain ite — their test already folds to a constant.
   | .conditionalExpr _ cond thn els =>
       match nullCheckVar cond with
