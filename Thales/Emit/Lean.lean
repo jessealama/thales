@@ -34,6 +34,18 @@ structure EmitEnv where
   -- Counter used to generate unique dite-binder names. Bumped each time
   -- a fresh `h_i` is introduced (e.g. for `is<T>`-narrowing shadow-lets).
   diteBinderCounter : Nat := 0
+  -- Inside a class method body, the Lean receiver name `this` lowers to
+  -- (`self'`); `none` outside class scopes (#106).
+  thisName : Option String := none
+  -- Inside a v1 constructor body, `this.<f>` reads lower to the field-local
+  -- `let f` binding instead of a projection (#106).
+  ctorMode : Bool := false
+  -- Map from local class name → ctor param types (declared order). Drives
+  -- `new C(args)` → `C.ctor' args` with expected-type direction (#106).
+  classCtorParams : Std.HashMap String (List (String × TSType)) := {}
+  -- Value names bound by import specifiers. `new C(args)` on an imported
+  -- name lowers to `C.ctor' args` without expected-type direction (#106).
+  importedNames : Std.HashSet String := {}
 
 /-- Binary ops lowered through JS-semantics runtime helpers (#32) instead
     of bare Lean operators: no Float instances exist for these, and the JS
@@ -694,6 +706,8 @@ private def recordDeclBinding (env : EmitEnv) (name : String)
     (typeAnnotation : Option TSType) (init : Option Expression) : EmitEnv :=
   let inferredTy : Option TSType := match init with
     | some (.callExpr _ (.identifier _ f) _ _) => env.funcRetTypes.get? f
+    | some (.newExpr _ (.identifier _ c) _) =>
+        if env.classCtorParams.contains c then some (.ref c []) else none
     | some (.memberExpr _ (.identifier _ arrName) _ true _) =>
         (arrayElemTy? env arrName).map (fun et => TSType.option et)
     -- Literal initializers carry a knowable non-Option primitive type
@@ -941,9 +955,23 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
           .app (.var "Array.toNaturalSize") [.var arrName]
       | some (.string) =>
           .app (.var "String.toNaturalLength") [.var arrName]
-      | _ =>
+      | some other =>
+          -- A receiver bound to a known structure (interface or class) with a
+          -- declared `length` field reads it as a plain projection; the
+          -- `.toFloat` fallback would mistype e.g. an Int-valued field (#106).
+          match resolveTypeAlias env other with
+          | .ref n [] =>
+              if env.structFields.contains n then .proj (.var arrName) "length"
+              else .proj (.proj (.var arrName) "length") "toFloat"
+          | _ => .proj (.proj (.var arrName) "length") "toFloat"
+      | none =>
           -- Unknown binding: best-effort `s.length.toFloat`.
           .proj (.proj (.var arrName) "length") "toFloat"
+  -- `this.<f>`: in ctor mode the field-local `let f` binding; in a method
+  -- a projection off the receiver (#106)
+  | .memberExpr _ (.thisExpr tb) (.identifier _ propName) false _ =>
+      if env.ctorMode then .var propName
+      else .proj (emitExprEnv env (.thisExpr tb)) propName
   | .memberExpr _ obj (.identifier _ propName) false _ =>
       .proj (emitExprEnv env obj) propName
   | .memberExpr _ obj idx true _ =>
@@ -971,6 +999,28 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
           | .inl e     => emitExprEnv env e
           | .inr stmt  => emitBodyEnv env [stmt]
         .lam leanParams bodyExpr
+  -- `this` inside a class method lowers to the receiver parameter (#106)
+  | .thisExpr _ =>
+      match env.thisName with
+      | some n => .var n
+      | none => .unsupported "this outside a class"
+  -- `new C(args)` → `C.ctor' args` for local v1 classes (with expected-type
+  -- direction from the ctor signature) and imported names (without, same
+  -- degradation as calls to imported functions). Builtin `new` targets
+  -- (`Error` etc.) keep their statement-level special cases and otherwise
+  -- fall to the placeholder (#106).
+  | .newExpr _ (.identifier _ cname) args =>
+      match env.classCtorParams.get? cname with
+      | some ctorParams =>
+          let expected : List (Option TSType) :=
+            ctorParams.map (fun (_, t) => some t)
+              ++ List.replicate (args.length - ctorParams.length) none
+          let coerced := List.zipWith (emitExprWithExpectedTy env) expected args
+          .app (.proj (.var cname) "ctor'") coerced
+      | none =>
+          if env.importedNames.contains cname then
+            .app (.proj (.var cname) "ctor'") (args.map (emitExprEnv env))
+          else .unsupported "new expression"
   -- Assignment: SubsetCheck rejects; placeholder
   | .assignmentExpr _ _ _ _ => .unsupported "assignment"
   -- Object literal with a `kind: "..."` discriminator: emit as an anonymous
@@ -1841,7 +1891,10 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     (total : Bool := false)
     (funcRetTypes : Std.HashMap String TSType := {})
     (topBindings : Std.HashMap String TSType := {})
-    (structFields : Std.HashMap String (List (String × TSType)) := {}) : Option LDecl :=
+    (structFields : Std.HashMap String (List (String × TSType)) := {})
+    (thisName : Option String := none)
+    (classCtorParams : Std.HashMap String (List (String × TSType)) := {})
+    (importedNames : Std.HashSet String := {}) : Option LDecl :=
   let normalizedRetTy := normalizeForEmit retTy
   let normalizedParams := params.map fun (n, t) => (n, normalizeForEmit t)
   -- Seed with the top-level bindings, which `emit` passes pre-normalized
@@ -1851,7 +1904,8 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     normalizedParams.foldl (fun m (n, t) => m.insert n t) topBindings
   let env : EmitEnv := { aliasEnv, bindingEnv, retTy := some normalizedRetTy,
                          throwTypes := throws, funcThrowsEnv, funcParamTypes,
-                         funcRetTypes, structFields }
+                         funcRetTypes, structFields, thisName, classCtorParams,
+                         importedNames }
   let stmts := match body with
     | .blockStmt _ ss => ss
     | other           => [other]
@@ -1886,6 +1940,65 @@ def emitFuncDecl (aliasEnv : Std.HashMap String TSType) (name : String) (typePar
     if throws.isEmpty then emitType normalizedRetTy
     else buildExceptRetTy throws (emitType normalizedRetTy)
   some (.def_ name typeParams leanParams leanRetTy bodyExpr (isPartial := !total))
+
+/-- Lower a v1 class declaration (#106) to `structure C where <fields>` plus
+    `namespace C` holding `def ctor'` and receiver-first `partial def`s.
+    The ctor's `this.<f> = <e>` assignments become `let f := ⟦e⟧` in source
+    order (ctor mode maps `this.<g>` reads to the already-bound `let g`);
+    the final expression is the struct literal over all fields. Methods reuse
+    the `emitFuncDecl` body pipeline with a leading `self' : C` receiver.
+    Assumes the subset check passed; malformed members are skipped. -/
+def emitClassDecl (env : EmitEnv) (topBindings : Std.HashMap String TSType)
+    (className : String) (body : List ClassElement) : List LDecl :=
+  let fields : List (String × TSType) := body.filterMap fun
+    | .field (.mk _ key _ false false none _ _ ann _) =>
+        match key with
+        | .identifier _ n => some (n, ann.getD .any)
+        | _ => none
+    | _ => none
+  let structDecl : LDecl :=
+    .struct className [] (fields.map fun (n, t) => (n, emitType (normalizeForEmit t)))
+  let ctorMember? : Option MethodDefinition := body.findSome? fun
+    | .method (md@(.mk _ _ _ .constructor ..)) => some md
+    | _ => none
+  let ctorParams : List (String × TSType) := match ctorMember? with
+    | some (.mk _ _ _ _ _ _ _ _ _ _ _ sigParams _) =>
+        sigParams.map fun (n, ann, _, _) => (n, (ann.map (·.type)).getD .any)
+    | none => []
+  let assignments : List (String × Expression) := match ctorMember? with
+    | some (.mk _ _ (.functionExpr _ _ _ cbody _ _) ..) =>
+        let stmts : List Statement := match cbody with
+          | .blockStmt _ ss => ss
+          | s => [s]
+        stmts.filterMap fun
+          | .exprStmt _ (.assignmentExpr _ .assign
+              (.memberExpr _ (.thisExpr _) (.identifier _ f) false _) rhs) => some (f, rhs)
+          | _ => none
+    | _ => []
+  let ctorEnv : EmitEnv := { env with
+    bindingEnv := ctorParams.foldl (fun m (n, t) => m.insert n (normalizeForEmit t)) topBindings,
+    ctorMode := true, thisName := none, retTy := some (.ref className []) }
+  let fieldTy (f : String) : Option TSType := (fields.lookup f).map normalizeForEmit
+  let ctorBody : LExpr := assignments.foldr
+    (fun (f, rhs) acc => .letE f none (emitExprWithExpectedTy ctorEnv (fieldTy f) rhs) acc)
+    (.structLit className (fields.map fun (f, _) => (f, .var f)))
+  let ctorDef : LDecl := .def_ "ctor'" []
+    (ctorParams.map fun (n, t) => (n, emitType (normalizeForEmit t)))
+    (.const className) ctorBody (isPartial := false)
+  let methodDefs : List LDecl := body.filterMap fun
+    | .method (.mk _ key value .method false false none _ _ _ _ sigParams returnType) =>
+        match key, value with
+        | .identifier _ mname, .functionExpr _ _ _ mbody _ _ =>
+            let params := ("self'", TSType.ref className [])
+              :: sigParams.map fun (n, ann, _, _) => (n, (ann.map (·.type)).getD .any)
+            let retTy := (returnType.map (·.type)).getD .any
+            emitFuncDecl env.aliasEnv mname [] params retTy mbody []
+              env.funcThrowsEnv env.funcParamTypes false env.funcRetTypes topBindings
+              env.structFields (thisName := some "self'")
+              (classCtorParams := env.classCtorParams) (importedNames := env.importedNames)
+        | _, _ => none
+    | _ => none
+  [structDecl, .namespace_ className (ctorDef :: methodDefs)]
 
 private def arrowFuncParts (arrowParams : List FunctionParam) (typeAnn : Option TypeAnnotation)
     : List (String × TSType) × TSType :=
@@ -2027,6 +2140,7 @@ private def declName : TSStatement → Option String
   | .interfaceDecl _ n .. => some n
   | .typeAliasDecl _ n .. => some n
   | .enumDecl _ n .. => some n
+  | .js (.classDecl _ id ..) => some id.name
   | _ => none
 
 /-- The name an emitted decl binds, for privacy marking (`eval_`/`instance_` bind none). -/
@@ -2082,6 +2196,10 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
         match funcRetTypes.get? f with
         | some t => acc.insert name t
         | none => acc
+    | .annotatedVarDecl _ _ name none (some (.newExpr _ (.identifier _ c) _)) =>
+        -- `const s = new C(...)`: record the class instance type so
+        -- name-keyed member reads (e.g. a `length` field) resolve (#106)
+        acc.insert name (.ref c [])
     | _ => acc) {}
   -- Map every interface and single-record `type` alias to its declared fields
   -- (in order), so object-literal construction can resolve the target structure
@@ -2099,9 +2217,35 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
           | some (.object members) =>
               acc.insert name (objectTypeFields members)
           | _ => acc
+      -- Class fields register like interface fields so structural
+      -- construction (`const q: Point = { x, y }`) resolves (#106)
+      | .js (.classDecl _ id _ cbody ..) =>
+          acc.insert id.name (cbody.filterMap fun
+            | .field (.mk _ (.identifier _ n) _ false false none _ _ ann _) =>
+                some (n, ann.getD .any)
+            | _ => none)
       | _ => acc) {}
+  -- Class registry: ctor param types per local class, for `new C(args)` (#106)
+  let classCtorParams : Std.HashMap String (List (String × TSType)) :=
+    (prog.body.map fun s => match s with
+      | .exportDecl _ inner => inner
+      | other => other).foldl (fun acc ts =>
+      match ts with
+      | .js (.classDecl _ id _ cbody ..) =>
+          let ps : List (String × TSType) := cbody.findSome? (fun el => match el with
+            | .method (.mk _ _ _ .constructor _ _ _ _ _ _ _ sigParams _) =>
+                some (sigParams.map fun (n, ann, _, _) => (n, (ann.map (·.type)).getD TSType.any))
+            | _ => none) |>.getD []
+          acc.insert id.name ps
+      | _ => acc) {}
+  -- Value names bound by import specifiers (for `new <imported>(…)`)
+  let importedNames : Std.HashSet String := prog.body.foldl (fun acc ts =>
+    match ts with
+    | .importDecl _ _ specs _ _ => specs.foldl (fun a sp => a.insert sp.localName) acc
+    | _ => acc) {}
   let topEnv : EmitEnv := { aliasEnv := resolvedAliases, bindingEnv := topBindingEnv,
-                            funcThrowsEnv, funcParamTypes, funcRetTypes, structFields }
+                            funcThrowsEnv, funcParamTypes, funcRetTypes, structFields,
+                            classCtorParams, importedNames }
   -- Normalized once here; every `emitFuncDecl` call seeds its bindingEnv
   -- from this map.
   let topBindingsNorm : Std.HashMap String TSType :=
@@ -2156,7 +2300,7 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
         let throws : List String := match throwsAnn with
           | .declared ts => ts
           | .absent      => []
-        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total funcRetTypes topBindingsNorm structFields)
+        optToList (emitFuncDecl resolvedAliases name (typeParamNames tps) simpleParams retTy body throws funcThrowsEnv funcParamTypes total funcRetTypes topBindingsNorm structFields none classCtorParams importedNames)
     | .annotatedVarDecl _ _kind name typeAnn (some init) =>
         if mutatedTop.contains name then []   -- mutated let → lowered inside `main`
         else
@@ -2169,7 +2313,7 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
               let (simpleParams, retTy) := arrowFuncParts arrowParams effectiveAnn
               optToList (emitFuncDecl resolvedAliases name [] simpleParams retTy (match body with
                 | .inl e  => .blockStmt {} [.returnStmt {} (some e)]
-                | .inr s  => s) [] funcThrowsEnv funcParamTypes false funcRetTypes topBindingsNorm structFields)
+                | .inr s  => s) [] funcThrowsEnv funcParamTypes false funcRetTypes topBindingsNorm structFields none classCtorParams importedNames)
         | other =>
             -- Non-arrow const: prefer the user's annotation when present.
             -- Otherwise, attempt to infer a Lean type from the initializer
@@ -2178,10 +2322,7 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
             -- diagnosed the use-site already).
             match typeAnn with
             | some ann =>
-                let initExpr :=
-                  (emitRefinementLiteral resolvedAliases (some ann.type) other)
-                    <|> (emitLiteralAsCtor resolvedAliases (some ann.type) other)
-                    |>.getD (emitExprEnv topEnv other)
+                let initExpr := emitExprWithExpectedTy topEnv (some ann.type) other
                 [.def_ name [] [] (emitType ann.type) initExpr]
             | none =>
                 -- Unannotated `const x = init`: emit `def x := init` and
@@ -2190,6 +2331,9 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
                 -- `(unsupported expr)` would not elaborate).
                 let initExpr := emitExprEnv topEnv other
                 [.def_ name [] [] .inferred initExpr]
+    -- v1 class declarations lower to `structure` + `namespace` (#106)
+    | .js (.classDecl _ id _ cbody ..) =>
+        emitClassDecl topEnv topBindingsNorm id.name cbody
     -- Executable top-level statements (bare calls, `console.log`, `try`/`catch`,
     -- `if`, loops, mutation) are no longer emitted here as scattered `#eval`s;
     -- they flow into the single `def main` do-block below (#49).
@@ -2206,11 +2350,17 @@ def buildModule (prog : TSProgram) (moduleName : String) : LModule :=
     | _ => []
   let decls : List LDecl := decls ++ exportAliasDecls
   -- Mark non-exported named decls `private` (only in modules that export).
+  -- A class namespace cannot be marked wholesale (`private namespace` is not
+  -- legal Lean); privacy distributes onto each decl inside it (#106).
   let decls : List LDecl :=
     if hasExports then
-      decls.map fun d => match ldeclName d with
-        | some n => if exportedNames.contains n then d else .private_ d
-        | none => d
+      decls.map fun d => match d with
+        | .namespace_ n nbody =>
+            if exportedNames.contains n then d
+            else .namespace_ n (nbody.map (.private_ ·))
+        | _ => match ldeclName d with
+          | some n => if exportedNames.contains n then d else .private_ d
+          | none => d
     else decls
   -- Collect executable top-level statements (source order) into `def main`,
   -- appended after the hoisted decls (so `main` can reference them) and after

@@ -174,6 +174,13 @@ inductive MethodKind where
   | constructor
   deriving Inhabited, Repr, BEq
 
+/-- TS accessibility modifier on a class member (`public` / `private` / `protected`) -/
+inductive Accessibility where
+  | public_
+  | private_
+  | protected_
+  deriving Repr, BEq, Inhabited
+
 -- Mutually recursive AST types
 mutual
 
@@ -207,13 +214,21 @@ inductive ObjectProperty where
             (kind : String) (computed : Bool) (shorthand : Bool)
   | spread (base : NodeBase) (argument : Expression)
 
-/-- Method definition in a class -/
+/-- Method definition in a class. `sigParams`/`returnType` retain the TS
+    signature in the same shape as `TSStatement.annotatedFuncDecl`:
+    each param is `(name, typeAnnotation, isOptional, isRest)`. -/
 inductive MethodDefinition where
   | mk (base : NodeBase) (key : Expression) (value : Expression) (kind : MethodKind) (computed : Bool) (static_ : Bool) (privateName : Option PrivateName := none)
+       (accessibility : Option Accessibility := none) (override_ : Bool := false)
+       (optional : Bool := false) (hasTypeParams : Bool := false)
+       (sigParams : List (String × Option TypeAnnotation × Bool × Bool) := [])
+       (returnType : Option TypeAnnotation := none)
 
 /-- Field definition in a class (instance or static field) -/
 inductive FieldDefinition where
   | mk (base : NodeBase) (key : Expression) (value : Option Expression) (computed : Bool) (static_ : Bool) (privateName : Option PrivateName := none)
+       (readonly : Bool := false) (optional : Bool := false)
+       (typeAnnotation : Option TSType := none) (accessibility : Option Accessibility := none)
 
 /-- Class element: either a method, a field definition, or a static block -/
 inductive ClassElement where
@@ -243,7 +258,7 @@ inductive Expression where
   | sequenceExpr (base : NodeBase) (expressions : List Expression)
   | templateLiteral (base : NodeBase) (quasis : List TemplateElement) (expressions : List Expression)
   | taggedTemplate (base : NodeBase) (tag : Expression) (quasi : Expression)
-  | classExpr (base : NodeBase) (id : Option Identifier) (superClass : Option Expression) (body : List ClassElement)
+  | classExpr (base : NodeBase) (id : Option Identifier) (superClass : Option Expression) (body : List ClassElement) (isAbstract : Bool := false) (hasTypeParams : Bool := false) (hasImplements : Bool := false)
   | super_ (base : NodeBase)  -- super keyword reference (for super.foo and super() detection)
   | spreadElement (base : NodeBase) (argument : Expression)  -- ...expr in arrays/calls
   | yieldExpr (base : NodeBase) (argument : Option Expression) (delegate : Bool)  -- yield / yield*
@@ -281,7 +296,7 @@ inductive Statement where
   | debuggerStmt (base : NodeBase)
   | variableDecl (decl : VariableDeclaration)
   | functionDecl (base : NodeBase) (id : Identifier) (params : List FunctionParam) (body : Statement) (generator : Bool := false) (async : Bool := false)
-  | classDecl (base : NodeBase) (id : Identifier) (superClass : Option Expression) (body : List ClassElement)
+  | classDecl (base : NodeBase) (id : Identifier) (superClass : Option Expression) (body : List ClassElement) (isAbstract : Bool := false) (hasTypeParams : Bool := false) (hasImplements : Bool := false)
 
 inductive VariableDeclaration where
   | mk (base : NodeBase) (declarations : List VariableDeclarator) (kind : VariableKind)
@@ -316,7 +331,7 @@ def exprLoc : Expression → Option SourceLocation
   | .sequenceExpr       base _         => base.loc
   | .templateLiteral    base _ _       => base.loc
   | .taggedTemplate     base _ _       => base.loc
-  | .classExpr          base _ _ _     => base.loc
+  | .classExpr          base _ _ _ _ _ _ => base.loc
   | .super_             base           => base.loc
   | .spreadElement      base _         => base.loc
   | .yieldExpr          base _ _       => base.loc

@@ -242,6 +242,7 @@ where
 /-- Create the initial type context with built-in bindings -/
 def builtinContext : TypeContext :=
   { bindings := builtinBindings.foldl (fun m (k, v) => m.insert k v) {},
-    classes := [("Object", .object [])].foldl (fun m (k, v) => m.insert k v) {} }
+    classes := [("Object", { instanceType := .object [], ctorParams := [] : ClassInfo })].foldl
+      (fun m (k, v) => m.insert k v) {} }
 
 end Thales.TypeCheck

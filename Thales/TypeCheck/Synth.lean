@@ -515,8 +515,13 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
     | none => pure ()
     return { expr := .js expr, type := .number, children := #[argTyped] }
 
-  -- Conditional (ternary)
+  -- Conditional (ternary). The branch join collapses identical types so
+  -- e.g. `b ? x : y` with both branches bigint is bigint, not bigint|bigint.
   | .conditionalExpr _ test consequent alternate =>
+    let joinTy (a b : TSType) : TSType :=
+      match [a, b].eraseDups with
+      | [single] => single
+      | ts => .union ts
     let testTyped ← synthCondition test
     let ctx ← read
     match Narrowing.extractGuard test with
@@ -525,11 +530,11 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       let elseBindings := Narrowing.applyNegatedGuard guard ctx.bindings
       let consTyped ← withScope (Narrowing.bindingsDiff thenBindings ctx.bindings) (synthJSExpr consequent)
       let altTyped ← withScope (Narrowing.bindingsDiff elseBindings ctx.bindings) (synthJSExpr alternate)
-      return mk (.union [consTyped.type, altTyped.type]) #[testTyped, consTyped, altTyped]
+      return mk (joinTy consTyped.type altTyped.type) #[testTyped, consTyped, altTyped]
     | none =>
       let consTyped ← synthJSExpr consequent
       let altTyped ← synthJSExpr alternate
-      return mk (.union [consTyped.type, altTyped.type]) #[testTyped, consTyped, altTyped]
+      return mk (joinTy consTyped.type altTyped.type) #[testTyped, consTyped, altTyped]
 
   -- Array literal
   | .arrayExpr _ elements => do
@@ -596,7 +601,13 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
   -- Unary expressions
   | .unaryExpr _ .typeof _ _ => return mk .string #[]
   | .unaryExpr _ .void _ _ => return mk .undefined #[]
-  | .unaryExpr _ .neg _ _ => return mk .number #[]
+  | .unaryExpr _ .neg _ arg =>
+    -- tsc types `-x` as bigint when the operand is bigint, number otherwise
+    let argTyped ← synthJSExpr arg
+    let resolved ← resolveTypeGeneric argTyped.type
+    match resolved with
+    | .bigint => return mk .bigint #[argTyped]
+    | _ => return mk .number #[argTyped]
   | .unaryExpr _ .pos _ _ => return mk .number #[]
   | .unaryExpr _ .bitnot _ _ => return mk .number #[]
   | .unaryExpr _ .not _ arg =>
@@ -604,14 +615,28 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
     let argTyped ← synthCondition arg
     return mk .boolean #[argTyped]
 
-  -- this
-  | .thisExpr _ => return mk .any #[]
+  -- this: bound by the checker inside class ctor/method scopes; any elsewhere
+  | .thisExpr _ =>
+    match ← lookupBinding "this" with
+    | some ty => return mk ty #[]
+    | none => return mk .any #[]
 
-  -- new Expr(args): look up class instance type
-  | .newExpr _base callee args =>
-    if let .identifier _ className := callee then
+  -- new Expr(args): look up class instance type, checking the ctor signature
+  | .newExpr base callee args =>
+    -- JS global error constructors: recognized by the throws story, typed
+    -- `any` here (they are not registered classes).
+    let jsGlobalConstructors : List String :=
+      ["Error", "RangeError", "TypeError", "SyntaxError", "ReferenceError",
+       "EvalError", "URIError", "AggregateError"]
+    if let .identifier calleeBase className := callee then
       let ctx ← read
-      if let some instanceTy := ctx.classes[className]? then
+      if ctx.classes[className]?.isNone && !jsGlobalConstructors.contains className then
+        -- Not a known class: resolve the callee like any identifier so a
+        -- forward reference to a later-declared class draws TS2304 (the
+        -- declare-before-use stance) instead of emitting uncompilable Lean.
+        let _ ← synthJSExpr (.identifier calleeBase className)
+      if let some info := ctx.classes[className]? then
+        let instanceTy := info.instanceType
         if containsTypeVar instanceTy then
           match instanceTy with
           | .object members =>
@@ -634,7 +659,19 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
             return mk (substitute instanceTy bindings) argChildren
           | _ => return mk instanceTy #[]
         else
-          return mk instanceTy #[]
+          -- Ctor signature check: all v1 ctor params are required, so arity
+          -- is exact (TS2554); each argument checks against its param (TS2345).
+          if args.length != info.ctorParams.length then
+            emitDiagnostic (.argumentCountMismatch info.ctorParams.length args.length) base.loc
+          let mut argChildren : Array TypedExpression := #[]
+          for i in [:args.length] do
+            let argTyped ← synthJSExpr args[i]!
+            argChildren := argChildren.push argTyped
+            if let some (_, paramTy) := info.ctorParams[i]? then
+              let ok ← isSubtype argTyped.type paramTy
+              if !ok then
+                emitDiagnostic (.argumentTypeMismatch i argTyped.type paramTy) (exprLoc args[i]!)
+          return mk instanceTy argChildren
     return mk .any #[]
 
   -- Graceful degradation: return any for unhandled expression forms

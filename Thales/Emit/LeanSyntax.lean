@@ -370,8 +370,10 @@ mutual
     | .proj obj field =>
         s!"{renderExprAtom obj}.{escapeIdent field}"
     | .structLit typeName fields =>
-        let fieldS := fields.map fun (n, e) => s!"{escapeIdent n} := {renderExpr e}"
-        s!"(\{ {String.intercalate ", " fieldS} : {escapeIdent typeName} })"
+        if fields.isEmpty then s!"(\{} : {escapeIdent typeName})"
+        else
+          let fieldS := fields.map fun (n, e) => s!"{escapeIdent n} := {renderExpr e}"
+          s!"(\{ {String.intercalate ", " fieldS} : {escapeIdent typeName} })"
     | .anonCtor args proofTactic =>
         let argsS := args.map renderExpr
         let parts := argsS ++ [proofTactic]
@@ -482,7 +484,7 @@ partial def renderDecl : LDecl → String
       s!"abbrev {escapeIdent name}{tpsS} := {renderType ty}"
   | .namespace_ name body =>
       let inner := body.map renderDecl
-      s!"namespace {name}\n\n{String.intercalate "\n\n" inner}\n\nend {name}"
+      s!"namespace {escapeIdent name}\n\n{String.intercalate "\n\n" inner}\n\nend {escapeIdent name}"
   | .eval_ expr =>
       s!"#eval {renderExpr expr}"
   | .instance_ classApp fieldName body =>

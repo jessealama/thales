@@ -80,8 +80,22 @@ inductive ThalesKind where
   -- TH0026: condition positions and `!`/`&&`/`||` operands must be
   -- boolean; `requireBooleanCondition` has the rationale.
   | conditionNotBoolean (actualType : String)
-  | classNotSupported
+  -- TH0030: unsupported class *form* (class expressions, abstract classes,
+  -- generic classes, `implements` clauses). The v1 declaration shape
+  -- (readonly fields, assign-each-field-once ctor, public instance methods)
+  -- is in-subset; member-level violations draw TH0094-TH0102 below.
+  | classNotSupported (form : String)
   | inheritanceNotSupported
+  -- Class member-form diagnostics (TH0094-TH0102)
+  | classAccessorNotSupported
+  | classStaticNotSupported
+  | classPrivateMemberNotSupported
+  | classFieldInitializerNotSupported
+  | classFieldFormNotSupported (detail : String)
+  | classCtorFormNotSupported (detail : String)
+  | classMethodFormNotSupported (detail : String)
+  | classMethodForwardReference (name : String)
+  | classMethodUsedAsValue (name : String)
   | switchNotExhaustive (missingKinds : List String)
   | switchNotLowerable
   | shadowingNotSupported (name : String)
@@ -157,8 +171,17 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .typeLevelProgrammingNotSupported => 24
   | .nullUndefinedNotSupported => 25
   | .conditionNotBoolean _ => 26
-  | .classNotSupported => 30
+  | .classNotSupported _ => 30
   | .inheritanceNotSupported => 31
+  | .classAccessorNotSupported => 94
+  | .classStaticNotSupported => 95
+  | .classPrivateMemberNotSupported => 96
+  | .classFieldInitializerNotSupported => 97
+  | .classFieldFormNotSupported _ => 98
+  | .classCtorFormNotSupported _ => 99
+  | .classMethodFormNotSupported _ => 100
+  | .classMethodForwardReference _ => 101
+  | .classMethodUsedAsValue _ => 102
   | .switchNotExhaustive _ => 40
   | .switchNotLowerable => 41
   | .shadowingNotSupported _ => 32
@@ -217,8 +240,20 @@ def ThalesKind.message : ThalesKind → String
   | .nullUndefinedNotSupported => "null/undefined types are not supported; use Option<T>"
   | .conditionNotBoolean actualType =>
     s!"Condition must be boolean, got '{actualType}'; truthiness is not mirrored — compare explicitly (e.g. `x !== 0`)"
-  | .classNotSupported => "'class' is not supported"
+  | .classNotSupported form => s!"{form} are not supported"
   | .inheritanceNotSupported => "Inheritance ('extends') is not supported"
+  | .classAccessorNotSupported => "Class accessors (get/set) are not supported"
+  | .classStaticNotSupported => "Static class members are not supported"
+  | .classPrivateMemberNotSupported => "Private class members are not supported"
+  | .classFieldInitializerNotSupported =>
+    "Class field initializers are not supported; assign the field in the constructor"
+  | .classFieldFormNotSupported detail => s!"Unsupported class field: {detail}"
+  | .classCtorFormNotSupported detail => s!"Unsupported constructor: {detail}"
+  | .classMethodFormNotSupported detail => s!"Unsupported class method: {detail}"
+  | .classMethodForwardReference name =>
+    s!"Class method '{name}' is referenced before its declaration"
+  | .classMethodUsedAsValue name =>
+    s!"Class method '{name}' may only be called, not used as a value"
   | .switchNotExhaustive missingKinds =>
     s!"Non-exhaustive switch on discriminated union (missing: {String.intercalate ", " missingKinds})"
   | .switchNotLowerable =>

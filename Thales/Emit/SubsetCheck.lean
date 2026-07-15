@@ -194,6 +194,143 @@ private def routeIdentMutation (ctx : MutCtx) (loc : Option SourceLocation)
     else
       #[mkThalesDiag (.cannotReassignVariable name) loc]
 
+/-- Member names that collide with the members Lean auto-generates for a
+    `structure` (rejected on v1 class fields and methods). -/
+private def leanReservedMemberNames : List String :=
+  ["mk", "rec", "recOn", "casesOn", "brecOn", "below", "ibelow",
+   "noConfusion", "noConfusionType"]
+
+/-- Names reserved for v1 class METHODS beyond the structure-member set:
+    the name-keyed mutating-method check (TH0004) and the `reduce`→`foldl`
+    emitter special case match member calls by name alone, so a class method
+    with one of these names would be mis-routed. Reserving them keeps those
+    name-keyed checks sound. -/
+private def reservedMethodNames : List String :=
+  leanReservedMemberNames ++ mutatingMethodNames ++ ["reduce"]
+
+/-- The plain-identifier name of a class member key, if any. -/
+private def classKeyName? : Expression → Option String
+  | .identifier _ n => some n
+  | _ => none
+
+/-- A non-computed member-property reference found in an expression/statement
+    tree. `isDirectCallee` is true only when the member expression is the
+    callee of a call (`recv.m(...)`), the one position where a v1 class
+    method may be referenced; `thisBase` marks `this.<prop>` references.
+    Drives TH0101 (forward references), TH0102 (method used as a value), and
+    the ctor read-before-assign scan. -/
+private structure MemberPropRef where
+  prop : String
+  loc : Option SourceLocation
+  isDirectCallee : Bool
+  thisBase : Bool
+
+mutual
+
+private partial def memberPropRefsExpr (inCallee : Bool) :
+    Expression → List MemberPropRef
+  | .memberExpr mb obj prop computed _ =>
+      let own := match prop with
+        | .identifier _ p =>
+          if computed then []
+          else [{ prop := p, loc := mb.loc, isDirectCallee := inCallee,
+                  thisBase := match obj with | .thisExpr _ => true | _ => false }]
+        | _ => []
+      own ++ memberPropRefsExpr false obj
+        ++ (if computed then memberPropRefsExpr false prop else [])
+  | .callExpr _ callee args _ =>
+      memberPropRefsExpr true callee ++ args.flatMap (memberPropRefsExpr false)
+  | .newExpr _ callee args =>
+      memberPropRefsExpr false callee ++ args.flatMap (memberPropRefsExpr false)
+  | .identifier _ _ | .literal _ _ _ | .thisExpr _ | .super_ _
+  | .metaProperty _ _ _ | .patternExpr _ _ => []
+  | .arrayExpr _ els => els.flatMap fun
+      | some e => memberPropRefsExpr false e
+      | none => []
+  | .objectExpr _ props => props.flatMap fun
+      | .regular _ k v _ computed _ =>
+          (if computed then memberPropRefsExpr false k else []) ++ memberPropRefsExpr false v
+      | .spread _ a => memberPropRefsExpr false a
+  | .functionExpr _ _ _ body _ _ => memberPropRefsStmt body
+  | .arrowFunctionExpr _ _ body _ _ _ =>
+      match body with
+      | .inl e => memberPropRefsExpr false e
+      | .inr s => memberPropRefsStmt s
+  | .unaryExpr _ _ _ a | .updateExpr _ _ a _ | .spreadElement _ a
+  | .awaitExpr _ a | .chainExpr _ a | .privateMemberExpr _ a _ => memberPropRefsExpr false a
+  | .binaryExpr _ _ l r | .assignmentExpr _ _ l r | .logicalExpr _ _ l r =>
+      memberPropRefsExpr false l ++ memberPropRefsExpr false r
+  | .conditionalExpr _ t c a =>
+      memberPropRefsExpr false t ++ memberPropRefsExpr false c ++ memberPropRefsExpr false a
+  | .sequenceExpr _ es => es.flatMap (memberPropRefsExpr false)
+  | .templateLiteral _ _ es => es.flatMap (memberPropRefsExpr false)
+  | .taggedTemplate _ t q => memberPropRefsExpr false t ++ memberPropRefsExpr false q
+  | .classExpr _ _ _ body .. => body.flatMap memberPropRefsElement
+  | .yieldExpr _ a _ => match a with
+      | some e => memberPropRefsExpr false e
+      | none => []
+
+private partial def memberPropRefsElement :
+    ClassElement → List MemberPropRef
+  | .method (.mk _ _ value ..) => memberPropRefsExpr false value
+  | .field (.mk _ _ value ..) => match value with
+      | some e => memberPropRefsExpr false e
+      | none => []
+  | .staticBlock _ body => body.flatMap memberPropRefsStmt
+
+private partial def memberPropRefsStmt :
+    Statement → List MemberPropRef
+  | .exprStmt _ e | .throwStmt _ e => memberPropRefsExpr false e
+  | .blockStmt _ b => b.flatMap memberPropRefsStmt
+  | .ifStmt _ t c a =>
+      memberPropRefsExpr false t ++ memberPropRefsStmt c
+        ++ (match a with | some s => memberPropRefsStmt s | none => [])
+  | .returnStmt _ a => match a with
+      | some e => memberPropRefsExpr false e
+      | none => []
+  | .variableDecl (.mk _ decls _) =>
+      decls.flatMap fun (.mk _ _ init _) => match init with
+        | some e => memberPropRefsExpr false e
+        | none => []
+  | .whileStmt _ t b => memberPropRefsExpr false t ++ memberPropRefsStmt b
+  | .doWhileStmt _ b t => memberPropRefsStmt b ++ memberPropRefsExpr false t
+  | .forStmt _ init t u b =>
+      (match init with
+       | some (.inl e) => memberPropRefsExpr false e
+       | some (.inr (.mk _ decls _)) =>
+           decls.flatMap fun (.mk _ _ i _) => match i with
+             | some e => memberPropRefsExpr false e
+             | none => []
+       | none => [])
+      ++ (match t with | some e => memberPropRefsExpr false e | none => [])
+      ++ (match u with | some e => memberPropRefsExpr false e | none => [])
+      ++ memberPropRefsStmt b
+  | .forInStmt _ left r b | .forOfStmt _ left r b _ =>
+      (match left with | .inl e => memberPropRefsExpr false e | .inr _ => [])
+        ++ memberPropRefsExpr false r ++ memberPropRefsStmt b
+  | .switchStmt _ d cases =>
+      memberPropRefsExpr false d ++ cases.flatMap (fun (.mk _ t ss) =>
+        (match t with | some e => memberPropRefsExpr false e | none => [])
+          ++ ss.flatMap memberPropRefsStmt)
+  | .tryStmt _ b h f =>
+      memberPropRefsStmt b
+        ++ (match h with | some (.mk _ _ hb _) => memberPropRefsStmt hb | none => [])
+        ++ (match f with | some s => memberPropRefsStmt s | none => [])
+  | .labeledStmt _ _ b | .withStmt _ _ b => memberPropRefsStmt b
+  | .functionDecl _ _ _ body _ _ => memberPropRefsStmt body
+  | .classDecl _ _ _ body .. => body.flatMap memberPropRefsElement
+  | _ => []
+
+end
+
+/-- First `this.<p>` read in an expression whose `p` is not in `assigned` —
+    the read-before-assign scan for v1 constructor bodies. Nested functions/
+    arrows are scanned too (their `this` is the same instance for arrows, and
+    a conservative reject is safe either way). -/
+private def findUnassignedThisRead (e : Expression) (assigned : List String) : Option String :=
+  (memberPropRefsExpr false e).findSome? fun r =>
+    if r.thisBase && !assigned.contains r.prop then some r.prop else none
+
 mutual
 
 /-- Check an expression for mutation violations. Assignment/update
@@ -349,8 +486,8 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
   | .awaitExpr b arg =>
     #[mkThalesDiag .asyncNotSupported b.loc] ++ checkExpr ctx arg
   -- TH0030: class expressions — emit diagnostic, optionally TH0031 for extends, do NOT recurse
-  | .classExpr b _ superClass _ =>
-    let baseDiag := #[mkThalesDiag .classNotSupported b.loc]
+  | .classExpr b _ superClass .. =>
+    let baseDiag := #[mkThalesDiag (.classNotSupported "class expressions") b.loc]
     match superClass with
     | some _ => baseDiag ++ #[mkThalesDiag .inheritanceNotSupported b.loc]
     | none => baseDiag
@@ -501,23 +638,196 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
     let ctx' := { ctx with info := some (nestedInfo params body), allowEligible := false }
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
       ++ checkStmt ctx' body
-  -- TH0030: class declarations — emit diagnostic, optionally TH0031 for extends, do NOT recurse
-  | .classDecl b _ superClass _ =>
-    let baseDiag := #[mkThalesDiag .classNotSupported b.loc]
-    match superClass with
-    | some _ => baseDiag ++ #[mkThalesDiag .inheritanceNotSupported b.loc]
-    | none => baseDiag
+  -- Class declarations: per-member v1 validation (TH0030 narrows to
+  -- unsupported class forms; members draw TH0094-TH0102)
+  | .classDecl b id superClass body isAbstract hasTypeParams hasImplements =>
+    checkClassDecl ctx b id.name superClass body isAbstract hasTypeParams hasImplements
 
-/-- Check class elements for mutation violations. -/
-partial def checkClassElements (ctx : MutCtx) (elements : List ClassElement) : Array Diagnostic :=
-  elements.foldl (fun acc elem =>
-    match elem with
-    | .method (MethodDefinition.mk _ key value _ _ _ ..) =>
-      acc ++ checkExpr ctx key ++ checkExpr ctx value
-    | .field (FieldDefinition.mk _ key valueOpt _ _ ..) =>
-      acc ++ checkExpr ctx key ++ (match valueOpt with | some v => checkExpr ctx v | none => #[])
-    | .staticBlock _ body =>
-      body.foldl (fun acc2 s => acc2 ++ checkStmt ctx s) acc) #[]
+/-- Validate a class declaration against the v1 supported shape (#106):
+    readonly annotated fields, an assign-each-field-once constructor, public
+    non-static instance methods with return annotations. Class-level form
+    violations (abstract/generic/implements/extends) short-circuit member
+    validation. General subset checks recurse into ctor and method bodies. -/
+partial def checkClassDecl (ctx : MutCtx) (b : NodeBase) (className : String)
+    (superClass : Option Expression)
+    (body : List ClassElement) (isAbstract hasTypeParams hasImplements : Bool)
+    : Array Diagnostic := Id.run do
+  -- Class-level form: wrong form makes member-level precision meaningless
+  let classLevel : Array Diagnostic :=
+    (if isAbstract then #[mkThalesDiag (.classNotSupported "abstract classes") b.loc] else #[])
+    ++ (if hasTypeParams then #[mkThalesDiag (.classNotSupported "generic classes") b.loc] else #[])
+    ++ (if hasImplements then #[mkThalesDiag (.classNotSupported "'implements' clauses") b.loc] else #[])
+    ++ (match superClass with
+        | some _ => #[mkThalesDiag .inheritanceNotSupported b.loc]
+        | none => #[])
+  if !classLevel.isEmpty then
+    return classLevel
+  -- Declared instance fields/methods reachable via `this.<name>` (identifier
+  -- keys, non-static, not `#`-private — the latter draw TH0096 on their own)
+  let fieldNames : List String := body.filterMap fun
+    | .field (.mk _ key _ false false none ..) => classKeyName? key
+    | _ => none
+  let methodNames : List String := body.filterMap fun
+    | .method (.mk _ key _ .method false false none ..) => classKeyName? key
+    | _ => none
+  let isPrivate (accessibility : Option Accessibility) : Bool :=
+    accessibility == some .private_ || accessibility == some .protected_
+  let mut diags : Array Diagnostic := #[]
+  let mut ctorCount : Nat := 0
+  for el in body do
+    match el with
+    | .staticBlock sb _ =>
+      diags := diags.push (mkThalesDiag .classStaticNotSupported sb.loc)
+    | .field (.mk fb key value computed static_ privateName readonly optional typeAnnotation accessibility) =>
+      let loc := fb.loc
+      if static_ then
+        diags := diags.push (mkThalesDiag .classStaticNotSupported loc)
+      else if privateName.isSome || isPrivate accessibility then
+        diags := diags.push (mkThalesDiag .classPrivateMemberNotSupported loc)
+      else if value.isSome then
+        diags := diags.push (mkThalesDiag .classFieldInitializerNotSupported loc)
+      else if computed || (classKeyName? key).isNone then
+        diags := diags.push (mkThalesDiag (.classFieldFormNotSupported "computed names are not supported") loc)
+      else if !readonly then
+        diags := diags.push (mkThalesDiag (.classFieldFormNotSupported "must be declared readonly") loc)
+      else if optional then
+        diags := diags.push (mkThalesDiag (.classFieldFormNotSupported "optional fields are not supported") loc)
+      else if typeAnnotation.isNone then
+        diags := diags.push (mkThalesDiag (.classFieldFormNotSupported "missing type annotation") loc)
+      else if let some n := classKeyName? key then
+        if leanReservedMemberNames.contains n then
+          diags := diags.push (mkThalesDiag (.classFieldFormNotSupported s!"'{n}' is a reserved name") loc)
+    | .method (.mk mb key value kind computed static_ privateName accessibility override_ optional hasTPs sigParams returnType) =>
+      let loc := mb.loc
+      let bodyCtx (params : List FunctionParam) (mbody : Statement) : MutCtx :=
+        { ctx with info := some (nestedInfo params mbody), allowEligible := false }
+      match kind with
+      | .getter | .setter =>
+        diags := diags.push (mkThalesDiag .classAccessorNotSupported loc)
+      | .constructor =>
+        ctorCount := ctorCount + 1
+        if isPrivate accessibility then
+          diags := diags.push (mkThalesDiag .classPrivateMemberNotSupported loc)
+        else if ctorCount > 1 then
+          diags := diags.push (mkThalesDiag (.classCtorFormNotSupported "a class must declare exactly one constructor") loc)
+        else if sigParams.any (fun (pname, ann, opt, rest_) =>
+            pname == "_destructured" || opt || rest_ || ann.isNone) then
+          diags := diags.push (mkThalesDiag (.classCtorFormNotSupported "parameters must be plain annotated identifiers") loc)
+        else if sigParams.any (fun (pname, _, _, _) => pname == className) then
+          -- `def ctor' (C : ...) : C` — the binder would shadow the return type
+          diags := diags.push (mkThalesDiag (.classCtorFormNotSupported s!"parameter '{className}' shadows the class name") loc)
+        else if let .functionExpr _ _ params cbody _ _ := value then
+          -- Straight-line body: each statement must be `this.<field> = <expr>;`,
+          -- each declared field assigned exactly once, `this.<x>` reads in an
+          -- RHS only after `x` was assigned. General checks recurse into RHSs
+          -- (and, for non-conforming statements, the whole statement).
+          let ctx' := bodyCtx params cbody
+          let stmts := match cbody with
+            | .blockStmt _ ss => ss
+            | s => [s]
+          let mut assigned : List String := []
+          let mut ctorDiag : Option ThalesKind := none
+          for s in stmts do
+            match s with
+            | .exprStmt _ (.assignmentExpr _ .assign (.memberExpr _ (.thisExpr _) (.identifier _ f) false _) rhs) =>
+              if !fieldNames.contains f || assigned.contains f then
+                if ctorDiag.isNone then
+                  ctorDiag := some (.classCtorFormNotSupported s!"field '{f}' must be assigned exactly once")
+              else
+                -- `this.<x>` reads in the RHS must target already-assigned fields
+                match findUnassignedThisRead rhs assigned with
+                | some p =>
+                  if ctorDiag.isNone then
+                    ctorDiag := some (.classCtorFormNotSupported s!"field '{p}' is read before it is assigned")
+                | none => pure ()
+                assigned := assigned ++ [f]
+              diags := diags ++ checkExpr ctx' rhs
+            | _ =>
+              if ctorDiag.isNone then
+                ctorDiag := some (.classCtorFormNotSupported "body must be a sequence of this.<field> = <expr> assignments")
+              diags := diags ++ checkStmt ctx' s
+          if ctorDiag.isNone then
+            if let some missing := fieldNames.find? (fun f => !assigned.contains f) then
+              ctorDiag := some (.classCtorFormNotSupported s!"field '{missing}' must be assigned exactly once")
+          -- `def ctor'` is emitted before every method, so ANY reference to a
+          -- same-class method from the ctor is a forward reference (TH0101) —
+          -- including via another instance (`o.bump()` with `o : C`).
+          for r in memberPropRefsStmt cbody do
+            if methodNames.contains r.prop then
+              diags := diags.push (mkThalesDiag (.classMethodForwardReference r.prop) r.loc)
+          -- A ctor that mentions the class's own name (`new C(...)` in an RHS)
+          -- would make the non-partial `ctor'` self-recursive; Lean cannot
+          -- show termination for it, so reject up front.
+          if ctorDiag.isNone && (EscapeAnalysis.identsStmt cbody).contains className then
+            ctorDiag := some (.classCtorFormNotSupported "the constructor may not reference the class being constructed")
+          if let some k := ctorDiag then
+            diags := diags.push (mkThalesDiag k loc)
+      | .method =>
+        let isGenAsync := match value with
+          | .functionExpr _ _ _ _ gen async => gen || async
+          | _ => false
+        if static_ then
+          diags := diags.push (mkThalesDiag .classStaticNotSupported loc)
+        else if privateName.isSome || isPrivate accessibility then
+          diags := diags.push (mkThalesDiag .classPrivateMemberNotSupported loc)
+        else if isGenAsync then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "generator and async methods are not supported") loc)
+        else if computed || (classKeyName? key).isNone then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "computed names are not supported") loc)
+        else if optional then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "optional methods are not supported") loc)
+        else if hasTPs then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "generic methods are not supported") loc)
+        else if override_ then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "'override' is not supported") loc)
+        else if returnType.isNone then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "missing return type annotation") loc)
+        else if sigParams.any (fun (pname, ann, opt, rest_) =>
+            pname == "_destructured" || opt || rest_ || ann.isNone) then
+          -- an optional/rest/pattern/unannotated param would emit a signature
+          -- the receiver-first lowering cannot honor (e.g. a partially-applied
+          -- call for a skipped optional argument)
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported "parameters must be plain annotated identifiers") loc)
+        else if sigParams.any (fun (pname, _, _, _) => pname == className) then
+          diags := diags.push (mkThalesDiag (.classMethodFormNotSupported s!"parameter '{className}' shadows the class name") loc)
+        else if let some n := classKeyName? key then
+          if reservedMethodNames.contains n then
+            diags := diags.push (mkThalesDiag (.classMethodFormNotSupported s!"'{n}' is a reserved name") loc)
+        -- General subset checks recurse into the method body regardless of
+        -- the signature verdict; forward references draw TH0101.
+        if let .functionExpr _ _ params mbody _ _ := value then
+          let mIdx := (classKeyName? key).bind (fun n => methodNames.idxOf? n)
+          let laterMethods := match mIdx with
+            | some i => methodNames.drop (i + 1)
+            | none => []
+          for r in memberPropRefsStmt mbody do
+            if laterMethods.contains r.prop then
+              diags := diags.push (mkThalesDiag (.classMethodForwardReference r.prop) r.loc)
+          diags := diags ++ checkStmt (bodyCtx params mbody) mbody
+  -- Duplicate (non-static) member names: mostly tsc-rejected (TS2300/TS2717),
+  -- but a legal overload signature + implementation pair parses as two
+  -- same-named methods and would emit two same-named defs.
+  let mut seenNames : List String := []
+  for el in body do
+    match el with
+    | .field (.mk fb key _ false false _ ..) =>
+      if let some n := classKeyName? key then
+        if seenNames.contains n then
+          diags := diags.push (mkThalesDiag (.classFieldFormNotSupported s!"'{n}' is declared more than once") fb.loc)
+        else
+          seenNames := seenNames ++ [n]
+    | .method (.mk mb key _ kind false false _ ..) =>
+      if kind != .constructor then
+        if let some n := classKeyName? key then
+          if seenNames.contains n then
+            diags := diags.push (mkThalesDiag (.classMethodFormNotSupported s!"'{n}' is declared more than once") mb.loc)
+          else
+            seenNames := seenNames ++ [n]
+    | _ => pure ()
+  -- A class with fields must declare a constructor
+  if ctorCount == 0 && !fieldNames.isEmpty then
+    diags := diags.push (mkThalesDiag (.classCtorFormNotSupported "a class with fields must declare a constructor") b.loc)
+  return diags
 
 end
 
@@ -793,6 +1103,15 @@ partial def shadowFunc (paramNames : List String) (body : Statement)
 
 end
 
+/-- Build a binding environment from annotated function parameters. -/
+private def buildParamEnv
+    (params : List (String × Option TypeAnnotation × Bool × Bool))
+    : Std.HashMap String TSType :=
+  params.foldl (fun env (name, annOpt, _, _) =>
+    match annOpt with
+    | some ann => env.insert name ann.type
+    | none => env) {}
+
 /-- Walk a statement body checking for switch exhaustiveness violations.
     Uses the provided SwitchEnv for identifier lookups. -/
 partial def checkSwitchStmt (env : SwitchEnv) (stmt : Statement) : Array Diagnostic :=
@@ -828,6 +1147,20 @@ partial def checkSwitchStmt (env : SwitchEnv) (stmt : Statement) : Array Diagnos
   | .functionDecl _ _ _ body _ _ =>
     -- Function declarations create a new scope; bindings don't leak in or out.
     checkSwitchStmt { aliasEnv := env.aliasEnv, bindingEnv := {} } body
+  | .classDecl _ _ _ body .. =>
+    -- Ctor/method bodies host switches like function bodies (#106): bind the
+    -- retained signature params and honor the return annotation for the
+    -- fall-through rule (a ctor has no value to return).
+    body.foldl (fun acc el =>
+      match el with
+      | .method (.mk _ _ (.functionExpr _ _ _ mbody _ _) kind _ _ _ _ _ _ _ sigParams returnType) =>
+          let voidReturn := match kind, returnType with
+            | .constructor, _ => true
+            | _, none => true
+            | _, some ann => ann.type == .void_
+          acc ++ checkSwitchStmt
+            { aliasEnv := env.aliasEnv, bindingEnv := buildParamEnv sigParams, voidReturn } mbody
+      | _ => acc) #[]
   | _ => #[]
 
 /-- Walk a TSType and collect TH0020-TH0025 diagnostics. `defaultLoc`
@@ -902,15 +1235,6 @@ private def buildTopRecvEnv (body : List TSStatement) : Std.HashMap String TSTyp
     | .annotatedVarDecl _ _ name (some ann) _ => env.insert name ann.type
     | .declareStmt _ (.annotatedVarDecl _ _ name (some ann) _) => env.insert name ann.type
     | _ => env) {}
-
-/-- Build a binding environment from annotated function parameters. -/
-private def buildParamEnv
-    (params : List (String × Option TypeAnnotation × Bool × Bool))
-    : Std.HashMap String TSType :=
-  params.foldl (fun env (name, annOpt, _, _) =>
-    match annOpt with
-    | some ann => env.insert name ann.type
-    | none => env) {}
 
 /-- Check a TS-level statement for mutation violations.
     `aliasEnv` is threaded in for for-of array-type resolution; `topRecvEnv`
@@ -1022,7 +1346,7 @@ private def paramBoundNames : FunctionParam → List String
 private def declaredNamesStmt : Statement → List String
   | .variableDecl (.mk _ decls _) => decls.flatMap fun (.mk _ pat _ _) => patternBoundNames pat
   | .functionDecl _ id _ _ _ _ => [id.name]
-  | .classDecl _ id _ _ => [id.name]
+  | .classDecl _ id .. => [id.name]
   | _ => []
 
 /- Free variables of an expression/statement relative to `bound` — the
@@ -1063,7 +1387,7 @@ private partial def freeVarsExpr (bound : Std.HashSet String) : Expression → L
   | .sequenceExpr _ es => es.flatMap (freeVarsExpr bound)
   | .templateLiteral _ _ es => es.flatMap (freeVarsExpr bound)
   | .taggedTemplate _ t q => freeVarsExpr bound t ++ freeVarsExpr bound q
-  | .classExpr _ _ _ _ => []
+  | .classExpr .. => []
   | .yieldExpr _ a _ => match a with | some e => freeVarsExpr bound e | none => []
 
 /-- Free variables of a statement list under block scoping: names declared
@@ -1140,8 +1464,34 @@ private partial def hoistedRefs : TSStatement → Option (Option SourceLocation 
   | .annotatedFuncDecl b _ _ params _ body _ _ _ _ =>
       some (b.loc, freeVarsStmt (fvInsert {} (params.map (·.1))) body)
   | .annotatedVarDecl b _ _ _ (some init) => some (b.loc, freeVarsExpr {} init)
+  | .js (.classDecl b _ _ body ..) =>
+      -- A v1 class lowers to hoisted decls (structure + namespace defs), so
+      -- its ctor/method bodies are elaborated outside `main` like functions
+      some (b.loc, body.flatMap fun el => match el with
+        | .method (.mk _ _ (.functionExpr _ _ params mbody _ _) ..) =>
+            freeVarsStmt (fvInsert {} (params.flatMap paramBoundNames)) mbody
+        | .field (.mk _ _ (some init) ..) => freeVarsExpr {} init
+        | _ => [])
   | .exportDecl _ inner => hoistedRefs inner
   | _ => none
+
+/-- Method names declared by a top-level class (incl. export-wrapped) —
+    the TH0102 name set. -/
+private def classMethodNamesTS : TSStatement → List String
+  | .js (.classDecl _ _ _ body ..) => body.filterMap fun
+      | .method (.mk _ key _ .method false false none ..) => classKeyName? key
+      | _ => none
+  | .exportDecl _ inner => classMethodNamesTS inner
+  | _ => []
+
+/-- Member-property references of a TS statement (for the program-level
+    TH0102 pass). -/
+private def memberPropRefsTS : TSStatement → List MemberPropRef
+  | .js s => memberPropRefsStmt s
+  | .annotatedFuncDecl _ _ _ _ _ body _ _ _ _ => memberPropRefsStmt body
+  | .annotatedVarDecl _ _ _ _ (some init) => memberPropRefsExpr false init
+  | .exportDecl _ inner => memberPropRefsTS inner
+  | _ => []
 
 /-- Walk a TSProgram and return all Thales-subset violations (raw,
     without directive post-processing). -/
@@ -1163,8 +1513,20 @@ def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
           then a.push (mkThalesDiag (.topLevelMutableReferencedByHoisted n) loc)
           else a) acc
     | none => acc) #[]
+  -- TH0102: a declared class-method name referenced outside direct-callee
+  -- position, anywhere in the program (name-based over-approximation)
+  let methodNameSet : Std.HashSet String :=
+    prog.body.foldl (fun s ts => (classMethodNamesTS ts).foldl (·.insert ·) s) {}
+  let th0102 : Array Diagnostic :=
+    if methodNameSet.isEmpty then #[]
+    else prog.body.foldl (fun acc ts =>
+      (memberPropRefsTS ts).foldl (fun a r =>
+        if !r.isDirectCallee && methodNameSet.contains r.prop then
+          a.push (mkThalesDiag (.classMethodUsedAsValue r.prop) r.loc)
+        else a) acc) #[]
   prog.body.foldl (fun acc ts =>
-    acc ++ checkTSStmt aliasEnv topRecvEnv moduleInfo ts ++ checkTSStmtSwitch aliasEnv ts) th0093
+    acc ++ checkTSStmt aliasEnv topRecvEnv moduleInfo ts ++ checkTSStmtSwitch aliasEnv ts)
+    (th0093 ++ th0102)
 
 /-- Subset check with `@thales-expect-error` directives applied.
     Suppresses TH diagnostics on lines covered by matching directives and

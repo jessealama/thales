@@ -1,6 +1,8 @@
-// Subset-rejected example: class declaration (TH0030).
+// Subset-rejected example: class expressions (TH0030).
 // @thales-expect-error TH0030
-class Counter {
-  count = 0;
-}
-console.log(new Counter().count);
+const Counter = class {
+  tick(): bigint {
+    return 1n;
+  }
+};
+console.log('ok');
