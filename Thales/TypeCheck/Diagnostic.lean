@@ -123,8 +123,10 @@ inductive ThalesKind where
   | possiblyUndefinedOperand
   | computedIndexNotArray
   | definednessTestUnrecordedBinding
-  -- Array stdlib-method diagnostic (TH0085)
-  | arrayMethodReceiverNotLowerable (methodName : String)
+  -- Array stdlib-method diagnostic (TH0085); `receiverIsArray` is false when
+  -- the receiver's type could not be resolved, so the message must not
+  -- assert array-hood
+  | arrayMethodReceiverNotLowerable (methodName : String) (receiverIsArray : Bool)
   -- Definedness test on a non-identifier subject (TH0086)
   | definednessTestNonIdentifierSubject
   -- Unsupported String.prototype method (TH0087)
@@ -207,7 +209,7 @@ def ThalesKind.thCode : ThalesKind → Nat
   | .possiblyUndefinedOperand => 82
   | .computedIndexNotArray => 83
   | .definednessTestUnrecordedBinding => 84
-  | .arrayMethodReceiverNotLowerable _ => 85
+  | .arrayMethodReceiverNotLowerable .. => 85
   | .definednessTestNonIdentifierSubject => 86
   | .stringMethodNotSupported _ => 87
   | .unsupportedImportForm _ => 88
@@ -307,8 +309,10 @@ def ThalesKind.message : ThalesKind → String
     "Computed index access is only supported on array values"
   | .definednessTestUnrecordedBinding =>
     "Cannot determine whether this binding may be 'undefined'; annotate it or bind it from a recognized initializer before testing it"
-  | .arrayMethodReceiverNotLowerable methodName =>
+  | .arrayMethodReceiverNotLowerable methodName true =>
     s!"Array method '{methodName}' is only supported on a `number[]` or `string[]` receiver"
+  | .arrayMethodReceiverNotLowerable methodName false =>
+    s!"'{methodName}' is only supported when the receiver is statically a `number[]` or `string[]` variable; this receiver's type cannot be resolved"
   | .definednessTestNonIdentifierSubject =>
     "A definedness test against 'undefined'/'null' is only supported when its subject is a variable; bind this expression to a variable first"
   | .stringMethodNotSupported methodName =>
