@@ -25,6 +25,15 @@ private def diagsOf (src : String) (ctx : TypeContext := builtinContext) : IO (A
 private def hasTS (d : Diagnostic) (code : Nat) : Bool :=
   ((d.format "t.ts").splitOn s!"error TS{code}:").length > 1
 
+private def hasTH (d : Diagnostic) (code : String) : Bool :=
+  ((d.format "t.ts").splitOn s!"error {code}:").length > 1
+
+private def expectTH (src : String) (code : String) (ctx : TypeContext := builtinContext) : IO Unit := do
+  let diags ← diagsOf src ctx
+  unless diags.any (hasTH · code) do
+    let formatted := (diags.map (·.format "t.ts")).toList
+    throw (IO.userError s!"expected {code}, got: {formatted}")
+
 def expectTS (src : String) (code : Nat) (ctx : TypeContext := builtinContext) : IO Unit := do
   let diags ← diagsOf src ctx
   unless diags.any (hasTS · code) do
@@ -68,12 +77,11 @@ def t5 : IO Unit := expectTS (pointClass ++ "const p = new Point(1n, 2n);\np.x =
 --     never uncompilable emitted Lean; `new` on a JS global error
 --     constructor stays clean.
 def t5b : IO Unit := do
-  let diags ← diagsOf
-    ("function make(): Point { return new Point(1n); }\n" ++
-     "class Point { readonly x: bigint; constructor(x: bigint) { this.x = x; } }\n")
-  unless diags.any (fun d => ((d.format "t.ts").splitOn "error TH0105:").length > 1) do
-    let formatted := (diags.map (·.format "t.ts")).toList
-    throw (IO.userError s!"expected TH0105, got: {formatted}")
+  let src :=
+    "function make(): Point { return new Point(1n); }\n" ++
+    "class Point { readonly x: bigint; constructor(x: bigint) { this.x = x; } }\n"
+  expectTH src "TH0105"
+  let diags ← diagsOf src
   if diags.any (hasTS · 2304) then
     throw (IO.userError "invented TS2304 on a forward class reference")
 

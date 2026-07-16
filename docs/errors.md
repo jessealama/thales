@@ -1340,11 +1340,13 @@ Rejected: `const u = undefined;`, `const n = null;`
 
 **Message:** `'<name>' is referenced before its declaration; move the declaration before this use`
 
-tsc accepts forward references to hoisted top-level declarations — functions
-and classes are visible throughout their scope, and only evaluation order
-matters. Emitted Lean declarations appear in source order, so such a
-reference would not elaborate. The reference is rejected where it occurs:
-inside an earlier function body, or as an earlier `new` target.
+tsc accepts a forward reference to a hoisted top-level declaration from an
+earlier function body — functions and classes are visible throughout their
+scope, and only evaluation order matters. Emitted Lean declarations appear
+in source order, so such a reference would not elaborate; it is rejected
+where it occurs. A top-level evaluated use before the declaration (e.g.
+`new Point(1n)` above `class Point`) also draws TH0105, though tsc rejects
+that shape itself (TS2449).
 
 Rejected:
 

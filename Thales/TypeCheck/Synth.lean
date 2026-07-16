@@ -638,8 +638,8 @@ partial def synthJSExpr (expr : Expression) (expected : Option TSType := none) :
       let ctx ← read
       if ctx.classes[className]?.isNone && !jsGlobalConstructors.contains className then
         -- Not a known class: resolve the callee like any identifier so a
-        -- forward reference to a later-declared class draws TS2304 (the
-        -- declare-before-use stance) instead of emitting uncompilable Lean.
+        -- forward reference to a later-declared class draws TH0105 (or
+        -- TS2304 if unknown) instead of emitting uncompilable Lean.
         let _ ← synthJSExpr (.identifier calleeBase className)
       if let some info := ctx.classes[className]? then
         let instanceTy := info.instanceType
