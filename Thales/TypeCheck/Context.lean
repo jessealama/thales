@@ -48,6 +48,9 @@ structure TypeContext where
   enums : Std.HashMap String TSType := {}
   classes : Std.HashMap String ClassInfo := {}  -- class name → instance type + ctor signature
   consts : Std.HashSet String := {}  -- names declared with `const` (for TS2588)
+  -- Top-level hoisted declaration names (functions/classes): a failed
+  -- lookup on one of these is a forward reference (TH0105), not TS2304
+  hoistedTopLevelNames : Std.HashSet String := {}
   returnType : Option TSType := none  -- expected return type in current function
   deriving Inhabited
 

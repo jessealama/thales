@@ -25,6 +25,15 @@ private def diagsOf (src : String) (ctx : TypeContext := builtinContext) : IO (A
 private def hasTS (d : Diagnostic) (code : Nat) : Bool :=
   ((d.format "t.ts").splitOn s!"error TS{code}:").length > 1
 
+private def hasTH (d : Diagnostic) (code : String) : Bool :=
+  ((d.format "t.ts").splitOn s!"error {code}:").length > 1
+
+private def expectTH (src : String) (code : String) (ctx : TypeContext := builtinContext) : IO Unit := do
+  let diags ← diagsOf src ctx
+  unless diags.any (hasTH · code) do
+    let formatted := (diags.map (·.format "t.ts")).toList
+    throw (IO.userError s!"expected {code}, got: {formatted}")
+
 def expectTS (src : String) (code : Nat) (ctx : TypeContext := builtinContext) : IO Unit := do
   let diags ← diagsOf src ctx
   unless diags.any (hasTS · code) do
@@ -64,11 +73,17 @@ def t4 : IO Unit := expectTS (pointClass ++ "const p = new Point(1n, 2n);\nconst
 def t5 : IO Unit := expectTS (pointClass ++ "const p = new Point(1n, 2n);\np.x = 5n;\n") 2540
 
 -- 5b. Forward reference: a hoisted function using a class declared later
---     draws TS2304 (declare-before-use), never uncompilable emitted Lean;
---     `new` on a JS global error constructor stays clean.
-def t5b : IO Unit := expectTS
-  ("function make(): Point { return new Point(1n); }\n" ++
-   "class Point { readonly x: bigint; constructor(x: bigint) { this.x = x; } }\n") 2304
+--     draws TH0105 (declare-before-use), never an invented TS2304 and
+--     never uncompilable emitted Lean; `new` on a JS global error
+--     constructor stays clean.
+def t5b : IO Unit := do
+  let src :=
+    "function make(): Point { return new Point(1n); }\n" ++
+    "class Point { readonly x: bigint; constructor(x: bigint) { this.x = x; } }\n"
+  expectTH src "TH0105"
+  let diags ← diagsOf src
+  if diags.any (hasTS · 2304) then
+    throw (IO.userError "invented TS2304 on a forward class reference")
 
 def t5c : IO Unit := do
   let diags ← diagsOf "function f(x: bigint): bigint { if (x < 0n) { throw new RangeError(\"neg\"); } return x; }"
