@@ -944,7 +944,9 @@ emitter's RHS type inference (issue #61) will let more of these compile.
 
 ### TH0085 — Array method on an unlowerable receiver
 
-**Message:** `Array method '<name>' is only supported on a \`number[]\` or \`string[]\` receiver`
+**Message (receiver resolved to an unlowerable array):** `Array method '<name>' is only supported on a \`number[]\` or \`string[]\` receiver`
+
+**Message (receiver unresolvable):** `'<name>' is only supported when the receiver is statically a \`number[]\` or \`string[]\` variable; this receiver's type cannot be resolved`
 
 `join`, `indexOf`, `includes`, `lastIndexOf`, `some`, `every`, and `findIndex`
 are lowered only when the receiver is an identifier the emitter can statically
@@ -957,6 +959,11 @@ rejected rather than miscompiled — `tsc` accepts both:
 - an identifier whose declared element type is an array of any other type — a
   `boolean[]`, a nested `number[][]`, an object array — for which no runtime
   lowering exists.
+
+A receiver that is statically a string — a string literal, a string-typed
+identifier, or a call of a declared function returning `string` — never draws
+TH0085: `indexOf`/`includes`/`lastIndexOf` on strings are string methods, and
+the unsupported ones draw TH0087 instead.
 
 Examples (rejected):
 

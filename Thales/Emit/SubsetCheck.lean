@@ -66,6 +66,11 @@ structure MutCtx where
       `bindingEnv` on purpose: `bindingEnv` feeds the intentionally
       conservative (params-only) loop-admission check, which must not widen. -/
   recvEnv : Std.HashMap String TSType := {}
+  /-- Declared return types of module-level annotated functions, used to
+      classify a call-result receiver for TH0085: a string-returning call
+      is a string-method call (the checker's TH0087 territory), not an
+      array-method call. -/
+  fnReturnEnv : Std.HashMap String TSType := {}
 
 /-- Parameter names of a JS-level function/arrow (typed params live on
     `annotatedFuncDecl` and are handled separately). -/
@@ -135,6 +140,19 @@ private def identIsArray (ctx : MutCtx) (name : String) : Bool :=
       | .array _ => true
       | _ => false
   | none => false
+
+/-- The receiver is statically a string — a string literal, or a call of a
+    declared function whose return annotation resolves to string. String
+    methods are never TH0085's business: unsupported ones draw TH0087 in
+    the checker, where the receiver type is fully known. -/
+private def receiverIsString (ctx : MutCtx) : Expression → Bool
+  | .literal _ (.string _) _ => true
+  | .callExpr _ (.identifier _ fname) _ _ =>
+      match (ctx.fnReturnEnv.get? fname).map (resolveType ctx.aliasEnv) with
+      | some .string => true
+      | some (.stringLit _) => true
+      | _ => false
+  | _ => false
 
 /-- Record a statement's body-local typed declarators into `recvEnv` so a
     later array-method call on them can resolve the element type (TH0085).
@@ -424,12 +442,15 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
               | some (.array .number) => checkExpr ctx callee
               | some (.array .string) => checkExpr ctx callee
               | some (.array _) =>
-                  #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName) loc]
+                  #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName true) loc]
                     ++ checkExpr ctx obj
               | _ => checkExpr ctx callee
           | _ =>
-              #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName) loc]
-                ++ checkExpr ctx obj
+              if receiverIsString ctx obj then
+                checkExpr ctx callee
+              else
+                #[mkThalesDiag (.arrayMethodReceiverNotLowerable propName false) loc]
+                  ++ checkExpr ctx obj
         else
           checkExpr ctx callee
       | _ => checkExpr ctx callee
@@ -1296,11 +1317,21 @@ private def buildTopRecvEnv (body : List TSStatement) : Std.HashMap String TSTyp
     | .declareStmt _ (.annotatedVarDecl _ _ name (some ann) _) => env.insert name ann.type
     | _ => env) {}
 
+/-- Module-level declared function return types, seeded into `fnReturnEnv`
+    to classify call-result receivers (TH0085). -/
+private def buildFnReturnEnv (body : List TSStatement) : Std.HashMap String TSType :=
+  body.foldl (fun env ts =>
+    match ts with
+    | .annotatedFuncDecl _ name _ _ (some ret) .. => env.insert name ret.type
+    | .exportDecl _ (.annotatedFuncDecl _ name _ _ (some ret) ..) => env.insert name ret.type
+    | _ => env) {}
+
 /-- Check a TS-level statement for mutation violations.
     `aliasEnv` is threaded in for for-of array-type resolution; `topRecvEnv`
     carries module-level annotation types for the TH0085 receiver check. -/
 def checkTSStmt (aliasEnv : Std.HashMap String TSType)
     (topRecvEnv : Std.HashMap String TSType)
+    (fnReturnEnv : Std.HashMap String TSType)
     (moduleInfo : EscapeAnalysis.MutationInfo) (ts : TSStatement) : Array Diagnostic :=
   match ts with
   | .js s =>
@@ -1309,7 +1340,7 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
     -- info. `bindingEnv` is empty (no params at module level), so for-of over
     -- a named array stays out of v1 — array literals still lower (#49).
     let ctx : MutCtx :=
-      { aliasEnv := aliasEnv, recvEnv := topRecvEnv,
+      { aliasEnv := aliasEnv, recvEnv := topRecvEnv, fnReturnEnv := fnReturnEnv,
         info := some moduleInfo, allowEligible := true,
         noMutZone := false, inTotalFn := false, bindingEnv := {} }
     checkStmt ctx s ++ shadowStmts {} [s]
@@ -1322,7 +1353,9 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
           | _, _ => #[])
       ++ checkAnn b.loc typeAnn
       ++ (match initOpt with
-          | some e => checkExpr {} e ++ shadowExpr e
+          | some e =>
+              checkExpr { aliasEnv := aliasEnv, fnReturnEnv := fnReturnEnv } e
+                ++ shadowExpr e
           | none => #[])
   -- TH0012: async annotated function declarations — emit diagnostic, still recurse body.
   -- TH0060 is no longer SubsetCheck's responsibility, so no suppression filter is needed.
@@ -1335,6 +1368,7 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
         inTotalFn := isTotal,
         aliasEnv := aliasEnv,
         bindingEnv := paramEnv,
+        fnReturnEnv := fnReturnEnv,
         -- Typed params override module-level bindings of the same name.
         recvEnv := paramEnv.fold (fun m k v => m.insert k v) topRecvEnv }
     let paramTypeDiags := params.foldl (fun acc (_, ann, _, _) =>
@@ -1357,14 +1391,14 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
           acc ++ pd ++ checkType b.loc ret) #[]
   | .typeAliasDecl b _ _ ty => checkType b.loc ty
   | .enumDecl _ _ _ _ => #[]
-  | .declareStmt _ inner => checkTSStmt aliasEnv topRecvEnv moduleInfo inner
+  | .declareStmt _ inner => checkTSStmt aliasEnv topRecvEnv fnReturnEnv moduleInfo inner
   | .importDecl b _ _ form _ =>
     match form with
     | .named => #[]
     | .defaultImport => #[mkThalesDiag (.unsupportedImportForm "default import") b.loc]
     | .namespaceImport => #[mkThalesDiag (.unsupportedImportForm "import * as ns") b.loc]
     | .sideEffect => #[mkThalesDiag (.unsupportedImportForm "side-effect import") b.loc]
-  | .exportDecl _ inner => checkTSStmt aliasEnv topRecvEnv moduleInfo inner
+  | .exportDecl _ inner => checkTSStmt aliasEnv topRecvEnv fnReturnEnv moduleInfo inner
   | .exportNamedDecl _ _ => #[]
   | .exportUnsupported b form =>
     match form with
@@ -1567,6 +1601,7 @@ private def memberPropRefsTS : TSStatement → List MemberPropRef
 def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
   let aliasEnv := buildAliasEnv prog.body
   let topRecvEnv := buildTopRecvEnv prog.body
+  let fnReturnEnv := buildFnReturnEnv prog.body
   -- Module-level mutation/loop info over the reconstructed executable top-level
   -- block — the SAME block `buildModule` lowers into `main` (#49).
   let moduleInfo := EscapeAnalysis.analyze [] (.blockStmt {} (moduleExecutableStatements prog.body))
@@ -1594,7 +1629,7 @@ def subsetCheckRaw (prog : TSProgram) : Array Diagnostic :=
           a.push (mkThalesDiag (.classMethodUsedAsValue r.prop) r.loc)
         else a) acc) #[]
   prog.body.foldl (fun acc ts =>
-    acc ++ checkTSStmt aliasEnv topRecvEnv moduleInfo ts ++ checkTSStmtSwitch aliasEnv ts)
+    acc ++ checkTSStmt aliasEnv topRecvEnv fnReturnEnv moduleInfo ts ++ checkTSStmtSwitch aliasEnv ts)
     (th0093 ++ th0102)
 
 /-- Subset check with `@thales-expect-error` directives applied.
