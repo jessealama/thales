@@ -509,18 +509,20 @@ private def emitRefinementLiteral
   some (.anonCtor [v] "by native_decide")
 
 /-- Wrap a return expression in `.some` when the expected return type is `Option T`.
-    If the expression is already `.none` (null literal) or refers to the bare
-    `undefined` identifier, leave it as `.none`. Optional-typed accessors
+    If the expression is already `.none` (the `null` literal or the
+    `undefined` global), leave it as `.none`. Optional-typed accessors
     (`arr[k]?`, `Thales.TS.indexRead`) already produce `Option T` and are
     passed through. Otherwise wrap in `.some`. -/
-private def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
+private partial def wrapReturn (retTy : Option TSType) (e : LExpr) : LExpr :=
   match retTy with
   | some (.option _) =>
     match e with
     | .ctor "none" [] => e
-    | .var "undefined" => .ctor "none" []
     | .indexOpt _ _ => e
     | .app (.var "Thales.TS.indexRead") _ => e
+    -- A ternary wraps per-branch, so `b ? "yes" : undefined` becomes
+    -- `if b then .some "yes" else .none` rather than `.some (if …)`.
+    | .ite c t els => .ite c (wrapReturn retTy t) (wrapReturn retTy els)
     | other => .ctor "some" [other]
   | _ => e
 
@@ -741,6 +743,9 @@ partial def emitExprEnv (env : EmitEnv) : Expression → LExpr
   -- constants (`-Infinity` lowers as the negation of `Infinity`).
   | .identifier _ "NaN"      => .var "tsNaN"
   | .identifier _ "Infinity" => .var "tsInfinity"
+  -- The `undefined` global lowers like the `null` literal; user bindings
+  -- named `undefined` are rejected upstream (TH0103).
+  | .identifier _ "undefined" => .ctor "none" []
   | .identifier _ name => .var name
   -- Binary expressions — null-equality checks emit isNone/isSome on Option values
   -- `x === null` / `x === undefined` (and reverses, with `==` too) → x.isNone
@@ -1566,6 +1571,14 @@ partial def emitVarDeclDo (env : EmitEnv) (info : EscapeAnalysis.MutationInfo)
 
 end
 
+/-- Emit a `console.log` argument. A bare `null`/`undefined` prints as its
+    JS rendering: nothing in this position pins the lowered `.none`'s type,
+    and `JSShow` has no `Option` instance to render it anyway. -/
+private def emitConsoleArg (env : EmitEnv) : Expression → LExpr
+  | .literal _ .null _ => .str "null"
+  | .identifier _ "undefined" => .str "undefined"
+  | e => emitExprEnv env e
+
 /-- Lower a top-level `console.log(...)` call to its IO action, or `none`
     if `e` is not a `console.log` call. Single arg → `consoleLog e`;
     multi-arg → `consoleLogN [JSShow.jsShow e₁, …]`.
@@ -1581,9 +1594,9 @@ private def consoleLogAction (env : EmitEnv) : Expression → Option LExpr
       (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
       args _ =>
       match args with
-      | [arg] => some (.app (.var "consoleLog") [emitExprEnv env arg])
+      | [arg] => some (.app (.var "consoleLog") [emitConsoleArg env arg])
       | _ :: _ =>
-          let argExprs := args.map (emitExprEnv env)
+          let argExprs := args.map (emitConsoleArg env)
           let listLit := mkListLit (argExprs.map fun e => .app (.var "JSShow.jsShow") [e])
           some (.app (.var "consoleLogN") [listLit])
       | [] => some (.app (.var "pure") [.var "()"])
@@ -1618,7 +1631,7 @@ private def consoleLogDoStmt (env : EmitEnv) (e : Expression) : Option LDoStmt :
           let calleeNameOpt : Option String := match arg with
             | .callExpr _ (.identifier _ fname) _ _ => env.funcThrowsEnv.get? fname |>.map (fun _ => fname)
             | _ => none
-          let argExpr := emitExprEnv env arg
+          let argExpr := emitConsoleArg env arg
           match calleeNameOpt with
           | some _ =>
               let okArm : LPattern × List LDoStmt :=
@@ -1628,7 +1641,7 @@ private def consoleLogDoStmt (env : EmitEnv) (e : Expression) : Option LDoStmt :
               some (.matchDo argExpr [okArm, errArm])
           | none => some (.doExpr (.app (.var "consoleLog") [argExpr]))
       | _ :: _ =>
-          let argExprs := args.map (emitExprEnv env)
+          let argExprs := args.map (emitConsoleArg env)
           let listLit := mkListLit (argExprs.map fun e => .app (.var "JSShow.jsShow") [e])
           some (.doExpr (.app (.var "consoleLogN") [listLit]))
       | [] => none
@@ -1682,7 +1695,7 @@ private def tryCatchDoStmt (env : EmitEnv) : Statement → Option LDoStmt
         | .exprStmt _ (.callExpr _
             (.memberExpr _ (.identifier _ "console") (.identifier _ "log") false _)
             [catchArg] _) =>
-            some (.app (.var "consoleLog") [emitExprEnv env catchArg])
+            some (.app (.var "consoleLog") [emitConsoleArg env catchArg])
         | _ => none
       tryStmts.findSome? fun s =>
         match s with

@@ -331,6 +331,45 @@ private def findUnassignedThisRead (e : Expression) (assigned : List String) : O
   (memberPropRefsExpr false e).findSome? fun r =>
     if r.thisBase && !assigned.contains r.prop then some r.prop else none
 
+/-- A bare nullish value: the `null` literal or the `undefined` global
+    (both lower to `.none`). -/
+private def isBareNullish : Expression → Bool
+  | .literal _ .null _ => true
+  | .identifier _ "undefined" => true
+  | _ => false
+
+/-- Does this binder pattern bind the name `undefined`? Destructuring
+    binders never reach the emitter's identifier lowering, so only the
+    plain-identifier form matters. -/
+private def bindsUndefinedName : Pattern → Bool
+  | .identifier id => id.name == "undefined"
+  | _ => false
+
+private def paramBindsUndefinedName : FunctionParam → Bool
+  | .simple id | .withDefault id _ | .rest id => id.name == "undefined"
+  | .pattern _ => false
+
+/-- TH0103 for a function header: the emitter rewrites the `undefined`
+    global to `.none` in value position, so a binding named `undefined`
+    would be silently miscompiled. -/
+private def funcBinderDiags (loc : Option SourceLocation) (name : Option String)
+    (params : List FunctionParam) : Array Diagnostic :=
+  if name == some "undefined" || params.any paramBindsUndefinedName then
+    #[mkThalesDiag .undefinedBindingName loc]
+  else #[]
+
+/-- TH0103/TH0104 for one declarator: binding the name `undefined`, or a
+    bare `null`/`undefined` initializer with no annotation to pin the
+    lowered `.none`'s element type. -/
+private def declaratorNullishDiags (loc : Option SourceLocation) (pat : Pattern)
+    (init : Option Expression) (ann : Option TSType) : Array Diagnostic :=
+  (if bindsUndefinedName pat then #[mkThalesDiag .undefinedBindingName loc] else #[])
+    ++ (match init, ann with
+        | some e, none =>
+            if isBareNullish e then #[mkThalesDiag .nullishInitializerNeedsAnnotation loc]
+            else #[]
+        | _, _ => #[])
+
 mutual
 
 /-- Check an expression for mutation violations. Assignment/update
@@ -459,9 +498,10 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
       | .regular _ _ v _ _ _ => acc ++ checkExpr ctx v
       | .spread _ arg => acc ++ checkExpr ctx arg) #[]
   -- TH0012: async function expressions — emit diagnostic, still recurse body
-  | .functionExpr b _ params body _ async =>
+  | .functionExpr b id params body _ async =>
     let ctx' := { ctx with info := some (nestedInfo params body), allowEligible := false }
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
+      ++ funcBinderDiags b.loc (id.map (·.name)) params
       ++ checkStmt ctx' body
   -- TH0012: async arrow functions — emit diagnostic, still recurse body
   | .arrowFunctionExpr b params body _ async _ =>
@@ -475,6 +515,7 @@ partial def checkExpr (ctx : MutCtx) (expr : Expression) : Array Diagnostic :=
         let ctx' := { ctx with info := some (nestedInfo params s), allowEligible := false }
         checkStmt ctx' s
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
+      ++ funcBinderDiags b.loc none params
       ++ bodyDiags
   | .spreadElement _ arg =>
     checkExpr ctx arg
@@ -547,17 +588,22 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
       fun _ => checkStmt ctx body ++ checkExpr ctx test
   | .forInStmt b _ _ _ =>
     #[mkThalesDiag .loopNotSupported b.loc]
-  | s@(.forStmt b _ _ _ body) =>
+  | s@(.forStmt b init _ _ body) =>
     let canonicalAdmitted :=
       match LoopShape.classifyLoop s with
       | .canonicalFor _ (.inl _) _ => true
       | .canonicalFor _ (.inr arrName) _ => identIsArray ctx arrName
       | _ => false
+    let initBinderDiags : Array Diagnostic := match init with
+      | some (.inr (VariableDeclaration.mk _ ds _)) =>
+          if ds.any (fun (VariableDeclarator.mk _ p _ _) => bindsUndefinedName p)
+          then #[mkThalesDiag .undefinedBindingName b.loc] else #[]
+      | _ => #[]
     if loopContextAdmitted ctx && canonicalAdmitted then
       -- Only the body: classifyLoop already constrained init/test/update to
       -- bare shapes, and routing `i++` through checkExpr would draw
       -- .assignmentInExpressionPosition.
-      checkStmt ctx body
+      initBinderDiags ++ checkStmt ctx body
     else
       match LoopShape.desugarGeneralFor s with
       | some desugared =>
@@ -572,7 +618,7 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
           #[mkThalesDiag .loopNotSupported b.loc]
       | none =>
         #[mkThalesDiag .loopNotSupported b.loc]
-  | s@(.forOfStmt b _ right body _) =>
+  | s@(.forOfStmt b left right body _) =>
     let rhsIsArray : Bool :=
       match right with
       | .arrayExpr _ _ => true
@@ -586,8 +632,13 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
             | _ => false)
     if admitted then
       -- The loop binder is part of the admitted shape; check only the RHS
-      -- expression and the body.
-      checkExpr ctx right ++ checkStmt ctx body
+      -- expression and the body (plus the binder-name gate, TH0103).
+      let binderDiags : Array Diagnostic := match left with
+        | .inr (VariableDeclaration.mk _ ds _) =>
+            if ds.any (fun (VariableDeclarator.mk _ p _ _) => bindsUndefinedName p)
+            then #[mkThalesDiag .undefinedBindingName b.loc] else #[]
+        | _ => #[]
+      binderDiags ++ checkExpr ctx right ++ checkStmt ctx body
     else
       #[mkThalesDiag .loopNotSupported b.loc]
   | .breakStmt _ _ => #[]
@@ -617,7 +668,13 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
     let ctx' := { ctx with noMutZone := true }
     let blockDiags := checkStmt ctx' block
     let handlerDiags := match handler with
-      | some (CatchClause.mk _ _ handlerBody _) => checkStmt ctx' handlerBody
+      | some (CatchClause.mk cb paramOpt handlerBody _) =>
+          (match paramOpt with
+           | some (.identifier id) =>
+               if id.name == "undefined" then #[mkThalesDiag .undefinedBindingName cb.loc]
+               else #[]
+           | _ => #[])
+            ++ checkStmt ctx' handlerBody
       | none => #[]
     blockDiags ++ handlerDiags
   | .switchStmt _ discriminant cases =>
@@ -629,19 +686,22 @@ partial def checkStmt (ctx : MutCtx) (stmt : Statement) : Array Diagnostic :=
   | .withStmt _ obj body =>
     checkExpr ctx obj ++ checkStmt ctx body
   | .variableDecl (VariableDeclaration.mk _ decls _) =>
-    decls.foldl (fun acc (VariableDeclarator.mk _ _ initOpt _) =>
+    decls.foldl (fun acc (VariableDeclarator.mk db pat initOpt ann) =>
+      let acc := acc ++ declaratorNullishDiags db.loc pat initOpt ann
       match initOpt with
       | some e => acc ++ checkExpr ctx e
       | none => acc) #[]
   -- TH0012: async function declarations — emit diagnostic, still recurse body
-  | .functionDecl b _ params body _ async =>
+  | .functionDecl b id params body _ async =>
     let ctx' := { ctx with info := some (nestedInfo params body), allowEligible := false }
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
+      ++ funcBinderDiags b.loc (some id.name) params
       ++ checkStmt ctx' body
   -- Class declarations: per-member v1 validation (TH0030 narrows to
   -- unsupported class forms; members draw TH0094-TH0102)
   | .classDecl b id superClass body isAbstract hasTypeParams hasImplements =>
-    checkClassDecl ctx b id.name superClass body isAbstract hasTypeParams hasImplements
+    (if id.name == "undefined" then #[mkThalesDiag .undefinedBindingName b.loc] else #[])
+      ++ checkClassDecl ctx b id.name superClass body isAbstract hasTypeParams hasImplements
 
 /-- Validate a class declaration against the v1 supported shape (#106):
     readonly annotated fields, an assign-each-field-once constructor, public
@@ -1253,14 +1313,20 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
         info := some moduleInfo, allowEligible := true,
         noMutZone := false, inTotalFn := false, bindingEnv := {} }
     checkStmt ctx s ++ shadowStmts {} [s]
-  | .annotatedVarDecl b _ _ typeAnn initOpt =>
-    checkAnn b.loc typeAnn
+  | .annotatedVarDecl b _ name typeAnn initOpt =>
+    (if name == "undefined" then #[mkThalesDiag .undefinedBindingName b.loc] else #[])
+      ++ (match initOpt, typeAnn with
+          | some e, none =>
+              if isBareNullish e then #[mkThalesDiag .nullishInitializerNeedsAnnotation b.loc]
+              else #[]
+          | _, _ => #[])
+      ++ checkAnn b.loc typeAnn
       ++ (match initOpt with
           | some e => checkExpr {} e ++ shadowExpr e
           | none => #[])
   -- TH0012: async annotated function declarations — emit diagnostic, still recurse body.
   -- TH0060 is no longer SubsetCheck's responsibility, so no suppression filter is needed.
-  | .annotatedFuncDecl b _ _ params returnType body _ async throwsAnn isTotal =>
+  | .annotatedFuncDecl b name _ params returnType body _ async throwsAnn isTotal =>
     let paramEnv := buildParamEnv params
     let ctx : MutCtx :=
       { info := some (EscapeAnalysis.analyze (params.map (·.1)) body),
@@ -1275,6 +1341,9 @@ def checkTSStmt (aliasEnv : Std.HashMap String TSType)
       acc ++ checkAnn b.loc ann) #[]
     let bodyDiags := checkStmt ctx body
     (if async then #[mkThalesDiag .asyncNotSupported b.loc] else #[])
+      ++ (if name == "undefined" || params.any (·.1 == "undefined") then
+            #[mkThalesDiag .undefinedBindingName b.loc]
+          else #[])
       ++ paramTypeDiags
       ++ checkAnn b.loc returnType
       ++ bodyDiags

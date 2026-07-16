@@ -867,9 +867,23 @@ partial def checkJSStatementsSeq : List Statement → TypeCheckM Unit
 
 end
 
+/-- Names a top-level statement hoists (function and class declarations,
+    unwrapping `export`). tsc resolves references to these throughout the
+    file; the checker's sequential env does not, so a failed lookup on one
+    of them is a forward reference (TH0105), not an unknown name. -/
+private def hoistedDeclNames : TSStatement → List String
+  | .annotatedFuncDecl _ name .. => [name]
+  | .js (.functionDecl _ id ..) => [id.name]
+  | .js (.classDecl _ id ..) => [id.name]
+  | .exportDecl _ inner => hoistedDeclNames inner
+  | _ => []
+
 /-- Type check an entire TS program -/
 def checkProgram (prog : TSProgram) : TypeCheckM Unit :=
-  checkStatements prog.body
+  let hoisted : Std.HashSet String :=
+    prog.body.foldl (fun acc ts => (hoistedDeclNames ts).foldl (·.insert ·) acc) {}
+  withReader (fun ctx => { ctx with hoistedTopLevelNames := hoisted })
+    (checkStatements prog.body)
 
 /-- Run the type checker on a TS program, returning diagnostics -/
 def typeCheck (prog : TSProgram) (ctx : TypeContext := builtinContext) : Array Diagnostic :=
