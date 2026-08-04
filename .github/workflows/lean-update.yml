@@ -1,0 +1,31 @@
+name: Lean update
+
+# Weekly check for a new Lean release and dependency drift. On a clean
+# build the action opens a PR with the bumped toolchain/manifest; on a
+# failed build it files an issue. PRs opened with the default token do
+# not trigger the CI workflow — close and reopen (or push to the branch)
+# to run it.
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+
+jobs:
+  update-lean:
+    name: Update Lean toolchain + dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update Lean and dependencies
+        uses: leanprover-community/lean-update@main
+        with:
+          on_update_succeeds: pr
+          on_update_fails: issue
