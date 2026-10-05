@@ -1,4 +1,4 @@
-{"version": "1.2.0",
+{"version": "1.3.0",
  "packagesDir": ".lake/packages",
  "packages":
  [{"url": "https://github.com/pandaman64/lean-regex",
@@ -15,7 +15,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "f207b55ca9b784af029b6183f885b3efc2ed7688",
+   "rev": "6250cd801251c617335d8d8c7126bdcc43b178fc",
    "name": "batteries",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
